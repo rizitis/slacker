@@ -1,0 +1,4 @@
+# blacklist — frozen packages, slacker must never install, upgrade or remove.
+# One name per line.
+
+#foo

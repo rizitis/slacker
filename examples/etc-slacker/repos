@@ -1,0 +1,42 @@
+# TEMPLATE repos — repository priorities, names, and external repos.
+#
+# One per line:   priority   name        url                       [official]
+# Higher priority wins when the same package exists in several repos.
+# Reach a lower-priority repo explicitly with  name:package.
+#
+# The OFFICIAL line's url is the keyword 'mirror': slacker fills it in from the
+# active line in the 'mirrors' file. Change your mirror in '/etc/slecker/mirrors'; change ONLY the
+# official repo's priority/placement here.
+
+# priority  name        url       [official]
+100         slackware   mirror    official
+
+# ── External slackware64-current repos ─────────────────────────────────────────
+#90         extras      https://mirror.nl.leaseweb.net/slackware/slackware64-current/extra
+#60         alienbob    https://slackware.nl/people/alien/sbrepos/current/x86_64
+#80         conraid     https://slackers.it/repository/slackware64-current
+#50         restricted  https://taper.alienbase.nl/mirrors/people/alien/restricted_sbrepos/current/x86_64
+#10         multilib    https://slackware.nl/people/alien/multilib/current
+
+
+# ── External slackware64-15.0 repos ─────────────────────────────────────────
+#90          extras     https://mirror.nl.leaseweb.net/slackware/slackware64-15.0/extra
+#80          patches    https://mirror.nl.leaseweb.net/slackware/slackware64-15.0/patches
+#60          alienbob   https://slackware.nl/people/alien/sbrepos/15.0/x86_64
+#50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/15.0/x86_64
+#10         multilib    https://slackware.nl/people/alien/multilib/15.0
+
+# ── Source / build-tag priorities ──────────────────────────────────────────
+# Packages built from sources that are NOT binary repositories (SlackBuilds.org,
+# your own local builds) carry a build tag after the build number, e.g.
+# 1_SBo -> _SBo, 1_rtz -> _rtz. Give those tags a priority here, in the same
+# scale as the repos above, so upgrade-all treats them as a prioritised source:
+# a tagged package is only replaced by a candidate from a repo of HIGHER or
+# EQUAL priority. With SBo at 100 below, your SBo packages are never silently
+# migrated to conraid/alienbob etc... or downgraded; upgrade them via sbopkg/sbotools/slpkg etc.
+# Format:  priority  name   tag
+100        SBo    _SBo
+100        local  _rtz
+100        forge  _FRG
+100        custom _custom
+100        scmd   _SC

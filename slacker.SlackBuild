@@ -1,0 +1,98 @@
+#!/bin/bash
+
+# Slackware build script for slacker
+
+# This SlackBuild build master branch
+# It is not suggested to use it, its not a stable and proper SlackBuild
+#
+
+cd $(dirname $0) ; CWD=$(pwd)
+
+PRGNAM=slacker
+VERSION=${VERSION:-0.1.0}
+BUILD=${BUILD:-1}
+TAG=${TAG:-_FRG}
+PKGTYPE=${PKGTYPE:-txz}
+
+if [ -z "$ARCH" ]; then
+  case "$( uname -m )" in
+    i?86) ARCH=i586 ;;
+    arm*) ARCH=arm ;;
+       *) ARCH=$( uname -m ) ;;
+  esac
+fi
+
+if [ ! -z "${PRINT_PACKAGE_NAME}" ]; then
+  echo "$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE"
+  exit 0
+fi
+
+TMP=${TMP:-/tmp/FORGE}
+PKG=$TMP/package-$PRGNAM
+OUTPUT=${OUTPUT:-/tmp}
+
+if [ "$ARCH" = "i586" ]; then
+  SLKCFLAGS="-O2 -march=i586 -mtune=i686"
+  LIBDIRSUFFIX=""
+elif [ "$ARCH" = "i686" ]; then
+  SLKCFLAGS="-O2 -march=i686 -mtune=i686"
+  LIBDIRSUFFIX=""
+elif [ "$ARCH" = "x86_64" ]; then
+  SLKCFLAGS="-O2 -fPIC"
+  LIBDIRSUFFIX="64"
+elif [ "$ARCH" = "aarch64" ]; then
+  SLKCFLAGS="-O2 -fPIC"
+  LIBDIRSUFFIX="64"
+else
+  SLKCFLAGS="-O2"
+  LIBDIRSUFFIX=""
+fi
+
+set -e
+
+rm -rf $PKG $TMP
+mkdir -p $TMP $PKG $OUTPUT
+cd $TMP
+cp -R $CWD/* .
+rm -rf target || true
+
+chown -R root:root .
+find . -type f \( -perm -4000 -o -perm -2000 \) -exec chmod -s {} +
+find . ! -type l -type d ! -perm 755 -exec chmod -f 755 {} +
+find . ! -type l -type f -perm /111 ! -perm 755 -exec chmod -f 755 {} +
+find . ! -type l -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} +
+
+# online + debug is what we need for developing
+CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build
+cargo build
+#run tests
+cargo test
+mkdir -p $PKG/usr/local/sbin
+install -m0755 target/debug/slacker $PKG/usr/local/sbin/slacker
+
+# docs
+mkdir -p $PKG/usr/doc/$PRGNAM-$VERSION/examples
+install -m0644 README.md $PKG/usr/doc/$PRGNAM-$VERSION/
+install -m0644 examples/etc-slacker/* $PKG/usr/doc/$PRGNAM-$VERSION/examples/
+cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
+
+# config files — install as .new so an upgrade never clobbers the user's edits
+mkdir -p $PKG/etc/slacker/templates
+for f in slacker.conf mirrors repos blacklist; do
+  install -m0644 examples/etc-slacker/$f $PKG/etc/slacker/$f.new
+done
+
+# man page
+mkdir -p $PKG/usr/man/man8
+install -m0644 man/slacker.8 $PKG/usr/man/man8/slacker.8
+gzip -9 $PKG/usr/man/man8/slacker.8
+
+# Copy the slack-desc and a custom doinst.sh
+mkdir -p $PKG/install
+cat $CWD/slack-desc > $PKG/install/slack-desc
+cat $CWD/doinst.sh > $PKG/install/doinst.sh
+
+cd $PKG
+/sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+sleep 1
+sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE

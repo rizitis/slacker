@@ -1,0 +1,344 @@
+.TH SLACKER 8 "June 2026" "slacker 0.1.0" "Slackware Package Management"
+.SH NAME
+slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
+.SH SYNOPSIS
+.B slacker
+.RI [ OPTIONS ]
+.I COMMAND
+.RI [ ARGS ]
+.SH DESCRIPTION
+.B slacker
+manages Slackware packages over the network, combining the behaviour of
+.BR slackpkg (8)
+with the multi\-repository support of slackpkg+. It is a thin layer over the
+native Slackware package tools: it never reimplements
+.BR installpkg (8),
+.BR upgradepkg (8)
+or
+.BR removepkg (8),
+but resolves packages across one or more repositories and calls those tools to
+make changes.
+.PP
+Every configured repository \(em the official Slackware mirror and any external
+(slackpkg+\-style) repositories alike \(em is held in a single priority\-ordered
+model. When the same package name is offered by several repositories, the one
+from the highest\-priority repository wins. A specific repository can be forced
+with the
+.I repo:package
+syntax.
+.PP
+.B slacker
+performs no automatic dependency resolution, in keeping with Slackware
+tradition: what you ask for is what is installed.
+.SH OPTIONS
+.TP
+.BI \-\-config\-dir " DIR"
+Directory holding the plain\-text configuration files. Default
+.IR /etc/slacker .
+.TP
+.BR \-y ", " \-\-yes
+Assume "yes" to confirmation prompts.
+.TP
+.B \-\-dry\-run
+Show what would happen without changing the system.
+.TP
+.B \-\-no\-deps
+Do not read
+.I .dep
+files or pull in dependencies for this run.
+.TP
+.BR \-h ", " \-\-help
+Print help and exit.
+.TP
+.BR \-V ", " \-\-version
+Print version and exit.
+.SH COMMANDS
+.SS Metadata
+.TP
+.B update \fR[\fBgpg\fR]
+Refresh metadata (PACKAGES.TXT, CHECKSUMS.md5, signatures, ChangeLog) from every
+repository. The ChangeLog is fetched only for the official repository (the one tracked by
+.BR check-updates ).
+The form
+.B update gpg
+downloads and imports each repository's GPG key into a private keyring, and
+should be run once before the first
+.BR update .
+.TP
+.B check-updates
+Check every configured repository for pending updates since the last update, one
+status line per repo. The official repo is checked via its ChangeLog; external
+repos by comparing PACKAGES.TXT against the cached copy. Exits 100 if any repo
+has updates pending.
+.TP
+.B show-changelog
+Print the cached ChangeLog.
+.SS Querying
+.TP
+.BI search " PATTERN"
+Search package names and descriptions across all repositories.
+.TP
+.BI file-search " FILENAME"
+Report which package ships a given file, using the repository MANIFEST. The
+MANIFEST is downloaded on first use and can be large.
+.TP
+.BI info " PACKAGE"
+Show the installed version and the available candidates per repository
+(highest priority first), with sizes and description.
+.SS Installing and removing
+.TP
+.BI install " PATTERN..."
+Install new packages. Already\-installed packages are refused (use
+.B upgrade
+or
+.B reinstall
+instead).
+.TP
+.BI upgrade " PATTERN..."
+Upgrade installed packages to the newest available revision.
+.TP
+.BI reinstall " PATTERN..."
+Reinstall the currently installed version.
+.TP
+.BI remove " PATTERN..."
+Remove installed packages.
+.TP
+.BI download " PATTERN..."
+Download packages into the cache without installing them.
+.SS Bulk operations
+.TP
+.B upgrade-all
+Upgrade every installed package that has a newer revision available.
+.TP
+.B install-new
+Install packages that were newly added to the repositories since the last
+update.
+.TP
+.B clean-system
+List installed packages that exist in no configured repository (third\-party or
+removed packages) in a numbered table, then let you choose which to remove: type
+numbers to keep, press Enter to remove all, or cancel. Blacklisted packages, and packages
+whose build tag is listed in
+.B IGNORE_TAGS
+(SBo source builds, your own builds, etc.), are never listed or removed. With
+.B \-\-yes
+all listed packages are removed.
+.TP
+.B new-config
+Handle leftover \fI*.new\fR configuration files under /etc and /usr/share/vim.
+.SS Templates
+.TP
+.BI generate-template " NAME"
+Snapshot the installed package set into a template.
+.TP
+.BI install-template " NAME"
+Install every package listed in a template (following includes).
+.TP
+.BI remove-template " NAME"
+Uninstall every package listed in a template (removes packages from the system;
+to delete only the template file use
+.BR delete-template ).
+.TP
+.BI delete-template " NAME"
+Delete a template file. Installed packages are not touched.
+.TP
+.BI frozen " NAME..."
+Add one or more packages to the blacklist, freezing them so that update,
+upgrade-all, reinstall, and clean-system leave them alone.
+.SH PATTERNS
+A
+.I PATTERN
+may be an exact package name, a substring of a package name, a Slackware series
+name
+.RB ( a ", " ap ", " d ", " k ", " kde ", " l ", " n ", " t ", " x ", " xap ", " xfce ", " y ", " ...),
+or a
+.I repo:name
+pin that forces a specific repository regardless of priority.
+.SH FILES
+All configuration is plain text under
+.I /etc/slacker
+(overridable with
+.BR \-\-config\-dir ).
+.TP
+.I /etc/slacker/slacker.conf
+Global settings as
+.IR KEY=value .
+.B ARCH
+is auto\-detected from the installed
+.I aaa_base
+package and need only be set to force a specific architecture.
+.B CACHE_DIR
+(default
+.IR /var/cache/slacker )
+holds downloaded metadata and packages.
+.B PKG_DB_DIR
+(default
+.IR /var/lib/pkgtools/packages )
+is the installed\-package database.
+.B RESOLVE_DEPS
+(default
+.IR yes )
+controls whether
+.I .dep
+files are read to pull in dependencies.
+.B IGNORE_TAGS
+is a space\-separated list of build tags (e.g.
+.IR "_SBo cf alien" )
+that
+.B clean-system
+must not treat as foreign \(em for packages from sources not managed as binary
+repositories.
+.PP
+The
+.I repos
+file may also contain
+.B build\-tag priority
+lines of the form
+.IR "priority name tag" ,
+where the third field is a build tag rather than a URL (e.g.
+.IR "100 SBo _SBo" ).
+These assign a priority to packages built from non\-binary sources
+(SlackBuilds.org, local builds).
+.B upgrade-all
+only replaces such a package with a candidate from a repository of higher or
+equal priority, so tagged packages are never silently migrated to a lower repo
+or downgraded.
+.PP
+When an
+.BR install ,
+.BR upgrade ,
+or
+.B reinstall
+pattern matches more than one package, slacker prints a numbered list and lets
+you choose which to act on (Enter for all, numbers or ranges such as
+.I 1 3 5
+or
+.IR 2-4 ,
+or
+.I n
+to cancel). A series name (a, ap, kde, y, ...) matches exactly that series
+rather than every package whose name contains those letters.
+.TP
+.I /etc/slacker/mirrors
+Catalogue of official Slackware mirrors. Exactly one line must be uncommented;
+.B slacker
+errors out if two are active. Supports
+.IR http:// ", " https:// " and " file:// "."
+.TP
+.I /etc/slacker/repos
+Repository priorities, names and external repositories, one per line as
+.IR "priority name url" " [" official "]."
+Higher priority wins. The official line's URL is the keyword
+.B mirror
+which is filled in from the active line in
+.IR mirrors .
+.TP
+.I /etc/slacker/blacklist
+Package names that must never be installed, upgraded or removed, one per line.
+.TP
+.I /etc/slacker/templates/
+Generated and user\-created template files.
+.SH DEPENDENCIES
+When a package in a repository is accompanied by a
+.I .dep
+file (sharing the package's name with a
+.I .dep
+extension), each line of that file names a dependency package.
+.B slacker
+reads it and, before installing the package, pulls in any missing dependencies
+from the
+.I same
+repository, recursively. Dependencies already satisfied by the same
+repository's build are left alone. A dependency that is installed but differs
+from what the repository offers (for example installed from another source)
+triggers a prompt:
+.IR skip ", " replace ", " skip\-all " or " abort .
+With
+.B \-\-yes
+the installed version is kept. The whole mechanism is on by default and can be
+disabled with
+.B RESOLVE_DEPS=no
+or, per run, with
+.BR \-\-no\-deps .
+This applies to every command that installs packages
+.RB ( install ", " upgrade ", " reinstall ", " upgrade-all ", " install-new ", "
+.BR install-template ).
+.SH SECURITY
+When a repository GPG key has been imported with
+.BR "update gpg" ,
+.B slacker
+verifies CHECKSUMS.md5 against its detached signature on every
+.BR update .
+Verification is fail\-closed: a bad signature, or a missing public key, aborts
+the operation. Downloaded packages are additionally checked against their md5
+sums from the (signature\-verified) CHECKSUMS before installation. This applies
+to
+.I file://
+repositories as well.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+An error occurred.
+.TP
+.B 20
+No package was found to act on.
+.TP
+.B 50
+.B slacker
+upgraded itself and must be re\-run.
+.TP
+.B 100
+There are pending updates (from
+.BR check-updates ).
+.SH EXAMPLES
+.PP
+First\-time setup: choose a mirror in
+.IR /etc/slacker/mirrors ,
+then:
+.PP
+.RS
+.nf
+slacker update gpg
+slacker update
+.fi
+.RE
+.PP
+Find and install a package:
+.PP
+.RS
+.nf
+slacker search firefox
+slacker install mozilla-firefox
+.fi
+.RE
+.PP
+Force a package from a specific repository:
+.PP
+.RS
+.nf
+slacker install alienbob:vlc
+.fi
+.RE
+.PP
+Upgrade the whole system:
+.PP
+.RS
+.nf
+slacker update
+slacker install-new
+slacker upgrade-all
+slacker clean-system
+.fi
+.RE
+.SH SEE ALSO
+.BR slackpkg (8),
+.BR installpkg (8),
+.BR upgradepkg (8),
+.BR removepkg (8),
+.BR pkgtool (8)
+.SH AUTHORS
+slacker was written as a minimal Rust reimplementation combining slackpkg and
+slackpkg+ semantics.
