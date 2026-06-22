@@ -1,8 +1,13 @@
 [package]
 name = "slacker"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "A minimal Slackware package manager combining slackpkg + slackpkg+ semantics"
+description = "A minimal and fast Slackware package manager combining slackpkg + slackpkg+ semantics"
+authors = ["Ioannis Anagnostakis (rizitis)"]
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["slackware", "package-manager", "slackpkg"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "slacker"

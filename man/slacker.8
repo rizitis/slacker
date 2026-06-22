@@ -1,6 +1,6 @@
-.TH SLACKER 8 "June 2026" "slacker 0.1.0" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.2.0" "Slackware Package Management"
 .SH NAME
-slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
+slacker \- minimal and fast package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
 .B slacker
 .RI [ OPTIONS ]
@@ -104,14 +104,26 @@ Reinstall the currently installed version.
 Remove installed packages.
 .TP
 .BI download " PATTERN..."
-Download packages into the cache without installing them.
+Download package files without installing them. By default they are saved under
+.IR CACHE_DIR/packages/<repo>/ ,
+the same place install uses, so a later install reuses them. Pass
+.B \-o
+.I DIR
+(or
+.BR \-\-output )
+to save elsewhere, e.g.
+.I /tmp
+or the current directory. Selecting a whole repo or tag (e.g.
+.IR @alienbob )
+asks for confirmation when more than ten packages would be downloaded.
 .SS Bulk operations
 .TP
 .B upgrade-all
 Upgrade every installed package that has a newer revision available.
 .TP
 .B install-new
-Install packages that were newly added to the repositories since the last
+Install packages newly added since the last update. By default only the
+official repo(s); name one or more repos to use those instead.
 update.
 .TP
 .B clean-system
@@ -123,6 +135,14 @@ whose build tag is listed in
 (SBo source builds, your own builds, etc.), are never listed or removed. With
 .B \-\-yes
 all listed packages are removed.
+.TP
+.B clean-cache \fR[\fIREPO\fR...]
+Delete downloaded package files from
+.IR CACHE_DIR/packages .
+Repo metadata and GPG keys (under
+.IR CACHE_DIR/repos )
+are never touched. Limit to named repos, or clean every repo. Asks before
+deleting and reports how much space is freed.
 .TP
 .B new-config
 Handle leftover \fI*.new\fR configuration files under /etc and /usr/share/vim.
@@ -154,6 +174,19 @@ name
 or a
 .I repo:name
 pin that forces a specific repository regardless of priority.
+.PP
+Two explicit set selectors are also accepted (the @ is required, so a bare word
+is never treated as a repo):
+.TP
+.BI @ repo
+Every package in that repo, e.g.
+.I @gnome
+to install a whole desktop repo or to remove all of its installed packages.
+.TP
+.BI @ _tag
+Every package carrying that build tag, e.g.
+.I @_SBo
+to remove all installed SlackBuilds.org packages.
 .SH FILES
 All configuration is plain text under
 .I /etc/slacker
@@ -340,5 +373,12 @@ slacker clean-system
 .BR removepkg (8),
 .BR pkgtool (8)
 .SH AUTHORS
-slacker was written as a minimal Rust reimplementation combining slackpkg and
-slackpkg+ semantics.
+Ioannis Anagnostakis (rizitis)
+.SH LICENSE
+Licensed under the Apache License, Version 2.0, January 2004.
+You may obtain a copy of the License at
+.UR https://www.apache.org/licenses/LICENSE-2.0
+.UE .
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied.

@@ -29,6 +29,46 @@ impl PkgDb {
         *self.priority.get(repo).unwrap_or(&0)
     }
 
+    /// True if `name` is a configured repo.
+    pub fn is_repo(&self, name: &str) -> bool {
+        self.priority.contains_key(name)
+    }
+
+    /// True if any available package carries this build tag.
+    pub fn tag_in_use(&self, tag: &str) -> bool {
+        self.all.iter().any(|p| p.id.build_tag() == tag)
+    }
+
+    /// Sorted list of configured repo names (for diagnostics).
+    pub fn all_repos(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.priority.keys().cloned().collect();
+        v.sort();
+        v
+    }
+
+    /// Sorted list of non-empty build tags actually in use (for diagnostics).
+    pub fn all_build_tags(&self) -> Vec<String> {
+        let set: HashSet<String> = self
+            .all
+            .iter()
+            .map(|p| p.id.build_tag().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let mut v: Vec<String> = set.into_iter().collect();
+        v.sort();
+        v
+    }
+
+    /// The set of build tags used by packages in a given repo (e.g. conraid
+    /// uses `cf`). Used to map an installed package back to its source repo.
+    pub fn repo_build_tags(&self, repo: &str) -> HashSet<String> {
+        self.all
+            .iter()
+            .filter(|p| p.repo == repo)
+            .map(|p| p.id.build_tag().to_string())
+            .collect()
+    }
+
     /// Resolve a single name (or `repo:name`) to the winning candidate.
     pub fn resolve(&self, query: &str) -> Option<&AvailPkg> {
         let (pinned, name) = split_pin(query);
@@ -52,6 +92,35 @@ impl PkgDb {
     /// (a, ap, kde, ...), or a substring of the package name. Returns one
     /// winning candidate per distinct package name, highest priority first.
     pub fn match_pattern(&self, pattern: &str) -> Vec<&AvailPkg> {
+        // Explicit set selectors:
+        //   @repo  -> every package in that repo   (e.g. @gnome)
+        //   @_tag  -> every package with that build tag (e.g. @_SBo, @cf)
+        // The '@' is required; a bare word is always a package name/substring or
+        // a series, never a repo, so there is no ambiguity.
+        if let Some(rest) = pattern.strip_prefix('@') {
+            let is_repo = self.priority.contains_key(rest);
+            let mut out: Vec<&AvailPkg> = self
+                .all
+                .iter()
+                .filter(|p| {
+                    if is_repo {
+                        p.repo == rest
+                    } else {
+                        p.id.build_tag() == rest
+                    }
+                })
+                .collect();
+            // De-duplicate by name, keeping the highest-priority candidate, so
+            // @repo/@tag don't list the same package name twice across repos.
+            out.sort_by(|a, b| {
+                a.id.name
+                    .cmp(&b.id.name)
+                    .then(self.repo_priority(&b.repo).cmp(&self.repo_priority(&a.repo)))
+            });
+            out.dedup_by(|a, b| a.id.name == b.id.name);
+            return out;
+        }
+
         let (pinned, term) = split_pin(pattern);
         let is_series = self.all.iter().any(|p| p.series == term);
 
@@ -310,6 +379,46 @@ mod upgrade_tests {
         let installed = vec![PkgId::parse("mkinitrd-1.4.11-x86_64-73").unwrap()];
         let ups = db.upgrades_for(&installed, &[]);
         assert_eq!(ups.len(), 1, "official build bump must upgrade");
+    }
+
+    #[test]
+    fn at_repo_selects_whole_repo() {
+        let mut a = avail("gnome-shell-46.0-x86_64-1_gnome", "gnome");
+        a.series = "x".into();
+        let mut b = avail("mutter-46.0-x86_64-1_gnome", "gnome");
+        b.series = "x".into();
+        let mut c = avail("bash-5.3-x86_64-1", "slackware");
+        c.series = "a".into();
+        let db = db(vec![a, b, c], &[("gnome", 101), ("slackware", 100)], Some(100));
+        let mut names: Vec<&str> = db.match_pattern("@gnome").iter().map(|p| p.id.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["gnome-shell", "mutter"]);
+    }
+
+    #[test]
+    fn at_tag_selects_by_build_tag() {
+        let mut a = avail("foo-1.0-x86_64-1_SBo", "slackware");
+        a.series = "x".into();
+        let mut b = avail("bar-1.0-x86_64-1cf", "conraid");
+        b.series = "x".into();
+        let db = db(vec![a, b], &[("slackware", 100), ("conraid", 80)], Some(100));
+        let m = db.match_pattern("@_SBo");
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].id.name, "foo");
+    }
+
+    #[test]
+    fn bare_word_is_not_a_repo() {
+        // a bare repo-like word matches package names/substrings, not the repo
+        let mut a = avail("gnome-shell-46.0-x86_64-1_gnome", "gnome");
+        a.series = "x".into();
+        let db = db(vec![a], &[("gnome", 101)], Some(100));
+        // "gnome" as substring matches gnome-shell by name; repo set would too,
+        // but the point is @ is required for repo *set* semantics. Here bare
+        // "gnome" hits gnome-shell via substring — and NOT via repo expansion.
+        let m = db.match_pattern("gnome");
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].id.name, "gnome-shell");
     }
 
     #[test]

@@ -71,13 +71,24 @@ enum Cmd {
     /// Remove installed packages.
     Remove { patterns: Vec<String> },
     /// Download packages into the cache without installing.
-    Download { patterns: Vec<String> },
+    /// Download package files without installing them. Saved to the cache by
+    /// default, or to a directory given with -o/--output.
+    Download {
+        patterns: Vec<String>,
+        /// Directory to save into (default: the slacker package cache).
+        #[arg(short, long)]
+        output: Option<String>,
+    },
     /// Upgrade every installed package that has a newer revision.
     UpgradeAll,
-    /// Install packages newly added to the repos since the last update.
-    InstallNew,
+    /// Install packages newly added since the last update. By default only the
+    /// official repo(s); name one or more repos to use those instead.
+    InstallNew { repos: Vec<String> },
     /// Remove installed packages that exist in no configured repo.
     CleanSystem,
+    /// Delete downloaded package files from the cache. Repo metadata and GPG
+    /// keys are never touched. Optionally limit to named repos.
+    CleanCache { repos: Vec<String> },
     /// Handle leftover *.new configuration files.
     NewConfig,
     /// Check whether the official ChangeLog has changed (exit 100 if so).
@@ -121,10 +132,11 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::Upgrade { patterns } => cmd_upgrade(cli, &cfg, patterns),
         Cmd::Reinstall { patterns } => cmd_reinstall(cli, &cfg, patterns),
         Cmd::Remove { patterns } => cmd_remove(cli, &cfg, patterns),
-        Cmd::Download { patterns } => cmd_download(&cfg, patterns),
+        Cmd::Download { patterns, output } => cmd_download(cli, &cfg, patterns, output.as_deref()),
         Cmd::UpgradeAll => cmd_upgrade_all(cli, &cfg),
-        Cmd::InstallNew => cmd_install_new(cli, &cfg),
+        Cmd::InstallNew { repos } => cmd_install_new(cli, &cfg, repos),
         Cmd::CleanSystem => cmd_clean_system(cli, &cfg),
+        Cmd::CleanCache { repos } => cmd_clean_cache(cli, &cfg, repos),
         Cmd::NewConfig => cmd_new_config(cli),
         Cmd::CheckUpdates => cmd_check_updates(&cfg),
         Cmd::ShowChangelog => cmd_show_changelog(&cfg),
@@ -375,6 +387,17 @@ fn fetch_and_verify(
     p: &repo::AvailPkg,
     dest: &std::path::Path,
 ) -> Result<(), String> {
+    // Guard against a symlink planted at the destination (e.g. in a shared
+    // output directory like /tmp): never write through it. symlink_metadata
+    // does not follow the link, so a dangling symlink is caught too.
+    if let Ok(meta) = std::fs::symlink_metadata(dest) {
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to write through symlink {}; remove it first",
+                dest.display()
+            ));
+        }
+    }
     let need = if dest.exists() {
         match &p.md5 {
             Some(m) => download::md5_file(dest)? != *m,
@@ -399,9 +422,70 @@ fn fetch_and_verify(
     Ok(())
 }
 
+/// Edit distance (Levenshtein) for "did you mean" suggestions.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Pick the closest candidate to `term` within a small edit distance.
+fn closest<'a>(term: &str, candidates: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for c in candidates {
+        let d = edit_distance(term, c);
+        if d <= 2 && best.as_ref().map_or(true, |(bd, _)| d < *bd) {
+            best = Some((d, c.to_string()));
+        }
+    }
+    best.map(|(_, s)| s)
+}
+
+/// Validate an `@repo` / `@_tag` selector. Returns a helpful error if it names
+/// neither a known repo nor a build tag actually in use.
+fn validate_selector(db: &PkgDb, pattern: &str) -> Result<(), String> {
+    let Some(rest) = pattern.strip_prefix('@') else {
+        return Ok(());
+    };
+    if rest.is_empty() {
+        return Err("empty selector '@': use @repo (e.g. @gnome) or @_tag (e.g. @_SBo)".into());
+    }
+    if db.is_repo(rest) || db.tag_in_use(rest) {
+        return Ok(());
+    }
+    let repos = db.all_repos();
+    let tags = db.all_build_tags();
+    let mut msg = format!("unknown repo or tag '@{rest}'");
+    let cands = repos.iter().map(|s| s.as_str()).chain(tags.iter().map(|s| s.as_str()));
+    if let Some(s) = closest(rest, cands) {
+        msg.push_str(&format!("; did you mean '@{s}'?"));
+    }
+    msg.push_str(&format!("\n  available repos: {}", repos.join(", ")));
+    if !tags.is_empty() {
+        msg.push_str(&format!("\n  available tags:  {}", tags.join(", ")));
+    }
+    Err(msg)
+}
+
 /// Expand patterns into winning packages, reporting patterns that matched
 /// nothing.
-fn collect<'a>(db: &'a PkgDb, patterns: &[String]) -> (Vec<&'a repo::AvailPkg>, Vec<String>) {
+fn collect<'a>(
+    db: &'a PkgDb,
+    patterns: &[String],
+) -> Result<(Vec<&'a repo::AvailPkg>, Vec<String>), String> {
+    for pat in patterns {
+        validate_selector(db, pat)?;
+    }
     let mut seen = HashSet::new();
     let mut pkgs = Vec::new();
     let mut misses = Vec::new();
@@ -416,7 +500,7 @@ fn collect<'a>(db: &'a PkgDb, patterns: &[String]) -> (Vec<&'a repo::AvailPkg>, 
             }
         }
     }
-    (pkgs, misses)
+    Ok((pkgs, misses))
 }
 
 // ---- commands ------------------------------------------------------------
@@ -525,7 +609,7 @@ fn cmd_info(cfg: &Config, name: &str) -> Result<Outcome, String> {
 fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let (matched, misses) = collect(&db, patterns);
+    let (matched, misses) = collect(&db, patterns)?;
     for m in &misses {
         eprintln!("no match for '{m}'");
     }
@@ -572,7 +656,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
 fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let (matched, _) = collect(&db, patterns);
+    let (matched, _) = collect(&db, patterns)?;
     let todo: Vec<_> = matched
         .into_iter()
         .filter(|p| !cfg.is_blacklisted(&p.id.name) && system::is_installed(&installed, &p.id.name))
@@ -604,7 +688,7 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
 fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let (matched, _) = collect(&db, patterns);
+    let (matched, _) = collect(&db, patterns)?;
     let todo: Vec<_> = matched
         .into_iter()
         .filter(|p| {
@@ -641,10 +725,40 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
 
 fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    // Match patterns against installed names (substring), respecting blacklist.
+    // Load the package DB only if an @repo/@tag selector is used (needs it to
+    // map a repo to the build tags its packages carry).
+    let db = if patterns.iter().any(|p| p.starts_with('@')) {
+        Some(PkgDb::load(cfg)?)
+    } else {
+        None
+    };
+
     let mut todo: Vec<&pkg::PkgId> = Vec::new();
     let mut seen = HashSet::new();
+
     for pat in patterns {
+        if let Some(rest) = pat.strip_prefix('@') {
+            // @repo  -> installed packages whose build tag belongs to that repo
+            // @_tag  -> installed packages carrying that build tag
+            let db = db.as_ref().expect("db loaded for @ selector");
+            validate_selector(db, pat)?;
+            let tags: HashSet<String> = if db.is_repo(rest) {
+                db.repo_build_tags(rest)
+            } else {
+                std::iter::once(rest.to_string()).collect()
+            };
+            for inst in &installed {
+                if tags.contains(inst.build_tag()) && seen.insert(inst.name.clone()) {
+                    if cfg.is_blacklisted(&inst.name) {
+                        eprintln!("skipping blacklisted '{}'", inst.name);
+                        continue;
+                    }
+                    todo.push(inst);
+                }
+            }
+            continue;
+        }
+        // plain name / substring match against installed names
         let term = pat.split_once(':').map(|x| x.1).unwrap_or(pat);
         for inst in &installed {
             if (inst.name == term || inst.name.contains(term)) && seen.insert(inst.name.clone()) {
@@ -659,6 +773,11 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
     if todo.is_empty() {
         println!("Nothing to remove.");
         return Ok(Outcome::NothingFound);
+    }
+    let todo = select_packages_pkgid(todo, "remove", cli.yes, cli.dry_run);
+    if todo.is_empty() {
+        println!("Nothing selected.");
+        return Ok(Outcome::Ok);
     }
     for p in &todo {
         println!("remove: {}", p.tag());
@@ -676,9 +795,14 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
     Ok(Outcome::Ok)
 }
 
-fn cmd_download(cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
+fn cmd_download(
+    cli: &Cli,
+    cfg: &Config,
+    patterns: &[String],
+    output: Option<&str>,
+) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
-    let (matched, misses) = collect(&db, patterns);
+    let (matched, misses) = collect(&db, patterns)?;
     for m in &misses {
         eprintln!("no match for '{m}'");
     }
@@ -686,9 +810,41 @@ fn cmd_download(cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
         println!("Nothing to download.");
         return Ok(Outcome::NothingFound);
     }
+
+    // Where to save: a user-given directory, or the package cache by default.
+    let out_dir = output.map(std::path::PathBuf::from);
+    if let Some(dir) = &out_dir {
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    }
+    let dest_label = match &out_dir {
+        Some(d) => d.display().to_string(),
+        None => cfg.cache_dir.join("packages").display().to_string(),
+    };
+
+    // Selecting a whole repo/tag can be hundreds of packages; confirm first.
+    const BULK: usize = 10;
+    if matched.len() > BULK && !cli.yes && !cli.dry_run {
+        println!("This will download {} packages into {dest_label}.", matched.len());
+        if !confirm("Proceed with download?", false) {
+            return Ok(Outcome::Ok);
+        }
+    } else {
+        println!("Downloading {} package(s) into {dest_label}.", matched.len());
+    }
+    if cli.dry_run {
+        for p in &matched {
+            println!("would download: [{}] {}", p.repo, p.filename);
+        }
+        println!("(dry-run: nothing downloaded)");
+        return Ok(Outcome::Ok);
+    }
+
     for p in &matched {
         let r = cfg.repo_by_name(&p.repo).ok_or("internal repo lookup failed")?;
-        let dest = system::cached_pkg_path(&cfg.cache_dir, &p.repo, &p.filename);
+        let dest = match &out_dir {
+            Some(d) => d.join(&p.filename),
+            None => system::cached_pkg_path(&cfg.cache_dir, &p.repo, &p.filename),
+        };
         fetch_and_verify(r, p, &dest)?;
         println!("downloaded: {}", dest.display());
     }
@@ -743,13 +899,34 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     Ok(Outcome::Ok)
 }
 
-fn cmd_install_new(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
+fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
 
+    // Which repos to scan for newly-added packages:
+    //   - no argument  -> official repo(s) only (slackpkg's behaviour: packages
+    //     the Slackware distribution itself added)
+    //   - repo name(s) -> exactly those, so the user can opt in to a third-party
+    //     repo explicitly (e.g. `slacker install-new alienbob`)
+    let selected: Vec<&config::Repo> = if repos.is_empty() {
+        cfg.repos.iter().filter(|r| r.official).collect()
+    } else {
+        let mut out = Vec::new();
+        for name in repos {
+            match cfg.repos.iter().find(|r| &r.name == name) {
+                Some(r) => out.push(r),
+                None => return Err(format!("install-new: unknown repo '{name}'")),
+            }
+        }
+        out
+    };
+    if selected.is_empty() {
+        return Err("install-new: no official repo configured; name a repo explicitly".into());
+    }
+
     // Build map repo -> filenames newly present since the last update.
     let mut new_by_repo: HashMap<String, HashSet<String>> = HashMap::new();
-    for r in &cfg.repos {
+    for r in selected {
         if let Some(prev) = repo::previous_filenames(r, &cfg.cache_dir) {
             let cur = repo::load_repo(r, &cfg.cache_dir, &cfg.arch)?;
             let added: HashSet<String> = cur
@@ -774,12 +951,22 @@ fn cmd_install_new(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.yes)?;
+    // Resolve dependencies up front so any extra packages pulled in are shown
+    // before we ask to proceed (dry-run keeps installed versions, no prompts).
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let new_deps: Vec<&PlanItem> = plan.iter().filter(|it| it.dep_for.is_some()).collect();
+    if !new_deps.is_empty() {
+        println!("\nThe following new packages will be installed as dependencies:");
+        for it in &new_deps {
+            let parent = it.dep_for.as_deref().unwrap_or("?");
+            println!("  new-dep: [{}] {}  (for {})", it.pkg.repo, it.pkg.id.tag(), parent);
+        }
+    }
     if cli.dry_run {
-        println!("(dry-run: nothing changed)");
+        println!("\n(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
-    if !confirm("Install new packages?", cli.yes) {
+    if !confirm("\nInstall new packages?", cli.yes) {
         return Ok(Outcome::Ok);
     }
     execute_plan(cfg, &plan)?;
@@ -862,8 +1049,133 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     Ok(Outcome::Ok)
 }
 
+/// Delete downloaded package files (.txz) from CACHE_DIR/packages. Repo
+/// metadata and GPG keys live under CACHE_DIR/repos and are never touched.
+fn cmd_clean_cache(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome, String> {
+    let pkg_root = cfg.cache_dir.join("packages");
+    if !pkg_root.is_dir() {
+        println!("Cache is already empty (no {} directory).", pkg_root.display());
+        return Ok(Outcome::NothingFound);
+    }
+
+    // Validate any named repos against the config so a typo can't silently
+    // match nothing.
+    if !repos.is_empty() {
+        for name in repos {
+            if cfg.repo_by_name(name).is_none() {
+                return Err(format!("clean-cache: unknown repo '{name}'"));
+            }
+        }
+    }
+
+    // Collect the per-repo package directories to clean.
+    let mut targets: Vec<std::path::PathBuf> = Vec::new();
+    if repos.is_empty() {
+        for entry in std::fs::read_dir(&pkg_root).map_err(|e| format!("read {}: {e}", pkg_root.display()))? {
+            let p = entry.map_err(|e| e.to_string())?.path();
+            if p.is_dir() {
+                targets.push(p);
+            }
+        }
+    } else {
+        for name in repos {
+            let d = pkg_root.join(name);
+            if d.is_dir() {
+                targets.push(d);
+            }
+        }
+    }
+
+    // Tally files and total size.
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut total: u64 = 0;
+    for dir in &targets {
+        for entry in std::fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))? {
+            let p = entry.map_err(|e| e.to_string())?.path();
+            // Only delete regular files, never follow symlinks or recurse.
+            let meta = std::fs::symlink_metadata(&p).map_err(|e| e.to_string())?;
+            if meta.file_type().is_file() {
+                total += meta.len();
+                files.push(p);
+            }
+        }
+    }
+
+    if files.is_empty() {
+        println!("No cached packages to remove.");
+        return Ok(Outcome::NothingFound);
+    }
+
+    let mib = total as f64 / (1024.0 * 1024.0);
+    let scope = if repos.is_empty() {
+        "all repos".to_string()
+    } else {
+        repos.join(", ")
+    };
+    println!(
+        "This will delete {} cached package file(s) ({:.1} MiB) from {} under {}.",
+        files.len(),
+        mib,
+        scope,
+        pkg_root.display()
+    );
+    println!("(Repo metadata and GPG keys are not affected.)");
+
+    if cli.dry_run {
+        println!("(dry-run: nothing deleted)");
+        return Ok(Outcome::Ok);
+    }
+    if !confirm("Proceed?", cli.yes) {
+        return Ok(Outcome::Ok);
+    }
+    let mut removed = 0;
+    for f in &files {
+        match std::fs::remove_file(f) {
+            Ok(()) => removed += 1,
+            Err(e) => eprintln!("could not remove {}: {e}", f.display()),
+        }
+    }
+    println!("Removed {removed} file(s), freed {mib:.1} MiB.");
+    Ok(Outcome::Ok)
+}
+
 /// Parse a keep-selection like "1 3 5", "1,3,5" or "2-4" into a set of 1-based
 /// indices, ignoring anything out of range or unparseable.
+/// Like `select_packages` but for installed `PkgId`s (used by remove).
+fn select_packages_pkgid<'a>(
+    pkgs: Vec<&'a pkg::PkgId>,
+    verb: &str,
+    assume_yes: bool,
+    dry_run: bool,
+) -> Vec<&'a pkg::PkgId> {
+    if pkgs.len() <= 1 || assume_yes || dry_run {
+        return pkgs;
+    }
+    println!("'{verb}' matched {} packages:", pkgs.len());
+    for (i, p) in pkgs.iter().enumerate() {
+        println!("  {:>3}) {}", i + 1, p.tag());
+    }
+    print!("Enter numbers to {verb} (e.g. 1 3 5 or 2-4), Enter for all, 'n' to cancel: ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return Vec::new();
+    }
+    let t = line.trim();
+    if t.eq_ignore_ascii_case("n") {
+        return Vec::new();
+    }
+    if t.is_empty() {
+        return pkgs;
+    }
+    let sel = parse_selection(t, pkgs.len());
+    pkgs.into_iter()
+        .enumerate()
+        .filter(|(i, _)| sel.contains(&(i + 1)))
+        .map(|(_, p)| p)
+        .collect()
+}
+
 fn parse_selection(input: &str, max: usize) -> HashSet<usize> {
     let mut out = HashSet::new();
     for tok in input.split([' ', ',', '\t']).filter(|t| !t.is_empty()) {
@@ -1176,6 +1488,22 @@ fn cmd_frozen(cfg: &Config, names: &[String]) -> Result<Outcome, String> {
 #[cfg(test)]
 mod selection_tests {
     use super::parse_selection;
+
+    #[test]
+    fn edit_distance_basics() {
+        assert_eq!(super::edit_distance("gnome", "gnome"), 0);
+        assert_eq!(super::edit_distance("gnme", "gnome"), 1);
+        assert_eq!(super::edit_distance("gnom", "gnome"), 1);
+        assert_eq!(super::edit_distance("xyz", "gnome"), 5);
+    }
+
+    #[test]
+    fn closest_suggests_within_two() {
+        let cands = ["gnome", "conraid", "slackware"];
+        assert_eq!(super::closest("gnme", cands.into_iter()), Some("gnome".into()));
+        assert_eq!(super::closest("conrad", cands.into_iter()), Some("conraid".into()));
+        assert_eq!(super::closest("zzzzzz", cands.into_iter()), None);
+    }
 
     #[test]
     fn parse_selection_works() {

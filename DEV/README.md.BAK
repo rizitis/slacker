@@ -1,4 +1,4 @@
-# slacker - slackpkg + slackpkg+ in one
+# slacker — slackpkg + slackpkg+ in one
 
 A Slackware package manager in Rust with full **slackpkg action parity**, plus
 **slackpkg+ multi-repo priority** resolution.
@@ -30,8 +30,8 @@ See `slacker.8` (`man slacker`) for the full manual.
 
 ## Configuration  (/etc/slacker/)
 
-    slacker.conf   KEY=value globals (ARCH, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS)
-    mirrors        catalogue of official mirrors - uncomment exactly ONE
+    slacker.conf   KEY=value globals (ARCH, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS)
+    mirrors        catalogue of official mirrors — uncomment exactly ONE
     repos          repo priorities/names + external repos
     blacklist      one package name per line
     templates/     generated/created templates
@@ -59,7 +59,7 @@ lives in `mirrors`, priority/placement live here. The `official` tag marks it
 for ChangeLog tracking; placement is by priority only.
 
 **URL schemes:** `https://`, `http://`, and `file://` are supported (the last
-for a local clone, NFS mount, or mounted media - three slashes for an absolute
+for a local clone, NFS mount, or mounted media — three slashes for an absolute
 path). A URL points at the repo root containing PACKAGES.TXT; for official
 mirrors, MANIFEST.bz2 lives in a per-arch subdir which slacker finds
 automatically.
@@ -67,30 +67,28 @@ automatically.
 ## Actions (slackpkg-compatible)
 
     slacker update [gpg]          refresh metadata; `update gpg` imports repo keys
-    slacker check-updates         per-repo update check; exit 100 if any pending
+    slacker check-updates         exit 100 if the official ChangeLog changed
     slacker show-changelog        print the cached ChangeLog
     slacker search PATTERN        search names + descriptions
     slacker file-search FILE      which package ships FILE (MANIFEST)
+    slacker frozen PACKAGE(S)     Add PACKAGE(S) in blacklist and frozen them 
     slacker info PACKAGE          per-repo candidates + installed version
     slacker install PATTERN...    install new packages (refuses installed ones)
     slacker upgrade PATTERN...    upgrade installed packages
     slacker reinstall PATTERN...  reinstall current version
     slacker remove PATTERN...     remove installed packages
-    slacker download PATTERN...   download to CACHE_DIR/packages/<repo>/ (or -o DIR), don't install
-    slacker clean-cache [REPO...] delete downloaded *.txz (keeps metadata + GPG keys)
+    slacker download PATTERN...   download to cache, don't install
     slacker upgrade-all           upgrade everything with a newer revision
-    slacker install-new [REPO...] install newly-added packages (official only by default)
+    slacker install-new           install packages newly added to the repos
     slacker clean-system          remove packages in no configured repo
-    slacker frozen PKG...         freeze package(s): add to blacklist
     slacker new-config            handle leftover *.new config files
     slacker generate-template N   snapshot installed packages to template N
     slacker install-template N    install everything in template N
-    slacker remove-template N     uninstall every package in template N
-    slacker delete-template N     delete the template file (keeps packages)
+    slacker remove-template N     remove everything in template N
+    slacker delete-template N     delete template N from /etc/slacker/templates
 
 PATTERN is a package name, a name substring, a series (a, ap, n, kde, xap, ...),
-a `repo:name` pin, or a set selector `@repo` / `@_tag`. Global flags: `-y/--yes`,
-`--dry-run`, `--no-deps`, `--config-dir`.
+or a `repo:name` pin. Global flags: `-y/--yes`, `--dry-run`, `--no-deps`, `--config-dir`.
 
 ## Exit status (matches slackpkg)
 
@@ -110,37 +108,10 @@ CHECKSUMS. Run `slacker update gpg` once before trusting a mirror.
 ## Notes / limits
 
 - Pattern matching is substring + series + exact, not full regex.
-- The `repos` file also accepts **build-tag priority** lines (`priority name tag`,
-  e.g. `100 SBo _SBo`) that give SlackBuilds.org/local packages a priority on the
-  same scale as repos. `upgrade-all` then only replaces a tagged package with a
-  candidate from a higher- or equal-priority repo, so SBo/local packages are
-  never silently migrated to another repo or downgraded.
-- Two explicit set selectors (the `@` is required, so a bare word is never a
-  repo):
-  - `@repo` means "every package in that repo" - e.g. `install @gnome` installs
-    the whole gnome repo, `remove @gnome` removes the installed packages that
-    came from it.
-  - `@_tag` means "every package with that build tag" - e.g. `remove @_SBo`
-    removes all installed SlackBuilds.org packages.
-  Give a repo a distinct, high priority and its packages (carrying their own
-  build tag, e.g. `_gnome`) are protected: no other repo can replace or
-  "upgrade" them, even with a newer version, because priority wins.
-- When an `install`/`upgrade`/`reinstall` pattern matches more than one package,
-  slacker shows a numbered list and lets you choose which to act on (Enter for
-  all, numbers/ranges like `1 3 5` or `2-4`, `n` to cancel). A series name
-  (`a`, `ap`, `kde`, `y`, ...) matches exactly that series, not every package
-  whose name happens to contain those letters.
-- `install-new` installs packages newly added since the last update. By default
-  it considers only the **official** repo(s); name one or more repos to opt in
-  explicitly (e.g. `slacker install-new alienbob`).
-- `frozen <pkg>...` adds one or more packages to the `blacklist` so update,
-  upgrade-all, reinstall, and clean-system leave them alone (freeze a version).
-- `remove-template <name>` uninstalls the packages a template lists (slackpkg
-  behaviour); `delete-template <name>` removes only the template file.
 - `clean-system` lists installed packages absent from all configured repos and
   lets you pick which to remove (numbers to keep, Enter to remove all). Packages
   whose build tag is in `IGNORE_TAGS` (e.g. `_SBo cf alien`) are never treated
-  as foreign - essential when you have many SBo/source/custom packages that no
+  as foreign — essential when you have many SBo/source/custom packages that no
   binary repo manages. Add individual packages to `blacklist` too if needed.
 - The `blacklist` is honoured by every mutating command, including `reinstall`.
 - ChangeLog is fetched (on `update`) only for the official repo, and powers
