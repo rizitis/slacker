@@ -30,7 +30,7 @@ See `slacker.8` (`man slacker`) for the full manual.
 
 ## Configuration  (/etc/slacker/)
 
-    slacker.conf   KEY=value globals (ARCH, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS)
+    slacker.conf   KEY=value globals (ARCH, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY)
     mirrors        catalogue of official mirrors - uncomment exactly ONE
     repos          repo priorities/names + external repos
     blacklist      one package name per line

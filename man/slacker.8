@@ -1,6 +1,6 @@
-.TH SLACKER 8 "June 2026" "slacker 0.2.0" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.3.1" "Slackware Package Management"
 .SH NAME
-slacker \- minimal and fast package manager for Slackware (slackpkg + slackpkg+ in one)
+slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
 .B slacker
 .RI [ OPTIONS ]
@@ -165,6 +165,19 @@ Delete a template file. Installed packages are not touched.
 .BI frozen " NAME..."
 Add one or more packages to the blacklist, freezing them so that update,
 upgrade-all, reinstall, and clean-system leave them alone.
+.SH PRIVILEGES
+Read-only commands
+.RB ( search ", " info ", " file-search ", " check-updates ", " show-changelog )
+run as any user. Commands that change the system, the cache, or the
+configuration (everything else) must be run as root; non-root invocations stop
+with a clear message before doing anything.
+.PP
+Those same commands take an exclusive lock
+.RI ( /run/slacker.lock )
+so only one runs at a time; a second one exits immediately reporting the running
+PID. The lock is held by the kernel and released automatically if slacker exits,
+crashes, or is killed, so it never gets stuck. Queries take no lock and run
+freely in parallel.
 .SH PATTERNS
 A
 .I PATTERN
@@ -208,6 +221,24 @@ holds downloaded metadata and packages.
 (default
 .IR /var/lib/pkgtools/packages )
 is the installed\-package database.
+.B VERIFY
+(default
+.IR all )
+sets the package verification policy.
+With
+.IR all ,
+a GPG signature is verified when present (a bad signature always fails), and at
+least one integrity checksum (md5 or sha) must be present and match; if neither
+md5 nor sha is available, installation stops. A comma list such as
+.I gpg,md5,sha
+REQUIRES those methods: if one is absent slacker stops and explains how to relax
+it.
+.I none
+disables verification. Override per repo with a
+.I verify=
+flag on the repos line \(em useful when a repo ships a broken or missing
+checksum or signature.
+.TP
 .B RESOLVE_DEPS
 (default
 .IR yes )

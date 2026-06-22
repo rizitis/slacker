@@ -1,53 +1,48 @@
-    Updating crates.io index
-     Locking 95 packages to latest compatible versions
-      Adding generic-array v0.14.7 (available: v0.14.9)
-      Adding md-5 v0.10.6 (available: v0.11.0)
-      Adding ureq v2.12.1 (available: v3.3.0)
    Compiling proc-macro2 v1.0.106
    Compiling unicode-ident v1.0.24
-   Compiling quote v1.0.45
+   Compiling quote v1.0.46
    Compiling stable_deref_trait v1.2.1
-   Compiling shlex v2.0.1
    Compiling find-msvc-tools v0.1.9
-   Compiling pkg-config v0.3.33
+   Compiling shlex v2.0.1
    Compiling writeable v0.6.3
-   Compiling vcpkg v0.2.15
+   Compiling pkg-config v0.3.33
    Compiling litemap v0.8.2
-   Compiling version_check v0.9.5
+   Compiling vcpkg v0.2.15
    Compiling icu_properties_data v2.2.0
    Compiling utf8_iter v1.0.4
+   Compiling version_check v0.9.5
    Compiling icu_normalizer_data v2.2.0
    Compiling libc v0.2.186
    Compiling cfg-if v1.0.4
-   Compiling smallvec v1.15.2
    Compiling typenum v1.20.1
-   Compiling utf8parse v0.2.2
+   Compiling smallvec v1.15.2
    Compiling crc32fast v1.5.0
-   Compiling openssl v0.10.81
+   Compiling utf8parse v0.2.2
    Compiling foreign-types-shared v0.1.1
+   Compiling openssl v0.10.81
    Compiling anstyle-parse v1.0.0
    Compiling simd-adler32 v0.3.9
    Compiling foreign-types v0.3.2
+   Compiling anstyle-query v1.1.5
+   Compiling bitflags v2.13.0
+   Compiling cc v1.2.65
    Compiling native-tls v0.2.18
    Compiling adler2 v2.0.1
-   Compiling anstyle-query v1.1.5
-   Compiling cc v1.2.65
-   Compiling is_terminal_polyfill v1.70.2
-   Compiling percent-encoding v2.3.2
    Compiling anstyle v1.0.14
+   Compiling is_terminal_polyfill v1.70.2
    Compiling colorchoice v1.0.5
-   Compiling bitflags v2.13.0
+   Compiling percent-encoding v2.3.2
    Compiling heck v0.5.0
    Compiling log v0.4.33
-   Compiling openssl-probe v0.2.1
    Compiling miniz_oxide v0.8.9
-   Compiling strsim v0.11.1
+   Compiling openssl-probe v0.2.1
    Compiling clap_lex v1.1.0
+   Compiling strsim v0.11.1
    Compiling once_cell v1.21.4
    Compiling base64 v0.22.1
+   Compiling anstream v1.0.0
    Compiling form_urlencoded v1.2.2
    Compiling generic-array v0.14.7
-   Compiling anstream v1.0.0
    Compiling clap_builder v4.6.0
    Compiling flate2 v1.1.9
    Compiling syn v2.0.118
@@ -57,16 +52,16 @@
    Compiling digest v0.10.7
    Compiling md-5 v0.10.6
    Compiling synstructure v0.13.2
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
    Compiling zerovec-derive v0.11.3
    Compiling displaydoc v0.2.6
    Compiling openssl-macros v0.1.1
    Compiling clap_derive v4.6.1
-   Compiling zerofrom-derive v0.1.7
-   Compiling yoke-derive v0.8.2
    Compiling zerofrom v0.1.8
    Compiling yoke v0.8.3
-   Compiling zerovec v0.11.6
    Compiling zerotrie v0.2.4
+   Compiling zerovec v0.11.6
    Compiling clap v4.6.1
    Compiling tinystr v0.8.3
    Compiling potential_utf v0.1.5
@@ -79,66 +74,74 @@
    Compiling idna v1.1.0
    Compiling url v2.5.8
    Compiling ureq v2.12.1
-   Compiling slacker v0.1.0 (/tmp/FORGE)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.10s
+   Compiling slacker v0.3.1 (/tmp/FORGE)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.96s
    Compiling openssl-sys v0.9.117
    Compiling openssl v0.10.81
    Compiling native-tls v0.2.18
    Compiling ureq v2.12.1
-   Compiling slacker v0.1.0 (/tmp/FORGE)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.27s
-   Compiling slacker v0.1.0 (/tmp/FORGE)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.09s
-     Running unittests src/main.rs (target/debug/deps/slacker-a2e6f8d7cd15c205)
+   Compiling slacker v0.3.1 (/tmp/FORGE)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.06s
+   Compiling slacker v0.3.1 (/tmp/FORGE)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s
+     Running unittests src/main.rs (target/debug/deps/slacker-9a8cb49989504c15)
 
-running 45 tests
-test config::tests::mirrors_none_active ... ok
+running 53 tests
+test config::tests::mirrors_two_active_is_error ... ok
 test config::tests::blacklist_lines ... ok
+test config::tests::mirrors_none_active ... ok
 test config::tests::mirrors_one_active ... ok
 test config::tests::keyvals_and_comments ... ok
-test config::tests::arch_detected_from_aaa_base ... ok
-test download::tests::file_url_fetch_roundtrip ... ok
-test config::tests::mirrors_two_active_is_error ... ok
-test config::tests::repos_columns_and_official ... ok
-test config::tests::repos_mirror_keyword_without_active_errors ... ok
 test config::tests::repos_duplicate_priority_is_error ... ok
+test config::tests::repos_mirror_keyword_without_active_errors ... ok
 test config::tests::repos_mirror_keyword_resolves ... ok
+test config::tests::verify_policy_parsing ... ok
+test config::tests::repos_bad_input ... ok
+test config::tests::verify_policy_wants_requires ... ok
+test config::tests::repos_columns_and_official ... ok
 test download::tests::tls_handshake_works ... ignored
 test download::tests::file_url_parsing ... ok
-test config::tests::repos_bad_input ... ok
+test config::tests::arch_detected_from_aaa_base ... ok
 test manifest::tests::finds_file_and_package ... ok
-test manifest::tests::symlink_target_stripped ... ok
 test pkg::tests::bare_tag_without_ext ... ok
 test pkg::tests::dashed_name ... ok
 test pkg::tests::build_tag_strips_number_both_styles ... ok
 test pkg::tests::rejects_garbage ... ok
-test download::tests::md5_of_known_content ... ok
-test pkg::tests::revision_detection ... ok
+test download::tests::file_url_fetch_roundtrip ... ok
+test manifest::tests::symlink_target_stripped ... ok
 test pkg::tests::simple_name ... ok
-test pkgdb::upgrade_tests::official_upgrade_proposed ... ok
-test pkgdb::upgrade_tests::sbo_is_not_migrated_to_lower_repo ... ok
-test pkgdb::upgrade_tests::no_downgrade_from_lower_repo ... ok
-test pkgdb::upgrade_tests::series_pattern_matches_only_series ... ok
-test pkgdb::upgrade_tests::genuine_self_upgrade_within_same_repo ... ok
-test repo::arch_tests::accepts_native_noarch_fw_x86 ... ok
-test pkgdb::upgrade_tests::higher_priority_same_version_is_proposed ... ok
-test repo::arch_tests::rejects_genuine_32bit_binaries_on_64 ... ok
-test repo::dep_tests::parses_names_and_skips_noise ... ok
-test pkgdb::upgrade_tests::substring_pattern_still_works ... ok
+test pkg::tests::revision_detection ... ok
+test download::tests::md5_of_known_content ... ok
 test newconfig::tests::finds_new_files_recursively ... ok
-test repo::tests::parses_blocks_with_series ... ok
-test repo::tests::parses_checksums_ok ... ok
-test repo::tests::series_extraction ... ok
+test pkgdb::upgrade_tests::at_repo_selects_whole_repo ... ok
+test pkgdb::upgrade_tests::bare_word_is_not_a_repo ... ok
+test pkgdb::upgrade_tests::at_tag_selects_by_build_tag ... ok
+test pkgdb::upgrade_tests::genuine_self_upgrade_within_same_repo ... ok
+test pkgdb::upgrade_tests::higher_priority_same_version_is_proposed ... ok
+test pkgdb::upgrade_tests::no_downgrade_from_lower_repo ... ok
+test pkgdb::upgrade_tests::sbo_is_not_migrated_to_lower_repo ... ok
+test pkgdb::upgrade_tests::official_upgrade_proposed ... ok
+test pkgdb::upgrade_tests::series_pattern_matches_only_series ... ok
+test pkgdb::upgrade_tests::substring_pattern_still_works ... ok
 test repo::lossy_tests::reads_non_utf8_without_failing ... ok
-test system::tests::missing_db_is_empty_not_error ... ok
-test repo::tests::toplevel_dirs_extracted ... ok
+test repo::tests::series_extraction ... ok
 test selection_tests::parse_selection_works ... ok
+test selection_tests::closest_suggests_within_two ... ok
+test repo::arch_tests::accepts_native_noarch_fw_x86 ... ok
+test repo::arch_tests::rejects_genuine_32bit_binaries_on_64 ... ok
+test system::tests::missing_db_is_empty_not_error ... ok
+test selection_tests::privilege_classification ... ok
+test repo::tests::parses_checksums_ok ... ok
+test selection_tests::edit_distance_basics ... ok
+test repo::tests::parses_blocks_with_series ... ok
+test repo::dep_tests::parses_names_and_skips_noise ... ok
 test template::tests::delete_removes_file_only ... ok
+test template::tests::name_suffix_is_normalized ... ok
 test system::tests::reads_fake_installed_db ... ok
 test template::tests::generate_then_load_with_include ... ok
-test template::tests::name_suffix_is_normalized ... ok
+test repo::tests::official_arch_subdir_picks_arch_dir ... ok
 
-test result: ok. 44 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 52 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 
 Slackware package maker, version 3.141592653.
@@ -157,7 +160,7 @@ Would you like to reset all directory permissions to 755 (drwxr-xr-x) and
 directory ownerships to root:root ([y]es, [n]o)? n
 
 
-Creating Slackware package:  /tmp/slacker-0.1.0-x86_64-1_FRG.txz
+Creating Slackware package:  /tmp/slacker-0.3.1-x86_64-1_FRG.txz
 
 ./
 etc/
@@ -172,14 +175,14 @@ install/doinst.sh
 install/slack-desc
 usr/
 usr/doc/
-usr/doc/slacker-0.1.0/
-usr/doc/slacker-0.1.0/README.md
-usr/doc/slacker-0.1.0/examples/
-usr/doc/slacker-0.1.0/examples/blacklist
-usr/doc/slacker-0.1.0/examples/mirrors
-usr/doc/slacker-0.1.0/examples/repos
-usr/doc/slacker-0.1.0/examples/slacker.conf
-usr/doc/slacker-0.1.0/slacker.SlackBuild
+usr/doc/slacker-0.3.1/
+usr/doc/slacker-0.3.1/README.md
+usr/doc/slacker-0.3.1/examples/
+usr/doc/slacker-0.3.1/examples/blacklist
+usr/doc/slacker-0.3.1/examples/mirrors
+usr/doc/slacker-0.3.1/examples/repos
+usr/doc/slacker-0.3.1/examples/slacker.conf
+usr/doc/slacker-0.3.1/slacker.SlackBuild
 usr/local/
 usr/local/sbin/
 usr/local/sbin/slacker
@@ -187,22 +190,22 @@ usr/man/
 usr/man/man8/
 usr/man/man8/slacker.8.gz
 
-Slackware package /tmp/slacker-0.1.0-x86_64-1_FRG.txz created.
+Slackware package /tmp/slacker-0.3.1-x86_64-1_FRG.txz created.
 
 Using tests from /usr/share/sbo-maintainer-tools/sbopkglint.d
-Exploding /tmp/slacker-0.1.0-x86_64-1_FRG.txz to /tmp/SBo/sbopkglint.XBBHJO ...OK
+Exploding /tmp/slacker-0.3.1-x86_64-1_FRG.txz to /tmp/SBo/sbopkglint.r7gtza ...OK
 Running pre-doinst test...OK
-Installing /tmp/slacker-0.1.0-x86_64-1_FRG.txz to /tmp/SBo/sbopkglint.XBBHJO ...OK
+Installing /tmp/slacker-0.3.1-x86_64-1_FRG.txz to /tmp/SBo/sbopkglint.r7gtza ...OK
 Running test: 05-basic-sanity...
 --- ERR: nonstandard directory in /usr: usr/local
 ___ note: package contains empty dirs, are these necessary?
-drwxr-xr-x 2 root root 4096 Jun 22 03:01 ./etc/slacker/templates
+drwxr-xr-x 2 root root 4096 Jun 22 17:35 ./etc/slacker/templates
 FAILED
 Running test: 10-docs...OK
 Running test: 15-noarch...OK
 Running test: 20-arch...
 --- ERR: ELF object(s) not stripped:
--rwxr-xr-x 1 root root 25877656 Jun 22 03:01 usr/local/sbin/slacker
+-rwxr-xr-x 1 root root 26723720 Jun 22 17:35 usr/local/sbin/slacker
 FAILED
 Running test: 25-lafiles...OK
 Running test: 30-manpages...OK
@@ -217,4 +220,4 @@ Running test: 75-static_libs...OK
 Running test: 85-perl...OK
 Running test: 90-terminfo...OK
 Running test: 95-pkgconfig...OK
-!!! slacker-0.1.0-x86_64-1_FRG.txz: 2 failures
+!!! slacker-0.3.1-x86_64-1_FRG.txz: 2 failures

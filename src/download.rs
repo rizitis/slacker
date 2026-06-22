@@ -89,7 +89,17 @@ pub fn download_to(url: &str, dest: &Path) -> Result<(), String> {
 
     // Remote — stream to a .part then rename.
     let agent = build_agent(Duration::from_secs(600))?;
-    let resp = agent.get(url).call().map_err(|e| e.to_string())?;
+    // Request identity transport encoding. These artifacts (.bz2/.txz) are
+    // already compressed, so transport gzip buys nothing here; meanwhile, with
+    // ureq's `gzip` feature a gzip-encoded response is decoded transparently
+    // while Content-Length still reports the *encoded* length. That mismatch
+    // makes byte accounting wrong and can leave the final read blocking until
+    // the agent timeout (~600s) instead of stopping at end-of-body.
+    let resp = agent
+        .get(url)
+        .set("Accept-Encoding", "identity")
+        .call()
+        .map_err(|e| e.to_string())?;
     let tmp = dest.with_extension("part");
     {
         let mut reader = resp.into_reader();
@@ -101,6 +111,98 @@ pub fn download_to(url: &str, dest: &Path) -> Result<(), String> {
     std::fs::rename(&tmp, dest)
         .map_err(|e| format!("rename into {}: {e}", dest.display()))?;
     Ok(())
+}
+
+/// Like download_to, but prints live progress (bytes, and percent when the
+/// server sends Content-Length) on a single refreshing line. Used for large
+/// downloads such as MANIFEST where the user otherwise can't tell if it stalled.
+/// Uses the same std::io::copy path as download_to (counting bytes through a
+/// wrapper) and writes straight to `dest`.
+pub fn download_to_progress(url: &str, dest: &Path, label: &str) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    }
+    // Local file:// — just copy, no progress needed.
+    if let Some(src) = file_url_to_path(url) {
+        std::fs::copy(&src, dest)
+            .map_err(|e| format!("copy {} -> {}: {e}", src.display(), dest.display()))?;
+        return Ok(());
+    }
+
+    let agent = build_agent(Duration::from_secs(600))?;
+    // Ask for an unencoded body so Content-Length matches the bytes we actually
+    // write, the stream ends cleanly at EOF (no read blocking until the ~600s
+    // timeout), and the percentage below is truthful. See download_to.
+    let resp = agent
+        .get(url)
+        .set("Accept-Encoding", "identity")
+        .call()
+        .map_err(|e| e.to_string())?;
+    // Only trust Content-Length as the percentage denominator when the body is
+    // not transfer-encoded. If a server compresses anyway, Content-Length is
+    // the *encoded* size while we count decoded bytes, which would pin the bar
+    // at a false 100% while data is still arriving — the "stuck at 100%" stall.
+    // In that case fall back to a plain byte counter that keeps moving.
+    let content_encoded = resp
+        .header("Content-Encoding")
+        .map(|e| !e.trim().is_empty() && !e.eq_ignore_ascii_case("identity"))
+        .unwrap_or(false);
+    let total: Option<u64> = if content_encoded {
+        None
+    } else {
+        resp.header("Content-Length").and_then(|s| s.parse().ok())
+    };
+    let mut reader = resp.into_reader();
+    let file = std::fs::File::create(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
+    let mut writer = ProgressWriter {
+        inner: file,
+        label: label.to_string(),
+        done: 0,
+        total,
+        last: std::time::Instant::now(),
+    };
+    std::io::copy(&mut reader, &mut writer).map_err(|e| format!("write {}: {e}", dest.display()))?;
+    // Final redraw + newline so the line stays put.
+    print_progress(label, writer.done, total);
+    println!();
+    Ok(())
+}
+
+/// A writer that forwards to `inner` and reports cumulative progress.
+struct ProgressWriter<W> {
+    inner: W,
+    label: String,
+    done: u64,
+    total: Option<u64>,
+    last: std::time::Instant,
+}
+
+impl<W: std::io::Write> std::io::Write for ProgressWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.done += n as u64;
+        if self.last.elapsed().as_millis() >= 200 {
+            print_progress(&self.label, self.done, self.total);
+            self.last = std::time::Instant::now();
+        }
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn print_progress(label: &str, done: u64, total: Option<u64>) {
+    use std::io::Write as _;
+    let mb = |b: u64| b as f64 / (1024.0 * 1024.0);
+    match total {
+        Some(t) if t > 0 => {
+            let pct = (done as f64 / t as f64 * 100.0).min(100.0) as u32;
+            print!("\r    {label}: {:.1} / {:.1} MB ({pct}%)    ", mb(done), mb(t));
+        }
+        _ => print!("\r    {label}: {:.1} MB    ", mb(done)),
+    }
+    std::io::stdout().flush().ok();
 }
 
 /// Compute the md5 of a file as a lowercase hex string.
@@ -117,6 +219,25 @@ pub fn md5_file(path: &Path) -> Result<String, String> {
         hasher.update(&buf[..n]);
     }
     Ok(hex(&hasher.finalize()))
+}
+
+/// SHA-256 of a file, computed by shelling out to `sha256sum` (coreutils, always
+/// present on Slackware). Kept out-of-process to avoid adding a hashing crate,
+/// consistent with how slacker uses the system gpg and bzip2.
+pub fn sha256_file(path: &Path) -> Result<String, String> {
+    let out = std::process::Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .map_err(|e| format!("run sha256sum: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("sha256sum failed for {}", path.display()));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let hash = text.split_whitespace().next().unwrap_or("");
+    if hash.len() != 64 {
+        return Err(format!("unexpected sha256sum output for {}", path.display()));
+    }
+    Ok(hash.to_string())
 }
 
 fn hex(bytes: &[u8]) -> String {

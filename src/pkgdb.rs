@@ -314,6 +314,7 @@ mod upgrade_tests {
             summary: String::new(),
             description: String::new(),
             md5: None,
+            sha: None,
             repo: repo.into(),
         }
     }

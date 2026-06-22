@@ -22,11 +22,11 @@ slacker/
 │   └── blacklist                   <- one package_name per line
 └── src/                            <- 12 modules
     ├── main.rs        CLI + commands (21 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection)
-    ├── config.rs      plain-text config (slacker.conf, mirrors, repos, blacklist) + arch auto-detect + tag-priorities
+    ├── config.rs      plain-text config + arch auto-detect + tag-priorities + VerifyPolicy/Check
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
-    ├── repo.rs        PACKAGES.TXT/CHECKSUMS parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch
+    ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch
     ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans
-    ├── download.rs    https/http (ureq+native-tls) + file:// + md5
+    ├── download.rs    https/http (ureq+native-tls) + file:// + md5 + sha256 (sha256sum)
     ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path
     ├── manifest.rs    file-search (decompressed MANIFEST)
     ├── changelog.rs   check-updates / show-changelog (pager when on a TTY)
@@ -40,7 +40,7 @@ slacker/
 - **slacker.conf** - `KEY=value`. ARCH is auto-detected from the installed
   `aaa_base` package (override only for cross). CACHE_DIR (default
   `/var/cache/slacker`), PKG_DB_DIR (default `/var/lib/pkgtools/packages`),
-  RESOLVE_DEPS (default yes), IGNORE_TAGS (build tags that `clean-system` treats
+  RESOLVE_DEPS (default yes), VERIFY (default all), IGNORE_TAGS (build tags that `clean-system` treats
   as non-foreign, e.g. `_SBo cf alien`).
 - **mirrors** - slackpkg-style catalogue; uncomment exactly ONE (none by
   default; 2+ -> error). Holds the official mirror URL (current/15.0 × 64/32,
@@ -106,6 +106,22 @@ generate-template  install-template  remove-template  delete-template
 
 Global flags: `-y/--yes`, `--dry-run`, `--no-deps`, `--config-dir`.
 Exit codes: 0 ok ; 1 error ; 20 nothing found ; 50 self-upgrade ; 100 pending.
+
+### Verification
+
+Packages are verified before install, governed by `VERIFY` (slacker.conf, global)
+and `verify=` (repos, per-repo override). Policy types live in config.rs
+(`VerifyPolicy` = All | Required(list) | None; `Check` = Gpg | Md5 | Sha).
+
+- GPG is verified at `update` (the repo's CHECKSUMS file is signed); a bad
+  signature is always fatal, a missing one is skipped under `all`.
+- Per-package integrity (md5 and/or sha) is verified at install in
+  `fetch_and_verify`. Under `all`, at least one of md5/sha must be present and
+  match; if neither is available the install stops. `sha` uses CHECKSUMS.sha256
+  if a repo ships it (none do today) and is computed via `sha256sum`.
+- A `Required(list)` policy (e.g. `gpg,md5,sha`) fails if a listed method is
+  absent, with a message pointing at where to relax it. The official repo gets
+  no exemption.
 
 ### Dependencies (.dep)
 

@@ -9,7 +9,7 @@
 cd $(dirname $0) ; CWD=$(pwd)
 
 PRGNAM=slacker
-VERSION=${VERSION:-0.2.0}
+VERSION=${VERSION:-0.3.1}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
@@ -48,6 +48,10 @@ else
   LIBDIRSUFFIX=""
 fi
 
+# I can only support x86_64
+DIR=stable
+grep -q '^VERSION_CODENAME=current$' /etc/os-release && DIR=current
+
 set -e
 
 rm -rf $PKG $TMP
@@ -73,13 +77,13 @@ install -m0755 target/debug/slacker $PKG/usr/local/sbin/slacker
 # docs
 mkdir -p $PKG/usr/doc/$PRGNAM-$VERSION/examples
 install -m0644 README.md $PKG/usr/doc/$PRGNAM-$VERSION/
-install -m0644 examples/etc-slacker/* $PKG/usr/doc/$PRGNAM-$VERSION/examples/
+install -m0644 examples/etc-slacker/"$DIR"/* $PKG/usr/doc/$PRGNAM-$VERSION/examples/
 cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
 
 # config files — install as .new so an upgrade never clobbers the user's edits
 mkdir -p $PKG/etc/slacker/templates
 for f in slacker.conf mirrors repos blacklist; do
-  install -m0644 examples/etc-slacker/$f $PKG/etc/slacker/$f.new
+  install -m0644 examples/etc-slacker/"$DIR"/$f $PKG/etc/slacker/$f.new
 done
 
 # man page

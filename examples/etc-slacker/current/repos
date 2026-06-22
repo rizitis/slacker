@@ -1,4 +1,5 @@
-# TEMPLATE repos — repository priorities, names, and external repos.
+# TEMPLATE FOR SLACKWARE64-CURRENT repos
+# — repository priorities, names, and external repos -
 #
 # One per line:   priority   name        url                       [official]
 # Higher priority wins when the same package exists in several repos.
@@ -19,12 +20,16 @@
 #10         multilib    https://slackware.nl/people/alien/multilib/current
 
 
-# ── External slackware64-15.0 repos ─────────────────────────────────────────
-#90          extras     https://mirror.nl.leaseweb.net/slackware/slackware64-15.0/extra
-#80          patches    https://mirror.nl.leaseweb.net/slackware/slackware64-15.0/patches
-#60          alienbob   https://slackware.nl/people/alien/sbrepos/15.0/x86_64
-#50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/15.0/x86_64
-#10         multilib    https://slackware.nl/people/alien/multilib/15.0
+# ── Per-repo verification override (optional) ───────────────────────────────
+# Append `verify=...` to a repo line to override the global VERIFY (set in
+# slacker.conf) for THAT repo only. Values: all | none | a comma list of
+# gpg,md5,sha. Order with `official` does not matter.
+# Use it when one repo ships a broken/missing checksum or signature, so you
+# relax only that repo instead of weakening everything. Examples:
+
+#   100  slackware   mirror                                                official  verify=gpg,md5
+#   80   conraid     https://slackers.it/repository/slackware64-current              verify=gpg,md5
+#   60   alienbob    https://slackware.nl/people/alien/sbrepos/current/x86_64        verify=md5
 
 # ── Source / build-tag priorities ──────────────────────────────────────────
 # Packages built from sources that are NOT binary repositories (SlackBuilds.org,
@@ -35,5 +40,6 @@
 # EQUAL priority. With SBo at 100 below, your SBo packages are never silently
 # migrated to conraid/alienbob etc... or downgraded; upgrade them via sbopkg/sbotools/slpkg etc.
 # Format:  priority  name   tag
+
 #100        SBo    _SBo
 #100        local  _YOURTAG

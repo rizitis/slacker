@@ -1,0 +1,124 @@
+# TEMPLATE FOR SLACKWARE64-15.0 mirrors
+# — catalogue of official Slackware mirrors -
+#
+# Uncomment EXACTLY ONE line. By default NONE is uncommented — you must pick
+# one. slacker errors out if two are active.
+#
+# Pick the line matching your architecture AND release (current vs 15.0).
+# Architecture is auto-detected from your system; make sure the directory you
+# pick matches it: slackware64 (x86_64) or slackware (32-bit).
+# The trailing slash is optional. The official repo's priority/name are set in
+# 'repos' (its line there uses the keyword 'mirror' to read the URL from here).
+#
+# NOTE: only http/https/file are supported (not ftp). A full, always-current
+# list of official mirrors is at https://mirrors.slackware.com/mirrorlist/
+#
+#----------------------------------------------------------------
+# Local CD/DVD drive or directory
+#----------------------------------------------------------------
+## NOTE: An absolute path needs THREE slashes (file:// + /path). The forms
+##   file:///path   and   file://localhost/path   are equivalent.
+## A different host (file://otherhost/path) is NOT supported — local only.
+#
+# file:///mnt/cdrom/
+# file:///var/cache/slackware-mirror/slackware64-current/
+# file://localhost/var/cache/slackware-mirror/slackware64-current/
+#
+#----------------------------------------------------------------
+# Slackware64-15.0
+#----------------------------------------------------------------
+# USE MIRRORS.SLACKWARE.COM (DO NOT USE FTP - ONLY HTTP FINDS A NEARBY MIRROR)
+# https://mirrors.slackware.com/slackware/slackware64-15.0/
+#
+#
+# Here are some individual mirrors that can be used instead of the
+# redirector at mirrors.slackware.com if necessary ; note that this
+# list is not guaranteed to be up-to-date
+#
+# AUSTRALIA (AU)
+# http://ftp.cc.swin.edu.au/slackware/slackware64-15.0/
+# http://ftp.iinet.net.au/pub/slackware/slackware64-15.0/
+# http://mirror.as24220.net/pub/slackware/slackware64-15.0/
+# http://mirror.internode.on.net/pub/slackware/slackware64-15.0/
+# AUSTRIA (AT)
+# http://gd.tuwien.ac.at/opsys/linux/freesoftware.com/slackware64-15.0/
+# BELARUS (BY)
+# http://mirror.datacenter.by/pub/slackware/slackware64-15.0/
+# BRAZIL (BR)
+# http://ftp.slackware-brasil.com.br/slackware64-15.0/
+# BULGARIA (BG)
+# ftp://mirrors.unixsol.org/slackware/slackware64-15.0/
+# http://mirrors.unixsol.org/slackware/slackware64-15.0/
+# CANADA (CA)
+# http://mirror.csclub.uwaterloo.ca/slackware/slackware64-15.0/
+# http://mirror.its.dal.ca/slackware/slackware64-15.0/
+# CHINA (CN)
+# http://mirrors.163.com/slackware/slackware64-15.0/
+# http://mirrors.ustc.edu.cn/slackware/slackware64-15.0/
+# COSTA RICA (CR)
+# http://mirrors.ucr.ac.cr/slackware/slackware64-15.0/
+# CZECH REPUBLIC (CZ)
+# http://odysseus.linux.cz/pub/linux/slackware/slackware64-15.0/
+# DENMARK (DK)
+# https://mirrors.dotsrc.org/slackware/slackware64-15.0/
+# FRANCE (FR)
+# http://nephtys.lip6.fr/pub/linux/distributions/slackware/slackware64-15.0/
+# GERMANY (DE)
+# http://ftp.gwdg.de/pub/linux/slackware/slackware64-15.0/
+# http://ftp.tu-chemnitz.de/pub/linux/slackware/slackware64-15.0/
+# http://sunsite.informatik.rwth-aachen.de/ftp/pub/comp/Linux/slackware/slackware64-15.0/
+# GREECE (GR)
+# http://ftp.cc.uoc.gr/mirrors/linux/slackware/slackware64-15.0/
+# http://ftp.otenet.gr/linux/slackware/slackware64-15.0/
+# INDONESIA (ID)
+# http://kambing.ui.ac.id/slackware/slackware64-15.0/
+# https://repo.ukdw.ac.id/slackware/slackware64-15.0/
+# IRELAND (IE)
+# http://ftp.heanet.ie/mirrors/ftp.slackware.com/pub/slackware/slackware64-15.0/
+# ITALY (IT)
+# http://ba.mirror.garr.it/mirrors/Slackware/slackware64-15.0/
+# JAPAN (JP)
+# http://ftp.nara.wide.ad.jp/pub/Linux/slackware/slackware64-15.0/
+# http://riksun.riken.go.jp/Linux/slackware/slackware64-15.0/
+# LITHUANIA (LT)
+# http://mirrors.atviras.lt/slackware/slackware64-15.0/
+# https://mirrors.atviras.lt/slackware/slackware64-15.0/
+# NETHERLANDS (NL)
+# http://ftp.nluug.nl/os/Linux/distr/slackware/slackware64-15.0/
+# http://mirror.nl.leaseweb.net/slackware/slackware64-15.0/
+# NORWAY (NO)
+# http://ftp.slackware.no/slackware/slackware64-15.0/
+# POLAND (PL)
+# http://ftp.slackware.pl/pub/slackware/slackware64-15.0/
+# http://sunsite.icm.edu.pl/packages/linux-slackware/slackware64-15.0/
+# RUSSIA (RU)
+# http://mirror.rol.ru/slackware/slackware64-15.0/
+# ftp://mirror.yandex.ru/slackware/slackware64-15.0/
+# http://mirror.yandex.ru/slackware/slackware64-15.0/
+# SOUTH AFRICA (ZA)
+# http://ftp.is.co.za/mirror/ftp.slackware.com/pub/slackware64-15.0/
+# http://ftp.wa.co.za/pub/slackware/slackware64-15.0/
+# http://slackware.mirror.ac.za/slackware64-15.0/
+# SWEDEN (SE)
+# http://ftp.sunet.se/mirror/slackware.com/slackware64-15.0/
+# SWITZERLAND (CH)
+# https://mirror.init7.net/slackware/slackware64-15.0/
+# TAIWAN (TW)
+# http://ftp.isu.edu.tw/pub/Linux/Slackware/slackware64-15.0/
+# ftp://ftp.twaren.net/pub/Linux/Slackware/slackware64-15.0/
+# http://ftp.twaren.net/Linux/Slackware/slackware64-15.0/
+# TURKEY (TR)
+# http://ftp.linux.org.tr/slackware/slackware64-15.0/
+# UKRAINE (UA)
+# http://mirrors.mithril.org.ua/linux/slackware/slackware64-15.0/
+# UNITED KINGDOM (UK)
+# http://slackware.uk/slackware/slackware64-15.0/
+# http://ftp.mirrorservice.org/sites/ftp.slackware.com/pub/slackware/slackware64-15.0/
+# http://mirror.bytemark.co.uk/slackware/slackware64-15.0/
+# UNITED STATES (US)
+# http://mirrors.us.kernel.org/slackware/slackware64-15.0/
+# http://mirrors.xmission.com/slackware/slackware64-15.0/
+# https://mirror.slackbuilds.org/slackware/slackware64-15.0/
+# http://slackware.cs.utah.edu/pub/slackware/slackware64-15.0/
+# http://slackware.mirrors.tds.net/pub/slackware/slackware64-15.0/
+# http://spout.ussg.indiana.edu/linux/slackware/slackware64-15.0/

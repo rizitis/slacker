@@ -14,6 +14,8 @@ install -m0644 examples/etc-slacker/* $PKG/usr/doc/$PRGNAM-$VERSION/examples/
 
 # online + debug is what we need for developing
 cargo build
+cargo test -- --ignored              # runs only ignored
+cargo test -- --include-ignored      # runs all (and ignored)
 mkdir -p $PKG/usr/sbin
 install -m0755 target/debug/slacker $PKG/usr/sbin/slacker
 # docs

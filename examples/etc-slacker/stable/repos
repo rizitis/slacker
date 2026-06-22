@@ -1,0 +1,43 @@
+# TEMPLATE FOR SLACKWARE64-15.0 repos
+# — repository priorities, names, and external repos -
+#
+# One per line:   priority   name        url                       [official]
+# Higher priority wins when the same package exists in several repos.
+# Reach a lower-priority repo explicitly with  name:package.
+#
+# The OFFICIAL line's url is the keyword 'mirror': slacker fills it in from the
+# active line in the 'mirrors' file. Change your mirror in '/etc/slecker/mirrors'; change ONLY the
+# official repo's priority/placement here.
+
+# priority  name        url       [official]
+100         slackware   mirror    official
+
+# ── External slackware64-15.0 repos ─────────────────────────────────────────
+#80          extras     https://mirror.nl.leaseweb.net/slackware/slackware64-15.0/extra
+#90          patches    https://mirror.nl.leaseweb.net/slackware/slackware64-15.0/patches
+#60          alienbob   https://slackware.nl/people/alien/sbrepos/15.0/x86_64
+#50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/15.0/x86_64
+#10         multilib    https://slackware.nl/people/alien/multilib/15.0
+
+# ── Per-repo verification override (optional) ───────────────────────────────
+# Append `verify=...` to a repo line to override the global VERIFY (set in
+# slacker.conf) for THAT repo only. Values: all | none | a comma list of
+# gpg,md5,sha. Order with `official` does not matter.
+# Use it when one repo ships a broken/missing checksum or signature, so you
+# relax only that repo instead of weakening everything. Examples:
+
+#   100  slackware   mirror                                                official  verify=gpg,md5
+#   60   alienbob    https://slackware.nl/people/alien/sbrepos/15.0/x86_64        verify=md5
+
+# ── Source / build-tag priorities ──────────────────────────────────────────
+# Packages built from sources that are NOT binary repositories (SlackBuilds.org,
+# your own local builds) carry a build tag after the build number, e.g.
+# 1_SBo -> _SBo, 1_rtz -> _rtz. Give those tags a priority here, in the same
+# scale as the repos above, so upgrade-all treats them as a prioritised source:
+# a tagged package is only replaced by a candidate from a repo of HIGHER or
+# EQUAL priority. With SBo at 100 below, your SBo packages are never silently
+# migrated to conraid/alienbob etc... or downgraded; upgrade them via sbopkg/sbotools/slpkg etc.
+# Format:  priority  name   tag
+
+#100        SBo    _SBo
+#100        local  _YOURTAG

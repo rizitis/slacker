@@ -23,6 +23,7 @@ remove, ...) need root; queries (search, info, file-search, ...) do not.
 11. Cleaning up
 12. Global flags and exit codes
 13. Common workflows
+14. Package verification
 
 ---
 
@@ -270,6 +271,17 @@ blacklisted packages or packages whose build tag is in `IGNORE_TAGS`.
 
 ## 12. Global flags and exit codes
 
+Read-only commands (`search`, `info`, `file-search`, `check-updates`,
+`show-changelog`) run as any user. Everything that changes the system, cache, or
+config must be run as root (or via sudo by a wheel member); a non-root attempt
+stops immediately with a clear message.
+
+Those commands also take an exclusive lock (`/run/slacker.lock`) so two cannot
+run at once; a second invocation exits immediately reporting the running PID.
+The lock is released automatically if slacker exits or is killed, so a crash
+never locks you out. Queries take no lock.
+
+
 Flags (work with any command):
 
 ```
@@ -337,4 +349,61 @@ Free disk without risking metadata or keys:
 
 ```
 slacker clean-cache
+```
+
+---
+
+## 14. Package verification
+
+slacker verifies packages before installing them. The policy is set globally
+with `VERIFY` in `slacker.conf` and can be overridden per repo with a `verify=`
+flag on the repos line.
+
+Default (`VERIFY=all`):
+
+```
+# slacker.conf
+VERIFY=all
+```
+
+With `all`, for each package: the GPG signature is checked when the repo
+provides one (a bad signature always fails; a missing one is skipped), and at
+least one integrity checksum (md5 or sha) must be present and match. If neither
+md5 nor sha is available, installation stops - the repo's checksum file is
+missing or broken.
+
+Require specific methods (stops if one is missing, telling you how to relax it):
+
+```
+VERIFY=gpg,md5,sha
+VERIFY=gpg,md5
+VERIFY=md5
+```
+
+Disable entirely (not recommended):
+
+```
+VERIFY=none
+```
+
+Per-repo override - useful when one repo ships a broken or missing checksum or
+signature, so you can relax just that repo instead of weakening everything:
+
+```
+# repos
+100  slackware  mirror                       official
+80   conraid    https://slackers.it/...      verify=gpg,md5
+60   alienbob   https://slackware.nl/...      verify=md5
+```
+
+The same rules apply to every repo, including the official one - there is no
+exemption. The `official` flag only affects `install-new` scope and ChangeLog
+tracking, not verification.
+
+If a download fails verification you will see a clear message, for example:
+
+```
+md5 mismatch for foo-1.0-x86_64-1cf.txz: expected ..., got ...
+no usable checksum (md5 or sha) for foo-...: the repo's checksum file may be
+  missing or broken. ... relax verification for it with a `verify=` flag ...
 ```

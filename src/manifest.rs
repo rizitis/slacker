@@ -21,6 +21,9 @@ pub fn file_search(
     cache_root: &Path,
     needle: &str,
 ) -> Result<Vec<FileHit>, String> {
+    // MANIFEST paths are relative (e.g. "bin/bash"), so a user-typed absolute
+    // path like "/bin/bash" is normalized by dropping the leading slash.
+    let needle = needle.strip_prefix('/').unwrap_or(needle);
     let mut hits = Vec::new();
     for r in repos {
         let manifest = repo::meta_path(r, cache_root, repo::MANIFEST);

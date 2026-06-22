@@ -22,6 +22,8 @@ pub struct AvailPkg {
     /// Full multi-line description (without the "name:" prefix).
     pub description: String,
     pub md5: Option<String>,
+    /// SHA-256 from CHECKSUMS.sha256, if the repo ships one. None otherwise.
+    pub sha: Option<String>,
     pub repo: String,
 }
 
@@ -36,6 +38,9 @@ pub const PACKAGES_TXT: &str = "PACKAGES.TXT";
 pub const PACKAGES_PREV: &str = "PACKAGES.TXT.prev";
 pub const CHECKSUMS: &str = "CHECKSUMS.md5";
 pub const CHECKSUMS_ASC: &str = "CHECKSUMS.md5.asc";
+/// Optional SHA-256 checksums file. No mainstream Slackware repo ships this
+/// yet; support is here so that if one does, slacker uses it automatically.
+pub const CHECKSUMS_SHA: &str = "CHECKSUMS.sha256";
 /// Remote (compressed) manifest filename.
 pub const MANIFEST_BZ2: &str = "MANIFEST.bz2";
 /// Local, decompressed, possibly-concatenated manifest used by file-search.
@@ -48,12 +53,10 @@ pub const CHANGELOG: &str = "ChangeLog.txt";
 /// ChangeLog) are best-effort. The previous PACKAGES.TXT is retained as
 /// PACKAGES.TXT.prev so `install-new` can diff against it.
 ///
-/// MANIFEST.bz2 is special: on official Slackware mirrors it lives not in the
-/// repo root but inside the per-arch subdir (slackware64/, slackware/, ...),
-/// while package LOCATIONs are relative to the root. We therefore look for it
-/// both at the root and inside every top-level subdir referenced by the
-/// package locations, decompress whatever we find, and concatenate it into one
-/// plain-text MANIFEST that file-search can read directly.
+/// MANIFEST.bz2 is fetched lazily by `ensure_manifest` (not here): from the
+/// repo root for third-party repos, or the per-arch subdir for the official
+/// one. The cached plain-text MANIFEST is dropped on each update so the next
+/// file-search re-fetches it.
 pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Result<(), String> {
     use std::io::Write;
     let dir = repo.cache_subdir(cache_root);
@@ -64,7 +67,7 @@ pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Res
         let _ = std::fs::copy(&pkgs_path, dir.join(PACKAGES_PREV));
     }
 
-    for fname in [PACKAGES_TXT, CHECKSUMS] {
+    for fname in [PACKAGES_TXT] {
         print!("  {fname} ... ");
         std::io::stdout().flush().ok();
         let url = repo.join_url(fname);
@@ -74,11 +77,11 @@ pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Res
         println!("ok");
     }
 
-    // The GPG signature is fetched for every repo (each is signed separately).
-    // The ChangeLog is only tracked for the official repo (check-updates /
-    // show-changelog use that one), so we skip it elsewhere — external repos
-    // keep their ChangeLog in varying locations/formats and we don't chase them.
-    let mut meta = vec![CHECKSUMS_ASC];
+    // CHECKSUMS.md5 is best-effort like the signature: nearly every repo ships
+    // it, but a repo could provide only sha. If none of the checksum files is
+    // present, install/download will refuse later with a clear message, rather
+    // than update failing here.
+    let mut meta = vec![CHECKSUMS, CHECKSUMS_ASC, CHECKSUMS_SHA];
     if fetch_changelog {
         meta.push(CHANGELOG);
     }
@@ -106,85 +109,85 @@ pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Res
 }
 
 /// Ensure the decompressed MANIFEST exists for a repo, downloading it on
-/// demand. Used by file-search. MANIFEST.bz2 is streamed to disk (not held in
-/// memory) and decompressed straight into the MANIFEST file, concatenating the
-/// root and every per-arch subdir referenced by the package locations.
+/// demand. Used by file-search.
+///
+/// Third-party repos publish MANIFEST.bz2 at the repo root — the directory the
+/// URL points at, which also holds that repo's PACKAGES.TXT and CHECKSUMS — so
+/// we fetch `<url>/MANIFEST.bz2`. The official repo is the one exception: its
+/// URL is the distribution root (carrying PACKAGES.TXT, ChangeLog, …), but the
+/// MANIFEST.bz2 lives one level down in the per-arch package dir (`slackware64/`
+/// on 64-bit, `slackware/` on 32-bit). For the official repo we therefore also
+/// try that subdir. We never probe a third-party repo's location subdirs —
+/// doing so was what stalled file-search at the network timeout.
 pub fn ensure_manifest(repo: &Repo, cache_root: &Path) -> Result<bool, String> {
-    use std::io::Write;
     let dir = repo.cache_subdir(cache_root);
     let dest = dir.join(MANIFEST);
     if dest.exists() {
         return Ok(true);
     }
 
-    let mut subdirs: Vec<String> = vec![String::new()]; // "" == repo root
-    if let Ok(text) = read_text_lossy(&dir.join(PACKAGES_TXT)) {
-        for d in toplevel_location_dirs(&text) {
-            if !subdirs.contains(&d) {
-                subdirs.push(d);
-            }
+    let mut candidates: Vec<String> = vec![String::new()]; // "" == repo root
+    if repo.official {
+        if let Some(arch_dir) = official_arch_subdir(&dir) {
+            candidates.push(arch_dir);
         }
     }
 
-    print!("  fetching MANIFEST for '{}' (large, first time only) ... ", repo.name);
-    std::io::stdout().flush().ok();
-
+    println!("  fetching MANIFEST for '{}' (large, first time only):", repo.name);
     let tmp_bz2 = dir.join("MANIFEST.bz2.part");
-    let mut out = std::fs::File::create(&dest).map_err(|e| format!("create MANIFEST: {e}"))?;
-    let mut wrote_any = false;
 
-    for sub in &subdirs {
-        let rel = if sub.is_empty() {
-            MANIFEST_BZ2.to_string()
+    for sub in &candidates {
+        let (rel, label) = if sub.is_empty() {
+            (MANIFEST_BZ2.to_string(), repo.name.clone())
         } else {
-            format!("{sub}/{MANIFEST_BZ2}")
+            (format!("{sub}/{MANIFEST_BZ2}"), format!("{}/{sub}", repo.name))
         };
         let url = repo.join_url(&rel);
-        if download::download_to(&url, &tmp_bz2).is_err() {
+        if download::download_to_progress(&url, &tmp_bz2, &label).is_err() {
             continue;
         }
-        // Decompress directly into the MANIFEST file (no big in-memory buffer).
+        // Decompress straight into the MANIFEST file (no big in-memory buffer).
+        let out = std::fs::File::create(&dest).map_err(|e| format!("create MANIFEST: {e}"))?;
         let status = std::process::Command::new("bzip2")
             .arg("-dc")
             .arg(&tmp_bz2)
-            .stdout(std::process::Stdio::from(
-                out.try_clone().map_err(|e| e.to_string())?,
-            ))
+            .stdout(std::process::Stdio::from(out))
             .stderr(std::process::Stdio::null())
             .status();
         let _ = std::fs::remove_file(&tmp_bz2);
         if matches!(status, Ok(s) if s.success()) {
-            wrote_any = true;
-            out.write_all(b"\n").ok();
+            println!("  MANIFEST for '{}' ready", repo.name);
+            return Ok(true);
         }
+        let _ = std::fs::remove_file(&dest);
     }
 
-    if wrote_any {
-        println!("ok");
-        Ok(true)
-    } else {
-        drop(out);
-        let _ = std::fs::remove_file(&dest);
-        println!("none available");
-        Ok(false)
-    }
+    let _ = std::fs::remove_file(&tmp_bz2);
+    println!("  no MANIFEST available for '{}'", repo.name);
+    Ok(false)
 }
 
-/// Distinct top-level directory names from PACKAGE LOCATION lines.
-/// "./slackware64/d" -> "slackware64".
-fn toplevel_location_dirs(packages_txt: &str) -> Vec<String> {
-    let mut seen = Vec::new();
-    for line in packages_txt.lines() {
+/// For the official Slackware repo only: the MANIFEST.bz2 sits in the per-arch
+/// package dir (`slackware64/` on 64-bit, `slackware/` on 32-bit), one level
+/// below the distribution-root URL. Recover that dir name from the cached
+/// PACKAGES.TXT PACKAGE LOCATIONs (e.g. "./slackware64/l" -> "slackware64").
+fn official_arch_subdir(cache_dir: &Path) -> Option<String> {
+    let text = read_text_lossy(&cache_dir.join(PACKAGES_TXT)).ok()?;
+    for line in text.lines() {
         if let Some(rest) = line.strip_prefix("PACKAGE LOCATION:") {
-            let loc = rest.trim().trim_start_matches("./").trim_matches('/');
-            if let Some(top) = loc.split('/').next() {
-                if !top.is_empty() && !seen.contains(&top.to_string()) {
-                    seen.push(top.to_string());
-                }
+            let top = rest
+                .trim()
+                .trim_start_matches("./")
+                .trim_matches('/')
+                .split('/')
+                .next()
+                .unwrap_or("");
+            if top == "slackware64" || top == "slackware" {
+                return Some(top.to_string());
             }
         }
     }
-    seen
+    None
 }
 
 /// True if a package of `pkg_arch` belongs in a repo for system `arch`.
@@ -216,12 +219,21 @@ pub fn load_repo(repo: &Repo, cache_root: &Path, arch: &str) -> Result<Vec<Avail
         Ok(s) => parse_checksums(&s),
         Err(_) => HashMap::new(),
     };
+    // SHA-256 checksums are optional and absent from current repos; if a repo
+    // ships CHECKSUMS.sha256, slacker picks it up here.
+    let sha_map = match read_text_lossy(&dir.join(CHECKSUMS_SHA)) {
+        Ok(s) => parse_checksums_len(&s, 64),
+        Err(_) => HashMap::new(),
+    };
 
     let mut out = parse_packages_txt(&pkg_text, &repo.name);
     out.retain(|p| arch_compatible(&p.id.arch, arch));
     for p in out.iter_mut() {
         if let Some(m) = md5_map.get(&p.filename) {
             p.md5 = Some(m.clone());
+        }
+        if let Some(s) = sha_map.get(&p.filename) {
+            p.sha = Some(s.clone());
         }
     }
     Ok(out)
@@ -287,6 +299,7 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
                     summary: summary.trim().to_string(),
                     description: desc.trim_end().to_string(),
                     md5: None,
+                    sha: None,
                     repo: repo_name.to_string(),
                 });
             }
@@ -332,6 +345,12 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
 }
 
 fn parse_checksums(text: &str) -> HashMap<String, String> {
+    parse_checksums_len(text, 32)
+}
+
+/// Parse a CHECKSUMS-style file mapping filename -> hash, keeping only entries
+/// whose hash is exactly `hexlen` characters (32 for md5, 64 for sha256).
+fn parse_checksums_len(text: &str, hexlen: usize) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in text.lines() {
         let line = line.trim();
@@ -342,7 +361,7 @@ fn parse_checksums(text: &str) -> HashMap<String, String> {
         let (Some(hash), Some(path)) = (parts.next(), parts.next()) else {
             continue;
         };
-        if hash.len() != 32 {
+        if hash.len() != hexlen {
             continue;
         }
         if let Some(fname) = path.trim().rsplit('/').next() {
@@ -388,12 +407,24 @@ xfce4-panel: xfce4-panel (panel for Xfce)
     }
 
     #[test]
-    fn toplevel_dirs_extracted() {
-        let txt = "PACKAGE LOCATION:  ./slackware64/a\nPACKAGE LOCATION:  ./slackware64/n\nPACKAGE LOCATION:  ./extra/foo\n";
-        assert_eq!(toplevel_location_dirs(txt), vec!["slackware64", "extra"]);
-        // 32-bit naming works the same
-        let txt32 = "PACKAGE LOCATION:  ./slackware/a\n";
-        assert_eq!(toplevel_location_dirs(txt32), vec!["slackware"]);
+    fn official_arch_subdir_picks_arch_dir() {
+        let dir = std::env::temp_dir().join("slacker_archsub_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 64-bit: locations under ./slackware64/, with extras present too
+        std::fs::write(
+            dir.join(PACKAGES_TXT),
+            "PACKAGE LOCATION:  ./extra/foo\nPACKAGE LOCATION:  ./slackware64/a\n",
+        )
+        .unwrap();
+        assert_eq!(official_arch_subdir(&dir), Some("slackware64".to_string()));
+        // 32-bit naming
+        std::fs::write(dir.join(PACKAGES_TXT), "PACKAGE LOCATION:  ./slackware/a\n").unwrap();
+        assert_eq!(official_arch_subdir(&dir), Some("slackware".to_string()));
+        // a flat repo (no slackware*/ toplevel) yields none
+        std::fs::write(dir.join(PACKAGES_TXT), "PACKAGE LOCATION:  ./pkg/a\n").unwrap();
+        assert_eq!(official_arch_subdir(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -70,8 +70,7 @@ enum Cmd {
     Reinstall { patterns: Vec<String> },
     /// Remove installed packages.
     Remove { patterns: Vec<String> },
-    /// Download packages into the cache without installing.
-    /// Download package files without installing them. Saved to the cache by
+    /// Download package files without installing. Saved to the cache by
     /// default, or to a directory given with -o/--output.
     Download {
         patterns: Vec<String>,
@@ -123,6 +122,20 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli) -> Result<Outcome, String> {
     let cfg = Config::load_dir(&cli.config_dir)?;
+    let privileged = requires_privilege(&cli.command);
+    if privileged {
+        ensure_privileged(&cli.command)?;
+    }
+    // Mutating commands take an exclusive lock so two cannot run at once and
+    // corrupt the cache or the package database. The lock is an flock() held by
+    // the kernel: it is released automatically when this process exits, even on
+    // crash or kill -9, so a dead slacker never locks you out. Queries take no
+    // lock and run freely in parallel.
+    let _lock = if privileged {
+        Some(acquire_lock()?)
+    } else {
+        None
+    };
     match &cli.command {
         Cmd::Update { mode } => cmd_update(&cfg, mode.as_deref()),
         Cmd::Search { pattern } => cmd_search(&cfg, pattern),
@@ -149,6 +162,136 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
 }
 
 // ---- helpers -------------------------------------------------------------
+
+/// Holds the open lock file. Dropping it closes the fd, which releases the
+/// flock; the kernel also releases it automatically if the process dies.
+struct Lock {
+    _file: std::fs::File,
+}
+
+/// Take an exclusive, non-blocking flock on /run/slacker.lock. If another
+/// slacker holds it, fail fast with its PID. The lock lives only as long as the
+/// holding process: a crash or kill never leaves a stale lock behind (the file
+/// may remain, but it carries no lock without a live owner).
+fn acquire_lock() -> Result<Lock, String> {
+    use std::io::Write as _;
+    use std::os::unix::io::AsRawFd;
+
+    const LOCK_PATH: &str = "/run/slacker.lock";
+    const LOCK_EX: i32 = 2; // exclusive
+    const LOCK_NB: i32 = 4; // non-blocking
+    extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(LOCK_PATH)
+        .map_err(|e| format!("cannot open lock file {LOCK_PATH}: {e}"))?;
+
+    let rc = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
+    if rc != 0 {
+        let who = std::fs::read_to_string(LOCK_PATH)
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .map(|p| format!(" (PID {p})"))
+            .unwrap_or_default();
+        return Err(format!(
+            "another slacker is already running{who}; wait for it to finish and try again"
+        ));
+    }
+
+    // We hold the lock: record our PID for the message the *next* caller sees.
+    let mut f = &file;
+    let _ = f.set_len(0);
+    let _ = write!(f, "{}", std::process::id());
+    let _ = f.flush();
+
+    Ok(Lock { _file: file })
+}
+
+/// Commands that write to root-owned locations (the package database under
+/// /var/lib/pkgtools, the cache under /var/cache/slacker, or config under
+/// /etc/slacker) and therefore need root. Pure queries are free for anyone.
+fn requires_privilege(cmd: &Cmd) -> bool {
+    match cmd {
+        // read-only: search the metadata, print info, no writes to root dirs
+        Cmd::Search { .. }
+        | Cmd::Info { .. }
+        | Cmd::FileSearch { .. }
+        | Cmd::CheckUpdates
+        | Cmd::ShowChangelog => false,
+        // everything else writes to a root-owned location
+        _ => true,
+    }
+}
+
+/// The user's numeric uid, via `id -u` (no extra crate needed).
+fn current_uid() -> Option<u32> {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse().ok())
+}
+
+/// Whether the current user belongs to the `wheel` group, via `id -nG`.
+fn in_wheel() -> bool {
+    std::process::Command::new("id")
+        .arg("-nG")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.split_whitespace().any(|g| g == "wheel"))
+        .unwrap_or(false)
+}
+
+/// Stop, with a clear message, if a privileged command is run without root.
+/// Only uid 0 can actually write to the root-owned directories; wheel
+/// membership just tailors the hint (you can use sudo) versus (ask an admin).
+fn ensure_privileged(cmd: &Cmd) -> Result<(), String> {
+    if current_uid() == Some(0) {
+        return Ok(());
+    }
+    let name = command_name(cmd);
+    let hint = if in_wheel() {
+        format!("run it with: sudo slacker {name} ...")
+    } else {
+        "you are not in the 'wheel' group; ask a system administrator".to_string()
+    };
+    Err(format!(
+        "'{name}' modifies the system or cache and must be run as root — {hint}"
+    ))
+}
+
+/// Short command name for messages.
+fn command_name(cmd: &Cmd) -> &'static str {
+    match cmd {
+        Cmd::Update { .. } => "update",
+        Cmd::Search { .. } => "search",
+        Cmd::FileSearch { .. } => "file-search",
+        Cmd::Info { .. } => "info",
+        Cmd::Install { .. } => "install",
+        Cmd::Upgrade { .. } => "upgrade",
+        Cmd::Reinstall { .. } => "reinstall",
+        Cmd::Remove { .. } => "remove",
+        Cmd::Download { .. } => "download",
+        Cmd::UpgradeAll => "upgrade-all",
+        Cmd::InstallNew { .. } => "install-new",
+        Cmd::CleanSystem => "clean-system",
+        Cmd::CleanCache { .. } => "clean-cache",
+        Cmd::NewConfig => "new-config",
+        Cmd::CheckUpdates => "check-updates",
+        Cmd::ShowChangelog => "show-changelog",
+        Cmd::GenerateTemplate { .. } => "generate-template",
+        Cmd::InstallTemplate { .. } => "install-template",
+        Cmd::RemoveTemplate { .. } => "remove-template",
+        Cmd::DeleteTemplate { .. } => "delete-template",
+        Cmd::Frozen { .. } => "frozen",
+    }
+}
 
 fn confirm(prompt: &str, assume_yes: bool) -> bool {
     if assume_yes {
@@ -371,7 +514,7 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
     for it in plan {
         let r = cfg.repo_by_name(&it.pkg.repo).ok_or("internal repo lookup failed")?;
         let dest = system::cached_pkg_path(&cfg.cache_dir, &it.pkg.repo, &it.pkg.filename);
-        fetch_and_verify(r, &it.pkg, &dest)?;
+        fetch_and_verify(cfg, r, &it.pkg, &dest)?;
         match it.action {
             InstallAction::Install => system::install(&dest)?,
             InstallAction::Upgrade => system::upgrade_only(&dest)?,
@@ -382,11 +525,34 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
 }
 
 /// Download a package (if needed) and verify md5 before use.
+/// Message shown when a required verification method is not provided by a repo,
+/// telling the user exactly where to relax the policy.
+fn verify_unavailable_error(repo: &str, check: config::Check, config_dir: &std::path::Path) -> String {
+    let what = match check {
+        config::Check::Gpg => "a GPG signature (CHECKSUMS.md5.asc)",
+        config::Check::Md5 => "an md5 checksum (CHECKSUMS.md5)",
+        config::Check::Sha => "a SHA-256 checksum (CHECKSUMS.sha256)",
+    };
+    format!(
+        "repo '{repo}': '{}' verification is required, but this repo does not provide {what}.\n\
+         To continue for this repo without '{}', either add a `verify=` flag (omitting '{}') to\n\
+         its line in {}, or change VERIFY in {}.",
+        check.label(),
+        check.label(),
+        check.label(),
+        config_dir.join("repos").display(),
+        config_dir.join("slacker.conf").display(),
+    )
+}
+
 fn fetch_and_verify(
+    cfg: &Config,
     repo: &config::Repo,
     p: &repo::AvailPkg,
     dest: &std::path::Path,
 ) -> Result<(), String> {
+    let policy = repo.verify_policy(&cfg.verify);
+
     // Guard against a symlink planted at the destination (e.g. in a shared
     // output directory like /tmp): never write through it. symlink_metadata
     // does not follow the link, so a dangling symlink is caught too.
@@ -411,13 +577,82 @@ fn fetch_and_verify(
         println!("  fetching {url}");
         download::download_to(&url, dest)?;
     }
-    if let Some(expected) = &p.md5 {
-        let got = download::md5_file(dest)?;
-        if &got != expected {
-            return Err(format!("md5 mismatch for {}: expected {expected}, got {got}", p.filename));
+
+    // Integrity: md5 and/or sha. The two are alternatives — at least ONE must
+    // be present and pass. Any present-and-checked hash that mismatches is
+    // fatal. If a method is explicitly required (Required policy) but absent,
+    // that is fatal with guidance. If neither md5 nor sha is available at all
+    // (and integrity wasn't switched off), we stop: the repo's checksum file is
+    // missing or broken.
+    let want_md5 = policy.wants(config::Check::Md5);
+    let want_sha = policy.wants(config::Check::Sha);
+
+    if want_md5 || want_sha {
+        let mut any_checked = false;
+
+        if want_md5 {
+            match &p.md5 {
+                Some(expected) => {
+                    let got = download::md5_file(dest)?;
+                    if &got != expected {
+                        return Err(format!(
+                            "md5 mismatch for {}: expected {expected}, got {got} \
+                             (the package may be corrupt or the checksum file is wrong)",
+                            p.filename
+                        ));
+                    }
+                    any_checked = true;
+                }
+                None => {
+                    if policy.requires(config::Check::Md5) {
+                        return Err(verify_unavailable_error(
+                            &p.repo,
+                            config::Check::Md5,
+                            &cfg.config_dir,
+                        ));
+                    }
+                }
+            }
         }
-    } else {
-        eprintln!("  warning: no md5 for {}; integrity unverified", p.filename);
+
+        if want_sha {
+            match &p.sha {
+                Some(expected) => {
+                    let got = download::sha256_file(dest)?;
+                    if &got != expected {
+                        return Err(format!(
+                            "sha256 mismatch for {}: expected {expected}, got {got} \
+                             (the package may be corrupt or the checksum file is wrong)",
+                            p.filename
+                        ));
+                    }
+                    any_checked = true;
+                }
+                None => {
+                    if policy.requires(config::Check::Sha) {
+                        return Err(verify_unavailable_error(
+                            &p.repo,
+                            config::Check::Sha,
+                            &cfg.config_dir,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // best-available ("all"): if neither hash was available, refuse rather
+        // than install something we could not check at all.
+        if !any_checked && !policy.requires(config::Check::Md5) && !policy.requires(config::Check::Sha) {
+            return Err(format!(
+                "no usable checksum (md5 or sha) for {} in repo '{}': the repo's \
+                 checksum file may be missing or broken. Fix the repo, or relax \
+                 verification for it with a `verify=` flag in {} (or VERIFY in {}).",
+                p.filename,
+                p.repo,
+                cfg.config_dir.join("repos").display(),
+                cfg.config_dir.join("slacker.conf").display(),
+            ));
+        }
     }
     Ok(())
 }
@@ -529,11 +764,25 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
                 continue;
             }
         }
-        // If we have a key + signature, verify the checksums.
-        match gpg::verify_checksums(r, &cfg.cache_dir) {
-            Ok(gpg::Verify::Good(signer)) => println!("  GPG: good signature ({signer})"),
-            Ok(gpg::Verify::NoSignature) => println!("  GPG: no signature provided"),
-            Err(e) => return Err(e),
+        // GPG verification, governed by this repo's verify policy.
+        let policy = r.verify_policy(&cfg.verify);
+        if policy.wants(config::Check::Gpg) {
+            match gpg::verify_checksums(r, &cfg.cache_dir) {
+                Ok(gpg::Verify::Good(signer)) => println!("  GPG: good signature ({signer})"),
+                Ok(gpg::Verify::NoSignature) => {
+                    if policy.requires(config::Check::Gpg) {
+                        return Err(verify_unavailable_error(
+                            &r.name,
+                            config::Check::Gpg,
+                            &cfg.config_dir,
+                        ));
+                    }
+                    println!("  GPG: no signature provided (skipped)");
+                }
+                Err(e) => return Err(e), // a BAD signature is always fatal
+            }
+        } else {
+            println!("  GPG: skipped (verify policy)");
         }
     }
     Ok(Outcome::Ok)
@@ -555,23 +804,51 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
 }
 
 fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
-    // MANIFEST is fetched lazily (it is large); make sure it's present.
+    // MANIFEST is fetched lazily (it is large); make sure it's present. Track
+    // repos whose MANIFEST we could neither find nor fetch, so we can explain
+    // rather than silently return "not found".
+    let mut unavailable: Vec<String> = Vec::new();
     for r in &cfg.repos {
         let mpath = repo::meta_path(r, &cfg.cache_dir, repo::MANIFEST);
-        if !mpath.exists() {
-            let _ = repo::ensure_manifest(r, &cfg.cache_dir);
+        if mpath.exists() {
+            continue;
+        }
+        match repo::ensure_manifest(r, &cfg.cache_dir) {
+            Ok(true) => {}
+            Ok(false) | Err(_) => unavailable.push(r.name.clone()),
         }
     }
+
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let hits = manifest::file_search(&cfg.repos, &cfg.cache_dir, filename)?;
-    if hits.is_empty() {
-        println!("No package ships a file matching '{filename}'.");
-        return Ok(Outcome::NothingFound);
-    }
+    let found = !hits.is_empty();
     for h in hits {
         let pkgname = pkg::PkgId::parse(&h.package).map(|p| p.name).unwrap_or_else(|| h.package.clone());
         let mark = if system::is_installed(&installed, &pkgname) { "installed" } else { "uninstalled" };
         println!("[{}] {:<11} {}: {}", h.repo, mark, h.package, h.path);
+    }
+
+    // If some repos had no usable MANIFEST, say so — the first fetch writes into
+    // the root-owned cache, so a non-root run can't do it and would otherwise
+    // look like an empty result.
+    if !unavailable.is_empty() {
+        let list = unavailable.join(", ");
+        eprintln!();
+        if current_uid() == Some(0) {
+            eprintln!("note: could not fetch the MANIFEST for: {list} (network or server error);");
+            eprintln!("      results above may be incomplete — try again later.");
+        } else {
+            eprintln!("note: the MANIFEST for: {list} is not cached yet, and downloading it");
+            eprintln!("      needs root (it is written into {}).", cfg.cache_dir.display());
+            eprintln!("      run once as: sudo slacker file-search {filename}");
+        }
+    }
+
+    if !found {
+        if unavailable.is_empty() {
+            println!("No package ships a file matching '{filename}'.");
+        }
+        return Ok(Outcome::NothingFound);
     }
     Ok(Outcome::Ok)
 }
@@ -845,7 +1122,7 @@ fn cmd_download(
             Some(d) => d.join(&p.filename),
             None => system::cached_pkg_path(&cfg.cache_dir, &p.repo, &p.filename),
         };
-        fetch_and_verify(r, p, &dest)?;
+        fetch_and_verify(cfg, r, p, &dest)?;
         println!("downloaded: {}", dest.display());
     }
     Ok(Outcome::Ok)
@@ -1503,6 +1780,23 @@ mod selection_tests {
         assert_eq!(super::closest("gnme", cands.into_iter()), Some("gnome".into()));
         assert_eq!(super::closest("conrad", cands.into_iter()), Some("conraid".into()));
         assert_eq!(super::closest("zzzzzz", cands.into_iter()), None);
+    }
+
+    #[test]
+    fn privilege_classification() {
+        use super::{requires_privilege, Cmd};
+        // read-only commands are free
+        assert!(!requires_privilege(&Cmd::Search { pattern: "x".into() }));
+        assert!(!requires_privilege(&Cmd::Info { name: "x".into() }));
+        assert!(!requires_privilege(&Cmd::CheckUpdates));
+        assert!(!requires_privilege(&Cmd::ShowChangelog));
+        assert!(!requires_privilege(&Cmd::FileSearch { filename: "x".into() }));
+        // mutating / cache-writing commands need root
+        assert!(requires_privilege(&Cmd::Update { mode: None }));
+        assert!(requires_privilege(&Cmd::UpgradeAll));
+        assert!(requires_privilege(&Cmd::CleanCache { repos: vec![] }));
+        assert!(requires_privilege(&Cmd::Frozen { names: vec![] }));
+        assert!(requires_privilege(&Cmd::Download { patterns: vec![], output: None }));
     }
 
     #[test]
