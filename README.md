@@ -159,3 +159,12 @@ skip-all / abort (with `--yes`, the installed version is kept).
 On by default; disable with `RESOLVE_DEPS=no` in `slacker.conf`, or per-run with
 `--no-deps`. Applies to install, upgrade, reinstall, upgrade-all, install-new
 and install-template.
+
+---
+
+## NOTE
+
+**slacker** status is `developing mode` and that means:
+1. It not building for slackware(64)-15.0 and it will never be.
+2. Build and run fine for slackware64-current **only for testers**... 
+3. It is not ready even for testing for slackware-current (32bit) but will be soon.
