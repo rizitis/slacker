@@ -1,2 +1,36 @@
+- check if its better to have glibc as crate (?)
+
 - slacker new-config
-need to diff .new file in a nice format so user can make a choise, thats missiing!
+  - need to diff .new file in a nice format so user can make a choise, thats missiing!
+
+- ask to remove “orphan” dependencies if they are not used elsewhere (for repos that support it)
+
+- cmd to list repos.
+
+- History
+  - what was installed
+  - what was removed
+  - when was the change made
+
+- inform when a mirror is outdated
+
+- add colors and tables
+  - messages/prompt blue
+  - promt for packages update/new green
+  - promt for removed red
+  - promts for frozen packages purple
+  - prompts for reinstall yellow
+  - pkg name always white in all cases
+
+- compare pkg per repo and version installed vs repo in tables
+
+- calculate total installed pkgs and list per repo (maybe inxi will help)
+
+- cmd: slacker status
+  - check if one mirror is liste to mirrors
+  - check if other repos are enabled
+  - if yes calculate if priorities are the same or not set etc...
+  - check if packages are frozen in blacklist
+  - check if internet is active and if so run a set of --dry-run in backround and clculate if everything is as expected.
+  - then make a table and report if slacker is ok set up or not
+
