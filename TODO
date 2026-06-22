@@ -16,14 +16,6 @@
 
 - inform when a mirror is outdated
 
-- add colors and tables
-  - messages/prompt blue
-  - promt for packages update/new green
-  - promt for removed red
-  - promts for frozen packages purple
-  - prompts for reinstall yellow
-  - pkg name always white in all cases
-
 - compare pkg per repo and version installed vs repo in tables
 
 - calculate total installed pkgs and list per repo (maybe inxi will help)
