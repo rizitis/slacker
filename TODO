@@ -34,3 +34,9 @@
   - check if internet is active and if so run a set of --dry-run in backround and clculate if everything is as expected.
   - then make a table and report if slacker is ok set up or not
 
+- cmd: slacker addrepo:priorityN url @name
+   - slacker addtag::priorityN _TAG
+   - slacker deltag _TAG
+   - slacker delrepo @reponame
+
+- release stable before 2034
