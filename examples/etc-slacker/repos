@@ -35,8 +35,5 @@
 # EQUAL priority. With SBo at 100 below, your SBo packages are never silently
 # migrated to conraid/alienbob etc... or downgraded; upgrade them via sbopkg/sbotools/slpkg etc.
 # Format:  priority  name   tag
-100        SBo    _SBo
-100        local  _rtz
-100        forge  _FRG
-100        custom _custom
-100        scmd   _SC
+#100        SBo    _SBo
+#100        local  _YOURTAG

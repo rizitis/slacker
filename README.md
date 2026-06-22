@@ -71,7 +71,7 @@ automatically.
     slacker show-changelog        print the cached ChangeLog
     slacker search PATTERN        search names + descriptions
     slacker file-search FILE      which package ships FILE (MANIFEST)
-    slacker frozen PACKAGE        Add PACKAGE in blacklist and frozen it 
+    slacker frozen PACKAGE(S)     Add PACKAGE(S) in blacklist and frozen them 
     slacker info PACKAGE          per-repo candidates + installed version
     slacker install PATTERN...    install new packages (refuses installed ones)
     slacker upgrade PATTERN...    upgrade installed packages
