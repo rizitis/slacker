@@ -161,6 +161,10 @@ CHECKSUMS. Run `slacker update gpg` once before trusting a mirror.
   `show-changelog`. `check-updates` covers every repo: official via ChangeLog,
   external repos by comparing PACKAGES.TXT to the cached copy.
 
+---
+
+![slacker](slacker4.png)
+  
 ## Dependencies (.dep files)
 
 If a package has a `.dep` file next to it in the repository (one dependency
