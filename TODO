@@ -1,5 +1,7 @@
 - check if its better to have glibc as crate (?)
 
+- make sure that VERIFY=gpg,md5 etc is working 100%
+
 - slacker new-config
   - need to diff .new file in a nice format so user can make a choise, thats missiing!
 

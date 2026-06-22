@@ -239,8 +239,13 @@ pub fn load_repo(repo: &Repo, cache_root: &Path, arch: &str) -> Result<Vec<Avail
     Ok(out)
 }
 
-/// Filenames present in a repo's *previous* PACKAGES snapshot (for diffing).
-pub fn previous_filenames(
+/// Package *names* present in a repo's *previous* PACKAGES snapshot.
+///
+/// `install-new` uses this to detect a genuinely new package — one whose *name*
+/// did not exist before — rather than a new build or version of a package that
+/// already existed (which only changes the filename and is an upgrade, not a
+/// new package). Names are recovered by parsing each `PACKAGE NAME` filename.
+pub fn previous_names(
     repo: &Repo,
     cache_root: &Path,
 ) -> Option<std::collections::HashSet<String>> {
@@ -249,7 +254,7 @@ pub fn previous_filenames(
     Some(
         text.lines()
             .filter_map(|l| l.strip_prefix("PACKAGE NAME:"))
-            .map(|s| s.trim().to_string())
+            .filter_map(|s| PkgId::parse(s.trim()).map(|id| id.name))
             .collect(),
     )
 }

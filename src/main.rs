@@ -12,6 +12,7 @@ mod pkgdb;
 mod repo;
 mod system;
 mod template;
+mod ui;
 
 use clap::{Parser, Subcommand};
 use config::Config;
@@ -33,19 +34,19 @@ enum Outcome {
 #[command(name = "slacker", version, about = "slackpkg + slackpkg+ in one, minimal Rust tool")]
 struct Cli {
     /// Directory holding the plain-text config files.
-    #[arg(long, default_value = "/etc/slacker")]
+    #[arg(long, global = true, default_value = "/etc/slacker")]
     config_dir: PathBuf,
 
     /// Assume "yes" to confirmation prompts.
-    #[arg(short = 'y', long)]
+    #[arg(short = 'y', long, global = true)]
     yes: bool,
 
     /// Show what would happen without changing the system.
-    #[arg(long)]
+    #[arg(long, global = true)]
     dry_run: bool,
 
     /// Do not read .dep files / pull in dependencies for this run.
-    #[arg(long)]
+    #[arg(long, global = true)]
     no_deps: bool,
 
     #[command(subcommand)]
@@ -90,7 +91,7 @@ enum Cmd {
     CleanCache { repos: Vec<String> },
     /// Handle leftover *.new configuration files.
     NewConfig,
-    /// Check whether the official ChangeLog has changed (exit 100 if so).
+    /// Check every configured repo for pending updates (exit 100 if any).
     CheckUpdates,
     /// Print the cached ChangeLog.
     ShowChangelog,
@@ -297,13 +298,21 @@ fn confirm(prompt: &str, assume_yes: bool) -> bool {
     if assume_yes {
         return true;
     }
-    print!("{prompt} [y/N] ");
+    print!("{} ", ui::blue(&format!("{prompt} [y/N/a]")));
     std::io::stdout().flush().ok();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
         return false;
     }
-    matches!(line.trim(), "y" | "Y" | "yes")
+    match line.trim() {
+        "y" | "Y" | "yes" => true,
+        "a" | "A" | "abort" => {
+            println!("{}", ui::blue("aborted — nothing changed"));
+            false
+        }
+        // anything else (including the default empty Enter and 'n') cancels
+        _ => false,
+    }
 }
 
 /// What pkgtool action a planned package needs.
@@ -350,18 +359,28 @@ fn ask_dep_conflict(
     offered: &repo::AvailPkg,
     assume_yes: bool,
 ) -> DepChoice {
-    println!("\n  Dependency conflict for '{dep}' (needed by '{needed_by}'):");
-    println!("    installed:           {}", installed.tag());
-    println!("    {} provides:  {}", offered.repo, offered.id.tag());
+    println!(
+        "\n{}",
+        ui::blue(&format!("  Dependency conflict for '{dep}' (needed by '{needed_by}'):"))
+    );
+    println!("    {}           {}", ui::blue("installed:"), ui::white(&installed.tag()));
+    println!(
+        "    {}  {}",
+        ui::blue(&format!("{} provides:", offered.repo)),
+        ui::white(&offered.id.tag())
+    );
     if assume_yes {
-        println!("    (--yes: keeping the installed version)");
+        println!("    {}", ui::blue("(--yes: keeping the installed version)"));
         return DepChoice::Skip;
     }
-    println!("    [s]kip      keep the installed version (default)");
-    println!("    [r]eplace   install the {}'s version instead", offered.repo);
-    println!("    skip-[a]ll  keep installed for this and all later conflicts");
-    println!("    a[b]ort     cancel the whole operation, change nothing more");
-    print!("  Choice [s/r/a/b]: ");
+    println!("    {}", ui::blue("[s]kip      keep the installed version (default)"));
+    println!(
+        "    {}",
+        ui::blue(&format!("[r]eplace   install the {}'s version instead", offered.repo))
+    );
+    println!("    {}", ui::blue("skip-[a]ll  keep installed for this and all later conflicts"));
+    println!("    {}", ui::blue("a[b]ort     cancel the whole operation, change nothing more"));
+    print!("  {} ", ui::blue("Choice [s/r/a/b]:"));
     std::io::stdout().flush().ok();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
@@ -447,19 +466,25 @@ fn add_with_deps(
                     (Some(i), Some(o)) if i.tag() == o.id.tag() => {}
                     // installed but differs from what this repo offers: likely another source — ask.
                     (Some(i), Some(o)) => {
-                        let choice = if *skip_all {
-                            DepChoice::Skip
+                        if db.installed_outranks(i, &o, &cfg.tag_priorities) {
+                            // The installed dependency comes from a source of
+                            // higher-or-equal priority than this repo offers, so
+                            // it is protected: keep it, do not prompt or replace.
                         } else {
-                            ask_dep_conflict(&dep, &name, i, &o, assume_yes)
-                        };
-                        match choice {
-                            DepChoice::Skip => {}
-                            DepChoice::SkipAll => *skip_all = true,
-                            DepChoice::Replace => add_with_deps(
-                                cfg, db, installed, o, InstallAction::Upgrade, Some(name.clone()),
-                                resolve, assume_yes, root_names, plan, planned, visiting, skip_all,
-                            )?,
-                            DepChoice::Abort => return Err("aborted by user".into()),
+                            let choice = if *skip_all {
+                                DepChoice::Skip
+                            } else {
+                                ask_dep_conflict(&dep, &name, i, &o, assume_yes)
+                            };
+                            match choice {
+                                DepChoice::Skip => {}
+                                DepChoice::SkipAll => *skip_all = true,
+                                DepChoice::Replace => add_with_deps(
+                                    cfg, db, installed, o, InstallAction::Upgrade, Some(name.clone()),
+                                    resolve, assume_yes, root_names, plan, planned, visiting, skip_all,
+                                )?,
+                                DepChoice::Abort => return Err("aborted by user".into()),
+                            }
                         }
                     }
                     // installed, this repo doesn't offer it: assume satisfied (e.g. a core package).
@@ -486,27 +511,109 @@ fn add_with_deps(
     Ok(())
 }
 
-/// Print a resolved plan, marking pulled-in dependencies and showing which
-/// package each new dependency is needed by.
-fn print_plan(plan: &[PlanItem]) {
-    for it in plan {
-        match (&it.dep_for, it.action) {
-            // a dependency that is a fresh install pulled in for another package
-            (Some(parent), InstallAction::Install) => println!(
-                "  new-dep: [{}] {}  (for {})",
-                it.pkg.repo, it.pkg.id.tag(), parent
-            ),
-            // a dependency that is being replaced/upgraded for another package
-            (Some(parent), _) => println!(
-                "  dep {}: [{}] {}  (for {})",
-                it.action.verb(), it.pkg.repo, it.pkg.id.tag(), parent
-            ),
-            // a root package
-            (None, _) => {
-                println!("  {}: [{}] {}", it.action.verb(), it.pkg.repo, it.pkg.id.tag())
-            }
+/// One row of the plan table.
+struct PlanRow {
+    action: &'static str,
+    color: fn(&str) -> String,
+    name: String,
+    version: String,
+    repo: String,
+    note: String,
+}
+
+/// Render plan rows as an aligned, coloured table:
+///   Action | Package | Version | Repo
+/// The action label is coloured per row (green install/upgrade, yellow
+/// reinstall, red remove), the package name is always white, the version is
+/// dim, the repo is cyan, and the rules/separators are dim. Prints nothing for
+/// an empty slice.
+fn print_table(rows: &[PlanRow]) {
+    if rows.is_empty() {
+        return;
+    }
+    let wa = rows.iter().map(|r| r.action.len()).chain(std::iter::once(6)).max().unwrap();
+    let wn = rows.iter().map(|r| r.name.len()).chain(std::iter::once(7)).max().unwrap();
+    let wv = rows.iter().map(|r| r.version.len()).chain(std::iter::once(7)).max().unwrap();
+    let wr = rows.iter().map(|r| r.repo.len()).chain(std::iter::once(4)).max().unwrap();
+    let sep = ui::dim(" | ");
+    println!(
+        "  {}{}{}{}{}{}{}",
+        ui::blue(&format!("{:<wa$}", "Action")),
+        sep,
+        ui::blue(&format!("{:<wn$}", "Package")),
+        sep,
+        ui::blue(&format!("{:<wv$}", "Version")),
+        sep,
+        ui::blue(&format!("{:<wr$}", "Repo")),
+    );
+    let dash = |n: usize| "-".repeat(n);
+    println!(
+        "  {}",
+        ui::dim(&format!("{}-+-{}-+-{}-+-{}", dash(wa), dash(wn), dash(wv), dash(wr)))
+    );
+    for r in rows {
+        let line = format!(
+            "  {}{}{}{}{}{}{}",
+            (r.color)(&format!("{:<wa$}", r.action)),
+            sep,
+            ui::white(&format!("{:<wn$}", r.name)),
+            sep,
+            ui::dim(&format!("{:<wv$}", r.version)),
+            sep,
+            ui::cyan(&format!("{:<wr$}", r.repo)),
+        );
+        if r.note.is_empty() {
+            println!("{line}");
+        } else {
+            println!("{line}  {}", ui::blue(&r.note));
         }
     }
+}
+
+/// Split an available package into the table columns (name / version / repo).
+fn plan_row(it: &PlanItem) -> PlanRow {
+    let (action, color): (&'static str, fn(&str) -> String) = match it.action {
+        InstallAction::Install if it.dep_for.is_some() => ("new dep", ui::green),
+        InstallAction::Install => ("install", ui::green),
+        InstallAction::Upgrade => ("upgrade", ui::green),
+        InstallAction::Reinstall => ("reinstall", ui::yellow),
+    };
+    PlanRow {
+        action,
+        color,
+        name: it.pkg.id.name.clone(),
+        version: format!("{}-{}-{}", it.pkg.id.version, it.pkg.id.arch, it.pkg.id.build),
+        repo: it.pkg.repo.clone(),
+        note: it.dep_for.as_ref().map(|p| format!("for {p}")).unwrap_or_default(),
+    }
+}
+
+/// Print a resolved plan as a coloured table. `frozen` are blacklisted names
+/// left untouched (purple); `protected` are names kept because an installed
+/// source of higher-or-equal priority already owns them (blue). Version is
+/// never compared — only source priority decides.
+fn show_plan(plan: &[PlanItem], frozen: &[String], protected: &[String]) {
+    let rows: Vec<PlanRow> = plan.iter().map(plan_row).collect();
+    print_table(&rows);
+
+    if !frozen.is_empty() {
+        println!("{}", ui::purple("  frozen (blacklisted — left unchanged):"));
+        for n in frozen {
+            println!("    {}", ui::white(n));
+        }
+    }
+    if !protected.is_empty() {
+        println!("{}", ui::blue("  kept (installed from a higher/equal-priority source):"));
+        for n in protected {
+            println!("    {}", ui::white(n));
+        }
+    }
+}
+
+/// Print just the action part of a plan (no skip categories). Used by commands
+/// that don't compute frozen/priority skips themselves.
+fn print_plan(plan: &[PlanItem]) {
+    show_plan(plan, &[], &[]);
 }
 
 /// Download, verify and install/upgrade/reinstall every item in a plan.
@@ -738,6 +845,85 @@ fn collect<'a>(
     Ok((pkgs, misses))
 }
 
+/// Resolve upgrade/reinstall PATTERNs into available candidates, restricted to
+/// *installed* packages and honouring build-tag source priority.
+///
+/// Two guarantees that `collect` (used for fresh installs) does not provide:
+///
+/// 1. For `@repo`/`@tag` the source that matters is where a package was built
+///    (its build tag), not which repos merely ship that name. `@conraid` selects
+///    the installed packages carrying conraid's tag (`cf`) and upgrades each
+///    from conraid — it does NOT pull in an SBo-built `webkit2gtk4.1` just
+///    because conraid also publishes that name. (Mirrors how `remove` treats @.)
+///
+/// 2. No selection may migrate an installed package to a *lower*-priority
+///    source (e.g. an `_SBo` package, priority 100, down to conraid's 80). The
+///    explicit `repo:name` pin is the deliberate override and bypasses this;
+///    everything else — bare name, substring, series, `@repo`, `@tag` — is
+///    held to the same source-priority rule `upgrade-all` uses.
+fn collect_installed_targets<'a>(
+    db: &'a PkgDb,
+    installed: &[pkg::PkgId],
+    tag_prios: &[crate::config::TagPriority],
+    patterns: &[String],
+) -> Result<(Vec<&'a repo::AvailPkg>, Vec<String>), String> {
+    for pat in patterns {
+        validate_selector(db, pat)?;
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    let mut protected = Vec::new(); // names kept because their source has priority
+    for pat in patterns {
+        if let Some(rest) = pat.strip_prefix('@') {
+            // @repo -> installed packages whose build tag belongs to that repo
+            // @_tag -> installed packages carrying that build tag
+            let is_repo = db.is_repo(rest);
+            let tags: HashSet<String> = if is_repo {
+                db.repo_build_tags(rest)
+            } else {
+                std::iter::once(rest.to_string()).collect()
+            };
+            for inst in installed {
+                if !tags.contains(inst.build_tag()) || !seen.insert(inst.name.clone()) {
+                    continue;
+                }
+                // @repo: candidate from that same repo (no migration). @tag: the
+                // winning candidate for the name.
+                let cand = if is_repo {
+                    db.resolve(&format!("{rest}:{}", inst.name))
+                } else {
+                    db.resolve(&inst.name)
+                };
+                if let Some(c) = cand {
+                    if db.upgrade_respects_priority(inst, c, tag_prios) {
+                        out.push(c);
+                    } else {
+                        protected.push(inst.name.clone());
+                    }
+                }
+            }
+        } else {
+            // Plain name / substring / series, or an explicit `repo:name` pin.
+            // Only the pin bypasses the source-priority guard.
+            let pinned = pat.split_once(':').is_some();
+            for p in db.match_pattern(pat) {
+                let Some(inst) = installed.iter().find(|i| i.name == p.id.name) else {
+                    continue;
+                };
+                if !seen.insert(p.id.name.clone()) {
+                    continue;
+                }
+                if !pinned && !db.upgrade_respects_priority(inst, p, tag_prios) {
+                    protected.push(p.id.name.clone());
+                    continue;
+                }
+                out.push(p);
+            }
+        }
+    }
+    Ok((out, protected))
+}
+
 // ---- commands ------------------------------------------------------------
 
 fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
@@ -891,15 +1077,17 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
         eprintln!("no match for '{m}'");
     }
     // install = only packages that are not already installed and not blacklisted
+    let mut frozen = Vec::new();
+    let mut already = Vec::new();
     let todo: Vec<_> = matched
         .into_iter()
         .filter(|p| {
             if cfg.is_blacklisted(&p.id.name) {
-                eprintln!("skipping blacklisted '{}'", p.id.name);
+                frozen.push(p.id.name.clone());
                 return false;
             }
             if system::is_installed(&installed, &p.id.name) {
-                eprintln!("already installed (use upgrade/reinstall): {}", p.id.name);
+                already.push(p.id.name.clone());
                 return false;
             }
             true
@@ -907,6 +1095,8 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
         .collect();
 
     if todo.is_empty() {
+        // Still show why nothing will happen (frozen / already installed).
+        show_plan(&[], &frozen, &already);
         println!("Nothing to install.");
         return Ok(Outcome::NothingFound);
     }
@@ -917,8 +1107,10 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.yes)?;
-    print_plan(&plan);
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    // `already` is shown via the same blue "kept" line as priority skips — both
+    // mean "installed, leaving it alone".
+    show_plan(&plan, &frozen, &already);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -933,12 +1125,21 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
 fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let (matched, _) = collect(&db, patterns)?;
-    let todo: Vec<_> = matched
+    let (cands, protected) =
+        collect_installed_targets(&db, &installed, &cfg.tag_priorities, patterns)?;
+    let mut frozen = Vec::new();
+    let todo: Vec<_> = cands
         .into_iter()
-        .filter(|p| !cfg.is_blacklisted(&p.id.name) && system::is_installed(&installed, &p.id.name))
+        .filter(|p| {
+            if cfg.is_blacklisted(&p.id.name) {
+                frozen.push(p.id.name.clone());
+                return false;
+            }
+            true
+        })
         .collect();
     if todo.is_empty() {
+        show_plan(&[], &frozen, &protected);
         println!("Nothing to upgrade.");
         return Ok(Outcome::NothingFound);
     }
@@ -949,8 +1150,8 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Upgrade)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.yes)?;
-    print_plan(&plan);
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    show_plan(&plan, &frozen, &protected);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -965,18 +1166,21 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
 fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let (matched, _) = collect(&db, patterns)?;
-    let todo: Vec<_> = matched
+    let (cands, protected) =
+        collect_installed_targets(&db, &installed, &cfg.tag_priorities, patterns)?;
+    let mut frozen = Vec::new();
+    let todo: Vec<_> = cands
         .into_iter()
         .filter(|p| {
             if cfg.is_blacklisted(&p.id.name) {
-                eprintln!("skipping blacklisted '{}'", p.id.name);
+                frozen.push(p.id.name.clone());
                 return false;
             }
-            system::is_installed(&installed, &p.id.name)
+            true
         })
         .collect();
     if todo.is_empty() {
+        show_plan(&[], &frozen, &protected);
         println!("Nothing to reinstall.");
         return Ok(Outcome::NothingFound);
     }
@@ -987,8 +1191,8 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Reinstall)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.yes)?;
-    print_plan(&plan);
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    show_plan(&plan, &frozen, &protected);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -1011,6 +1215,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
     };
 
     let mut todo: Vec<&pkg::PkgId> = Vec::new();
+    let mut frozen: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
 
     for pat in patterns {
@@ -1027,7 +1232,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
             for inst in &installed {
                 if tags.contains(inst.build_tag()) && seen.insert(inst.name.clone()) {
                     if cfg.is_blacklisted(&inst.name) {
-                        eprintln!("skipping blacklisted '{}'", inst.name);
+                        frozen.push(inst.name.clone());
                         continue;
                     }
                     todo.push(inst);
@@ -1040,7 +1245,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
         for inst in &installed {
             if (inst.name == term || inst.name.contains(term)) && seen.insert(inst.name.clone()) {
                 if cfg.is_blacklisted(&inst.name) {
-                    eprintln!("skipping blacklisted '{}'", inst.name);
+                    frozen.push(inst.name.clone());
                     continue;
                 }
                 todo.push(inst);
@@ -1048,6 +1253,12 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
         }
     }
     if todo.is_empty() {
+        if !frozen.is_empty() {
+            println!("{}", ui::purple("  frozen (blacklisted — left unchanged):"));
+            for n in &frozen {
+                println!("    {}", ui::white(n));
+            }
+        }
         println!("Nothing to remove.");
         return Ok(Outcome::NothingFound);
     }
@@ -1056,8 +1267,26 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
         println!("Nothing selected.");
         return Ok(Outcome::Ok);
     }
-    for p in &todo {
-        println!("remove: {}", p.tag());
+    let rows: Vec<PlanRow> = todo
+        .iter()
+        .map(|p| PlanRow {
+            action: "remove",
+            color: ui::red,
+            name: p.name.clone(),
+            version: format!("{}-{}-{}", p.version, p.arch, p.build),
+            repo: {
+                let t = p.build_tag();
+                if t.is_empty() { "-".to_string() } else { t.to_string() }
+            },
+            note: String::new(),
+        })
+        .collect();
+    print_table(&rows);
+    if !frozen.is_empty() {
+        println!("{}", ui::purple("  frozen (blacklisted — left unchanged):"));
+        for n in &frozen {
+            println!("    {}", ui::white(n));
+        }
     }
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
@@ -1147,9 +1376,18 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     // In a dry-run we keep installed versions for conflicts (no prompts).
     let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
 
-    println!("The following packages will be upgraded:");
+    println!("{}", ui::blue("The following packages will be upgraded:"));
     for u in &ups {
-        println!("  {} -> {}  [{}]", u.installed.tag(), u.available.id.tag(), u.available.repo);
+        println!(
+            "{} {}",
+            ui::green("  upgrade"),
+            ui::white(&format!(
+                "{} -> {}  [{}]",
+                u.installed.tag(),
+                u.available.id.tag(),
+                u.available.repo
+            ))
+        );
     }
     // Any new packages that will be installed to satisfy dependencies.
     let new_deps: Vec<&PlanItem> = plan.iter().filter(|it| it.dep_for.is_some()).collect();
@@ -1201,15 +1439,17 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
         return Err("install-new: no official repo configured; name a repo explicitly".into());
     }
 
-    // Build map repo -> filenames newly present since the last update.
+    // Build map repo -> package *names* newly present since the last update. A
+    // new build/version of an existing package is not "new" here (its name was
+    // already present) — that is an upgrade, handled by upgrade-all.
     let mut new_by_repo: HashMap<String, HashSet<String>> = HashMap::new();
     for r in selected {
-        if let Some(prev) = repo::previous_filenames(r, &cfg.cache_dir) {
+        if let Some(prev) = repo::previous_names(r, &cfg.cache_dir) {
             let cur = repo::load_repo(r, &cfg.cache_dir, &cfg.arch)?;
             let added: HashSet<String> = cur
                 .iter()
-                .map(|p| p.filename.clone())
-                .filter(|f| !prev.contains(f))
+                .map(|p| p.id.name.clone())
+                .filter(|n| !prev.contains(n))
                 .collect();
             if !added.is_empty() {
                 new_by_repo.insert(r.name.clone(), added);
@@ -1222,9 +1462,13 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
         println!("No new packages to install.");
         return Ok(Outcome::NothingFound);
     }
-    println!("New packages:");
+    println!("{}", ui::blue("New packages:"));
     for p in &todo {
-        println!("  [{}] {}", p.repo, p.id.tag());
+        println!(
+            "{}{}",
+            ui::green("  install   "),
+            ui::white(&format!("[{}] {}", p.repo, p.id.tag()))
+        );
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
@@ -1309,9 +1553,9 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
             return Ok(Outcome::Ok);
         }
         if !keep.is_empty() {
-            println!("Keeping {} package(s); will remove {}:", keep.len(), chosen.len());
+            println!("{}", ui::blue(&format!("Keeping {} package(s); will remove {}:", keep.len(), chosen.len())));
             for p in &chosen {
-                println!("  {}", p.tag());
+                println!("{}{}", ui::red(&format!("  {:<9} ", "remove")), ui::white(&p.tag()));
             }
         }
         chosen
@@ -1668,7 +1912,7 @@ fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, 
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
     print_plan(&plan);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
@@ -1693,7 +1937,7 @@ fn cmd_remove_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, S
         return Ok(Outcome::NothingFound);
     }
     for n in &todo {
-        println!("remove: {n}");
+        println!("{}{}", ui::red(&format!("  {:<9} ", "remove")), ui::white(n));
     }
     if cli.dry_run {
         println!("(dry-run: nothing changed)");

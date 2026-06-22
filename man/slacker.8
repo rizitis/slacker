@@ -1,6 +1,6 @@
-.TH SLACKER 8 "June 2026" "slacker 0.4.0" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.4.1" "Slackware Package Management"
 .SH NAME
-slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
+slacker \- minimal and fast package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
 .B slacker
 .RI [ OPTIONS ]
@@ -28,8 +28,14 @@ with the
 syntax.
 .PP
 .B slacker
-performs no automatic dependency resolution, in keeping with Slackware
-tradition: what you ask for is what is installed.
+resolves dependencies from per\-package
+.I .dep
+files when a repository provides them, pulling in any missing dependencies from
+the same repository before installing. This is on by default and can be turned
+off globally with
+.B RESOLVE_DEPS=no
+or per run with
+.BR \-\-no\-deps " (see " DEPENDENCIES ")."
 .SH OPTIONS
 .TP
 .BI \-\-config\-dir " DIR"
@@ -122,9 +128,10 @@ asks for confirmation when more than ten packages would be downloaded.
 Upgrade every installed package that has a newer revision available.
 .TP
 .B install-new
-Install packages newly added since the last update. By default only the
-official repo(s); name one or more repos to use those instead.
-update.
+Install packages whose name is newly added since the last update \(em a package
+that did not exist before, not merely a new build or version of one that already
+existed (that is an upgrade). By default only the official repo(s); name one or
+more repositories to use those instead.
 .TP
 .B clean-system
 List installed packages that exist in no configured repository (third\-party or
@@ -192,9 +199,17 @@ Two explicit set selectors are also accepted (the @ is required, so a bare word
 is never treated as a repo):
 .TP
 .BI @ repo
-Every package in that repo, e.g.
+For
+.B install
+and
+.BR download ,
+every package available in that repo, e.g.
 .I @gnome
-to install a whole desktop repo or to remove all of its installed packages.
+to install a whole desktop repo. For commands acting on installed packages
+.RB ( upgrade ", " reinstall ", " remove )
+it means every installed package whose build tag belongs to that repo \(em the
+packages actually built from it \(em so a same\-named package installed from
+another source is left untouched.
 .TP
 .BI @ _tag
 Every package carrying that build tag, e.g.
@@ -263,10 +278,12 @@ where the third field is a build tag rather than a URL (e.g.
 .IR "100 SBo _SBo" ).
 These assign a priority to packages built from non\-binary sources
 (SlackBuilds.org, local builds).
-.B upgrade-all
-only replaces such a package with a candidate from a repository of higher or
+.BR upgrade ", " reinstall " and " upgrade-all
+only replace such a package with a candidate from a repository of higher or
 equal priority, so tagged packages are never silently migrated to a lower repo
-or downgraded.
+or downgraded. Only an explicit
+.I repo:name
+pin overrides this and forces the chosen repository's build.
 .PP
 When an
 .BR install ,

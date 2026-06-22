@@ -210,6 +210,35 @@ impl PkgDb {
         i32::MAX // unknown source — protect it
     }
 
+    /// Whether `candidate` may replace the installed package of the same name
+    /// without migrating it to a *lower*-priority source. Allowed when the
+    /// candidate's repo priority is >= the installed package's own source
+    /// priority (equal = a genuine self-upgrade; higher = the source
+    /// legitimately wins). A lower-priority candidate is refused. The explicit
+    /// `repo:name` pin is the deliberate override and bypasses this — that is
+    /// handled by the caller.
+    pub fn upgrade_respects_priority(
+        &self,
+        inst: &PkgId,
+        candidate: &AvailPkg,
+        tag_prios: &[crate::config::TagPriority],
+    ) -> bool {
+        self.repo_priority(&candidate.repo) >= self.installed_priority(inst, tag_prios)
+    }
+
+    /// True when an installed dependency is from a source of priority >= what
+    /// `candidate` (the same repo's offer) provides — so it is protected and the
+    /// dependency is considered satisfied as-is, never replaced or prompted
+    /// about. The mirror of `upgrade_respects_priority` for the dep resolver.
+    pub fn installed_outranks(
+        &self,
+        inst: &PkgId,
+        candidate: &AvailPkg,
+        tag_prios: &[crate::config::TagPriority],
+    ) -> bool {
+        self.installed_priority(inst, tag_prios) >= self.repo_priority(&candidate.repo)
+    }
+
     /// Pending upgrades, respecting source priority so SBo/local packages are
     /// never silently migrated to a lower-priority repo or downgraded.
     ///
@@ -251,9 +280,9 @@ impl PkgDb {
         out
     }
 
-    /// install-new: packages newly added to a repo since the last update that
-    /// are not installed. `new_filenames` maps repo name -> filenames that
-    /// appeared since the previous snapshot.
+    /// install-new: packages whose *name* is newly added to a repo since the
+    /// last update and that are not installed. `new_by_repo` maps repo name ->
+    /// the set of package names that appeared since the previous snapshot.
     pub fn newly_added<'a>(
         &'a self,
         new_by_repo: &HashMap<String, HashSet<String>>,
@@ -266,7 +295,7 @@ impl PkgDb {
             .filter(|p| {
                 new_by_repo
                     .get(&p.repo)
-                    .map_or(false, |set| set.contains(&p.filename))
+                    .map_or(false, |set| set.contains(&p.id.name))
                     && !inst_names.contains(p.id.name.as_str())
             })
             .collect();

@@ -1,3 +1,8 @@
+
+![slacker](./slacker1.png)
+
+---
+
 # slacker - slackpkg + slackpkg+ in one
 
 A Slackware package manager in Rust with full **slackpkg action parity**, plus
@@ -64,6 +69,10 @@ path). A URL points at the repo root containing PACKAGES.TXT; for official
 mirrors, MANIFEST.bz2 lives in a per-arch subdir which slacker finds
 automatically.
 
+---
+
+![slacker](slacker2.png)
+
 ## Actions (slackpkg-compatible)
 
     slacker update [gpg]          refresh metadata; `update gpg` imports repo keys
@@ -106,6 +115,11 @@ GPG: `update gpg` imports each repo's GPG-KEY into a private keyring under the
 cache dir; subsequent `update` verifies CHECKSUMS.md5 against
 CHECKSUMS.md5.asc. Per-package integrity is md5 from the (signature-verified)
 CHECKSUMS. Run `slacker update gpg` once before trusting a mirror.
+
+---
+
+![slacker](slacker3.png)
+
 
 ## Notes / limits
 
