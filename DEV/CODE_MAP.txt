@@ -247,7 +247,7 @@ Used by the plan tables, search/info output, and prompts. Piped/redirected
 output and `NO_COLOR` stay plain text.
 
 --------------------------------------------------------------------------------
-main.rs           (~2807 lines)  CLI, planning, and every command
+main.rs           (~2850 lines)  CLI, planning, and every command
 --------------------------------------------------------------------------------
 The orchestrator. clap definitions, the command dispatch, the install/upgrade
 PLAN builder, and one cmd_* function per action.
@@ -260,7 +260,8 @@ PLAN builder, and one cmd_* function per action.
 
   PLAN BUILDING (the core install/upgrade machinery):
     InstallAction  Install / Upgrade / Reinstall
-    PlanItem       one package + action + optional dep_for (parent)
+    PlanItem       one package + action + optional dep_for (parent) + optional
+                   from (installed version, so upgrades show old -> new)
     expand_with_deps / add_with_deps   recursively pull .dep dependencies,
                      dedup, and attach dep_for so new deps can be shown up front
     ask_dep_conflict  the skip/replace/skip-all/abort prompt when an installed
@@ -271,7 +272,9 @@ PLAN builder, and one cmd_* function per action.
                      keep-all (kept_detail formats the "installed X (pri) — repo
                      (pri) not applied" lines)
     PlanRow / print_table   render the coloured Action|Package|Version|Repo
-                     plan tables (also used by remove and clean-system)
+                     plan tables (used by every plan-producing command —
+                     install/upgrade/reinstall/remove/upgrade-all/install-new/
+                     clean-system)
     print_plan / execute_plan   show the plan, then run it via system.rs
     fetch_and_verify  download + verify, gated by the repo's VerifyPolicy:
                      GPG (at update, in cmd_update) + per-package integrity here

@@ -1,4 +1,4 @@
-.TH SLACKER 8 "June 2026" "slacker 0.5.2" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.5.1" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -143,6 +143,17 @@ Install packages whose name is newly added since the last update \(em a package
 that did not exist before, not merely a new build or version of one that already
 existed (that is an upgrade). By default only the official repo(s); name one or
 more repositories to use those instead.
+.IP
+It does \fInot\fR re\-propose a package you removed or never installed \(em those
+already exist in the tree and are not \(lqnew\(rq; use
+.B slacker install \fINAME\fR
+(or
+.BR "install @" repo )
+for those. Example: after an
+.B update
+that introduces a brand\-new \fIlibfoo\fR to the distribution,
+.B install-new
+offers \fIlibfoo\fR, but it never offers \fIemacs\fR just because you removed it.
 .TP
 .B clean-system
 List installed packages that exist in no configured repository (third\-party or

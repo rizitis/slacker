@@ -25,6 +25,27 @@ impl PkgDb {
         Ok(PkgDb { all, priority, official_priority })
     }
 
+    /// Like `load`, but tolerant: a repo whose metadata is missing (never
+    /// updated, or a wrong/unreachable URL) is skipped and its name returned,
+    /// instead of failing the whole load. The read-only reporting commands
+    /// (`list-repos`, `status`) use this so one un-updated repo doesn't blank out
+    /// attribution for every other repo — the problem repo is isolated and the
+    /// rest are reported correctly. Mutating commands keep using strict `load`.
+    pub fn load_available(cfg: &Config) -> (PkgDb, Vec<String>) {
+        let mut all = Vec::new();
+        let mut priority = HashMap::new();
+        let mut missing = Vec::new();
+        for r in &cfg.repos {
+            priority.insert(r.name.clone(), r.priority);
+            match repo::load_repo(r, &cfg.cache_dir, &cfg.arch) {
+                Ok(pkgs) => all.extend(pkgs),
+                Err(_) => missing.push(r.name.clone()),
+            }
+        }
+        let official_priority = cfg.repos.iter().find(|r| r.official).map(|r| r.priority);
+        (PkgDb { all, priority, official_priority }, missing)
+    }
+
     pub fn repo_priority(&self, repo: &str) -> i32 {
         *self.priority.get(repo).unwrap_or(&0)
     }

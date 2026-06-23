@@ -108,17 +108,25 @@ pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Res
     Ok(())
 }
 
-/// Fetch a repo's ChangeLog.txt on demand and return its text, caching it
-/// best-effort. `update` only caches the ChangeLog of the tracked repo, so
-/// `show-changelog <repo>` uses this for any other repo. The cache write needs
-/// root (the cache is root-owned), but the text is returned regardless so a
-/// non-root user can still read it.
-pub fn fetch_changelog_text(repo: &Repo, cache_root: &Path) -> Result<String, String> {
+/// Fetch a repo's ChangeLog.txt fresh and return its text. With `cache = true`
+/// the bytes are also written to the repo's cache (best-effort; the write needs
+/// root, but the text is returned regardless so a non-root user can still read
+/// it). `show-changelog` passes `cache = false` for the official repo so this
+/// never clobbers the ChangeLog that `update` maintains as the check-updates
+/// baseline; for other repos it refreshes their cached copy as an offline
+/// fallback.
+pub fn fetch_changelog_text(
+    repo: &Repo,
+    cache_root: &Path,
+    cache: bool,
+) -> Result<String, String> {
     let url = repo.join_url(CHANGELOG);
     let bytes = download::get_bytes(&url).map_err(|e| format!("fetch {url}: {e}"))?;
-    let dir = repo.cache_subdir(cache_root);
-    if std::fs::create_dir_all(&dir).is_ok() {
-        let _ = std::fs::write(dir.join(CHANGELOG), &bytes);
+    if cache {
+        let dir = repo.cache_subdir(cache_root);
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(dir.join(CHANGELOG), &bytes);
+        }
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
@@ -377,6 +385,17 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
 
 fn parse_checksums(text: &str) -> HashMap<String, String> {
     parse_checksums_len(text, 32)
+}
+
+/// True if two CHECKSUMS.md5 bodies list the same packages with the same md5s.
+///
+/// Compares only the per-package checksum entries, so it is immune to header
+/// lines, generation timestamps, comments, blank lines, ordering and transport
+/// or whitespace noise — any of which can make a byte-for-byte comparison
+/// wrongly report a change (e.g. a mirror that regenerates the file with a fresh
+/// header on every request). Used by `check-updates`.
+pub fn checksums_equal(a: &str, b: &str) -> bool {
+    parse_checksums(a) == parse_checksums(b)
 }
 
 /// Parse a CHECKSUMS-style file mapping filename -> hash, keeping only entries

@@ -1,10 +1,6 @@
 - check if its better to have glibc as crate (?)
 
-- fix blacklist to accept *
-
 - ask to remove “orphan” dependencies if they are not used elsewhere (for repos that support it)
-
-- cmd to list repos.
 
 - History
   - what was installed
@@ -12,16 +8,6 @@
   - when was the change made
 
 - inform when a mirror is outdated (only for official)
-
-- calculate total installed pkgs and list per repo (maybe inxi will help)
-
-- cmd: slacker status
-  - check if one mirror is liste to mirrors
-  - check if other repos are enabled
-  - if yes calculate if priorities are the same or not set etc...
-  - check if packages are frozen in blacklist
-  - check if internet is active and if so run a set of --dry-run in backround and clculate if everything is as expected.
-  - then make a table and report if slacker is ok set up or not
 
 - cmd: slacker addrepo:priorityN url @name
    - slacker addtag::priorityN _TAG

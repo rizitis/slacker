@@ -154,7 +154,8 @@ the repo's version is handled by source priority: if its source is of LOWER
 priority it prompts skip / replace / skip-all / abort; if of HIGHER-or-equal
 priority it is kept by the priority rule but still surfaced in a table with a
 keep / replace / keep-all choice (`--yes` keeps the installed one in both cases).
-New deps are shown up front (before the confirm) as `new-dep: [repo] pkg (for parent)`. On by default; off via
+New deps are shown up front (before the confirm) in the same coloured plan table
+as everything else — a `new dep` row tagged `for <parent>`. On by default; off via
 `RESOLVE_DEPS=no` or per-run `--no-deps`. Applies to install, upgrade,
 reinstall, upgrade-all, install-new, install-template.
 

@@ -501,6 +501,30 @@ fn parse_mirrors(text: &str) -> Result<Option<String>, String> {
 /// A URL of the literal keyword `mirror` is replaced by the active mirror from
 /// the `mirrors` file, so the official repo's URL lives there while its
 /// priority/name/placement live here.
+/// Fully validate a candidate `repos` file body the way `Config::load_dir`
+/// would: it parses the lines (format, priority, verify flags, distinct binary
+/// priorities, unique tags, `mirror` resolution from the dir's `mirrors` file)
+/// and then applies the cross-checks (at most one `official`, unique repo names,
+/// at least one repo). Returns the first problem, or Ok if the file would load.
+/// Used by the `add-repo`/`del-repo`/`add-tag`/`del-tag` editors to refuse any
+/// change that would leave an unloadable configuration.
+pub fn validate_repos_text(config_dir: &Path, repos_text: &str) -> Result<(), String> {
+    let active_mirror = parse_mirrors(&read_optional(&config_dir.join("mirrors"))?)?;
+    let (repos, _tags) = parse_repos(repos_text, active_mirror.as_deref())?;
+    if repos.is_empty() {
+        return Err("no repositories would remain (the 'repos' file needs at least one)".into());
+    }
+    if repos.iter().filter(|r| r.official).count() > 1 {
+        return Err("more than one repo tagged 'official'".into());
+    }
+    for (i, r) in repos.iter().enumerate() {
+        if repos[..i].iter().any(|p| p.name == r.name) {
+            return Err(format!("duplicate repo name: {}", r.name));
+        }
+    }
+    Ok(())
+}
+
 fn parse_repos(
     text: &str,
     active_mirror: Option<&str>,

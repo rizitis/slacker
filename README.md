@@ -151,9 +151,14 @@ with verification effectively off is flagged with a warning. Run
   all, numbers/ranges like `1 3 5` or `2-4`, `n` to cancel). A series name
   (`a`, `ap`, `kde`, `y`, ...) matches exactly that series, not every package
   whose name happens to contain those letters.
-- `install-new` installs packages newly added since the last update. By default
-  it considers only the **official** repo(s); name one or more repos to opt in
-  explicitly (e.g. `slacker install-new alienbob`).
+- `install-new` installs packages whose **name** is newly added to a repo since
+  the last `update` (genuinely new to the distribution) — **not** packages you
+  removed or never installed, which already exist in the tree; use `slacker
+  install NAME` (or `install @repo`) for those. Example: after an `update` that
+  introduces a brand-new `libfoo`, `install-new` offers `libfoo`, but it never
+  offers `emacs` just because you removed it. By default it considers only the
+  **official** repo(s); name one or more repos to opt in explicitly (e.g.
+  `slacker install-new alienbob`).
 - `frozen <rule>...` adds one or more rules to the `blacklist`. A rule is a
   name/regex, a `series/`, or an `@repo`-scoped form (quote rules with spaces,
   e.g. `slacker frozen "@alienbob vlc"`). slacker validates each rule, flags a

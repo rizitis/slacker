@@ -1,0 +1,8 @@
+Fix: bug with staled changelogs on 3rd repos
+Add: slacker status
+Add: slacker list-repos + installed counts per repo
+Add: slacker add-repo
+Add: slacker del-repo
+Add: slacker add-tag
+Add: slacker del-tag
+---
