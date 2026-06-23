@@ -93,8 +93,9 @@ enum Cmd {
     NewConfig,
     /// Check every configured repo for pending updates (exit 100 if any).
     CheckUpdates,
-    /// Print the cached ChangeLog.
-    ShowChangelog,
+    /// Print a repo's cached ChangeLog. With no argument, the official (tracked)
+    /// repo; name a repo to fetch and show that one instead.
+    ShowChangelog { repo: Option<String> },
     /// Snapshot installed packages into a template.
     GenerateTemplate { name: String },
     /// Install all packages listed in a template.
@@ -153,7 +154,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::CleanCache { repos } => cmd_clean_cache(cli, &cfg, repos),
         Cmd::NewConfig => cmd_new_config(cli),
         Cmd::CheckUpdates => cmd_check_updates(&cfg),
-        Cmd::ShowChangelog => cmd_show_changelog(&cfg),
+        Cmd::ShowChangelog { repo } => cmd_show_changelog(&cfg, repo.as_deref()),
         Cmd::GenerateTemplate { name } => cmd_generate_template(&cfg, name),
         Cmd::InstallTemplate { name } => cmd_install_template(cli, &cfg, name),
         Cmd::RemoveTemplate { name } => cmd_remove_template(cli, &cfg, name),
@@ -222,7 +223,7 @@ fn requires_privilege(cmd: &Cmd) -> bool {
         | Cmd::Info { .. }
         | Cmd::FileSearch { .. }
         | Cmd::CheckUpdates
-        | Cmd::ShowChangelog => false,
+        | Cmd::ShowChangelog { .. } => false,
         // everything else writes to a root-owned location
         _ => true,
     }
@@ -285,7 +286,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::CleanCache { .. } => "clean-cache",
         Cmd::NewConfig => "new-config",
         Cmd::CheckUpdates => "check-updates",
-        Cmd::ShowChangelog => "show-changelog",
+        Cmd::ShowChangelog { .. } => "show-changelog",
         Cmd::GenerateTemplate { .. } => "generate-template",
         Cmd::InstallTemplate { .. } => "install-template",
         Cmd::RemoveTemplate { .. } => "remove-template",
@@ -339,6 +340,23 @@ enum DepChoice {
     Abort,
 }
 
+/// A dependency that is already installed from a source of higher-or-equal
+/// priority than the repo pulling it in. By the priority rule it is kept; we
+/// record it so the user can be shown the choice rather than keeping it
+/// silently.
+struct ProtectedDep {
+    dep: String,
+    needed_by: String,
+    installed: pkg::PkgId,
+    offered: repo::AvailPkg,
+}
+
+enum KeepChoice {
+    Keep,
+    Replace,
+    KeepAll,
+}
+
 /// Ask what to do when a dependency is installed but differs from the version
 /// this repo offers (i.e. it likely came from another source). With --yes we
 /// keep the installed one (non-destructive).
@@ -384,6 +402,94 @@ fn ask_dep_conflict(
     }
 }
 
+/// Show the dependencies kept by the priority rule (already installed from a
+/// source of higher-or-equal priority than the repo that pulled them in) and
+/// let the user keep each (default) or replace it with that repo's version.
+/// Returns the offered packages the user chose to install instead. With
+/// `assume_yes` nothing is asked and everything is kept (the table is still
+/// shown, for information).
+fn resolve_protected_deps(
+    db: &PkgDb,
+    tag_prios: &[crate::config::TagPriority],
+    protected: &[ProtectedDep],
+    assume_yes: bool,
+) -> Vec<repo::AvailPkg> {
+    let inst_src = |p: &ProtectedDep| {
+        let tag = p.installed.build_tag();
+        let src = if tag.is_empty() { "official" } else { tag };
+        format!("{} ({})", src, db.installed_priority(&p.installed, tag_prios))
+    };
+    let off_src =
+        |p: &ProtectedDep| format!("{} ({})", p.offered.repo, db.repo_priority(&p.offered.repo));
+
+    let wnum = protected.len().to_string().len().max(1);
+    let wdep = protected.iter().map(|p| p.dep.len()).chain(std::iter::once(10)).max().unwrap();
+    let wkept =
+        protected.iter().map(|p| inst_src(p).len()).chain(std::iter::once(16)).max().unwrap();
+    let woff = protected.iter().map(|p| off_src(p).len()).chain(std::iter::once(7)).max().unwrap();
+
+    println!(
+        "\n{}",
+        ui::blue("These dependencies are already installed from a higher-or-equal priority source:")
+    );
+    println!(
+        "  {}  {}  {}  {}",
+        ui::blue(&format!("{:>wnum$}", "#")),
+        ui::blue(&format!("{:<wdep$}", "Dependency")),
+        ui::blue(&format!("{:<wkept$}", "Installed (kept)")),
+        ui::blue(&format!("{:<woff$}", "Offered")),
+    );
+    println!("  {}", ui::dim(&"-".repeat(wnum + 2 + wdep + 2 + wkept + 2 + woff)));
+    for (i, p) in protected.iter().enumerate() {
+        println!(
+            "  {}  {}  {}  {}",
+            ui::cyan(&format!("{:>wnum$}", i + 1)),
+            ui::white(&format!("{:<wdep$}", p.dep)),
+            ui::green(&format!("{:<wkept$}", inst_src(p))),
+            ui::yellow(&format!("{:<woff$}", off_src(p))),
+        );
+    }
+
+    if assume_yes {
+        println!("{}", ui::blue("(--yes: keeping the installed versions)"));
+        return Vec::new();
+    }
+
+    // Per-dependency choice; the default is to keep the installed version.
+    let mut replace = Vec::new();
+    let mut keep_all = false;
+    for p in protected {
+        if keep_all {
+            break;
+        }
+        match ask_protected_dep(p, &inst_src(p), &off_src(p)) {
+            KeepChoice::Keep => {}
+            KeepChoice::Replace => replace.push(p.offered.clone()),
+            KeepChoice::KeepAll => keep_all = true,
+        }
+    }
+    replace
+}
+
+/// Per-dependency prompt for a priority-protected dependency. Default = keep.
+fn ask_protected_dep(p: &ProtectedDep, inst_src: &str, off_src: &str) -> KeepChoice {
+    println!("\n  {}", ui::blue(&format!("'{}' (needed by '{}'):", p.dep, p.needed_by)));
+    println!("    {}", ui::blue(&format!("[k]eep      keep the installed {inst_src} (default)")));
+    println!("    {}", ui::blue(&format!("[r]eplace   install {off_src} instead")));
+    println!("    {}", ui::blue("keep-[a]ll  keep this and every remaining one"));
+    print!("  {} ", ui::blue("Choice [k/r/a]:"));
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return KeepChoice::Keep;
+    }
+    match line.trim() {
+        "r" | "R" => KeepChoice::Replace,
+        "a" | "A" => KeepChoice::KeepAll,
+        _ => KeepChoice::Keep,
+    }
+}
+
 /// Expand a set of root packages into a full, ordered install plan by reading
 /// each package's `.dep` file and pulling in dependencies from the *same* repo.
 /// Dependencies are placed before the packages that need them.
@@ -399,6 +505,7 @@ fn expand_with_deps(
     let mut planned: HashSet<String> = HashSet::new();
     let mut visiting: HashSet<String> = HashSet::new();
     let mut skip_all = false;
+    let mut protected: Vec<ProtectedDep> = Vec::new();
     // Names already scheduled as roots (e.g. every package upgrade-all will
     // upgrade). A dependency whose name is here will be satisfied by its own
     // root entry, so we must not prompt about it as a "conflict".
@@ -407,8 +514,21 @@ fn expand_with_deps(
     for (pkg, action) in roots {
         add_with_deps(
             cfg, db, installed, pkg, action, None, resolve, assume_yes, &root_names,
-            &mut plan, &mut planned, &mut visiting, &mut skip_all,
+            &mut plan, &mut planned, &mut visiting, &mut skip_all, &mut protected,
         )?;
+    }
+    // Dependencies kept by the priority rule: show them and let the user replace
+    // any with the version offered by the repo that pulled them in. Anything the
+    // user keeps (the default) just stays installed.
+    if !protected.is_empty() {
+        let replace = resolve_protected_deps(db, &cfg.tag_priorities, &protected, assume_yes);
+        for o in replace {
+            add_with_deps(
+                cfg, db, installed, o, InstallAction::Upgrade, None, resolve, assume_yes,
+                &root_names, &mut plan, &mut planned, &mut visiting, &mut skip_all,
+                &mut Vec::new(),
+            )?;
+        }
     }
     Ok(plan)
 }
@@ -428,6 +548,7 @@ fn add_with_deps(
     planned: &mut HashSet<String>,
     visiting: &mut HashSet<String>,
     skip_all: &mut bool,
+    protected: &mut Vec<ProtectedDep>,
 ) -> Result<(), String> {
     let name = pkg.id.name.clone();
     if planned.contains(&name) {
@@ -459,7 +580,17 @@ fn add_with_deps(
                         if db.installed_outranks(i, &o, &cfg.tag_priorities) {
                             // The installed dependency comes from a source of
                             // higher-or-equal priority than this repo offers, so
-                            // it is protected: keep it, do not prompt or replace.
+                            // it is kept by the priority rule. Record it (once)
+                            // so the caller can show the choice instead of
+                            // keeping it silently.
+                            if !protected.iter().any(|p| p.dep == dep) {
+                                protected.push(ProtectedDep {
+                                    dep: dep.clone(),
+                                    needed_by: name.clone(),
+                                    installed: i.clone(),
+                                    offered: o,
+                                });
+                            }
                         } else {
                             let choice = if *skip_all {
                                 DepChoice::Skip
@@ -472,6 +603,7 @@ fn add_with_deps(
                                 DepChoice::Replace => add_with_deps(
                                     cfg, db, installed, o, InstallAction::Upgrade, Some(name.clone()),
                                     resolve, assume_yes, root_names, plan, planned, visiting, skip_all,
+                                    protected,
                                 )?,
                                 DepChoice::Abort => return Err("aborted by user".into()),
                             }
@@ -483,6 +615,7 @@ fn add_with_deps(
                     (None, Some(o)) => add_with_deps(
                         cfg, db, installed, o, InstallAction::Install, Some(name.clone()),
                         resolve, assume_yes, root_names, plan, planned, visiting, skip_all,
+                        protected,
                     )?,
                     // not installed and not offered here: can't satisfy, warn and move on.
                     (None, None) => eprintln!(
@@ -1231,8 +1364,18 @@ fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
     let found = !hits.is_empty();
     for h in hits {
         let pkgname = pkg::PkgId::parse(&h.package).map(|p| p.name).unwrap_or_else(|| h.package.clone());
-        let mark = if system::is_installed(&installed, &pkgname) { "installed" } else { "uninstalled" };
-        println!("[{}] {:<11} {}: {}", h.repo, mark, h.package, h.path);
+        let mark = if system::is_installed(&installed, &pkgname) {
+            ui::green(&format!("{:<11}", "installed"))
+        } else {
+            ui::red(&format!("{:<11}", "uninstalled"))
+        };
+        println!(
+            "{} {} {}: {}",
+            ui::cyan(&format!("[{}]", h.repo)),
+            mark,
+            ui::white(&h.package),
+            h.path
+        );
     }
 
     // If some repos had no usable MANIFEST, say so — the first fetch writes into
@@ -2220,20 +2363,38 @@ fn cmd_check_updates(cfg: &Config) -> Result<Outcome, String> {
     }
 }
 
-fn cmd_show_changelog(cfg: &Config) -> Result<Outcome, String> {
-    let Some(r) = changelog::changelog_repo(&cfg.repos) else {
-        return Err("no repo configured".into());
+fn cmd_show_changelog(cfg: &Config, repo_name: Option<&str>) -> Result<Outcome, String> {
+    // Which repo's ChangeLog: an explicitly named one, else the tracked
+    // (official) repo as before.
+    let r = match repo_name {
+        Some(name) => cfg
+            .repos
+            .iter()
+            .find(|r| r.name == name)
+            .ok_or_else(|| format!("no repo named '{name}'"))?,
+        None => changelog::changelog_repo(&cfg.repos).ok_or("no repo configured")?,
     };
-    match changelog::cached_changelog(r, &cfg.cache_dir) {
-        Some(text) => {
-            page_output(&text);
-            Ok(Outcome::Ok)
-        }
+    // Prefer the cached ChangeLog; for a repo whose ChangeLog `update` never
+    // cached (any non-tracked repo), fetch it on demand.
+    let text = match changelog::cached_changelog(r, &cfg.cache_dir) {
+        Some(t) => t,
         None => {
-            println!("No cached ChangeLog. Run `slacker update` first.");
-            Ok(Outcome::NothingFound)
+            println!("Fetching ChangeLog for '{}' ...", r.name);
+            match repo::fetch_changelog_text(r, &cfg.cache_dir) {
+                Ok(t) => t,
+                Err(e) => {
+                    println!("No ChangeLog available for '{}' ({e}).", r.name);
+                    return Ok(Outcome::NothingFound);
+                }
+            }
         }
+    };
+    if text.trim().is_empty() {
+        println!("ChangeLog for '{}' is empty.", r.name);
+        return Ok(Outcome::NothingFound);
     }
+    page_output(&text);
+    Ok(Outcome::Ok)
 }
 
 /// Print text through a pager when stdout is a terminal, so long output (the
@@ -2443,7 +2604,7 @@ mod selection_tests {
         assert!(!requires_privilege(&Cmd::Search { pattern: "x".into() }));
         assert!(!requires_privilege(&Cmd::Info { name: "x".into() }));
         assert!(!requires_privilege(&Cmd::CheckUpdates));
-        assert!(!requires_privilege(&Cmd::ShowChangelog));
+        assert!(!requires_privilege(&Cmd::ShowChangelog { repo: None }));
         assert!(!requires_privilege(&Cmd::FileSearch { filename: "x".into() }));
         // mutating / cache-writing commands need root
         assert!(requires_privilege(&Cmd::Update { mode: None }));

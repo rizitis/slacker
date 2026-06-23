@@ -1,4 +1,4 @@
-.TH SLACKER 8 "June 2026" "slacker 0.4.0" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.5.0" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -80,8 +80,12 @@ status line per repo. The official repo is checked via its ChangeLog; external
 repos by comparing CHECKSUMS.md5 against the cached copy. Exits 100 if any repo
 has updates pending.
 .TP
-.B show-changelog
-Print the cached ChangeLog.
+.B show-changelog \fR[\fIREPO\fR]
+Page the cached ChangeLog of the official (tracked) repository. Name a
+repository to show its ChangeLog instead; if that repository's ChangeLog was
+not cached by
+.BR update ,
+it is fetched on demand.
 .SS Querying
 .TP
 .BI search " NAME"
@@ -351,9 +355,20 @@ from the
 .I same
 repository, recursively. Dependencies already satisfied by the same
 repository's build are left alone. A dependency that is installed but differs
-from what the repository offers (for example installed from another source)
-triggers a prompt:
+from what the repository offers (for example installed from another source) is
+handled by source priority. If the installed copy comes from a
+.I lower\-priority
+source it triggers a prompt:
 .IR skip ", " replace ", " skip\-all " or " abort .
+If it comes from a source of
+.I higher\-or\-equal
+priority it is kept by the priority rule \(em but
+.B slacker
+now lists every such dependency and lets you
+.I keep
+each (the default) or
+.I replace
+it with the version the repository being installed offers.
 With
 .B \-\-yes
 the installed version is kept. The whole mechanism is on by default and can be

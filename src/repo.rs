@@ -108,6 +108,21 @@ pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Res
     Ok(())
 }
 
+/// Fetch a repo's ChangeLog.txt on demand and return its text, caching it
+/// best-effort. `update` only caches the ChangeLog of the tracked repo, so
+/// `show-changelog <repo>` uses this for any other repo. The cache write needs
+/// root (the cache is root-owned), but the text is returned regardless so a
+/// non-root user can still read it.
+pub fn fetch_changelog_text(repo: &Repo, cache_root: &Path) -> Result<String, String> {
+    let url = repo.join_url(CHANGELOG);
+    let bytes = download::get_bytes(&url).map_err(|e| format!("fetch {url}: {e}"))?;
+    let dir = repo.cache_subdir(cache_root);
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(dir.join(CHANGELOG), &bytes);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// Ensure the decompressed MANIFEST exists for a repo, downloading it on
 /// demand. Used by file-search.
 ///
