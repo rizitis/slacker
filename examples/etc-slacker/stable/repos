@@ -11,13 +11,15 @@
 
 # priority  name        url       [official]
 100         slackware   mirror    official
+200         patches    https://slackware.uk/slackware/slackware64-15.0/patches
+90          testing    https://slackware.uk/slackware/slackware64-15.0/testing
+95          extras     https://slackware.uk/slackware/slackware64-15.0/extra/
 
 # ── External slackware64-15.0 repos ─────────────────────────────────────────
-#80          extras     https://mirror.nl.leaseweb.net/slackware/slackware64-15.0/extra
-#90          patches    https://mirror.nl.leaseweb.net/slackware/slackware64-15.0/patches
-#60          alienbob   https://slackware.nl/people/alien/sbrepos/15.0/x86_64
-#50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/15.0/x86_64
-#10         multilib    https://slackware.nl/people/alien/multilib/15.0
+
+#60         alienbob   https://slackware.nl/people/alien/sbrepos/15.0/x86_64
+#50         restricted https://slackware.nl/people/alien/restricted_sbrepos/15.0/x86_64
+#10         multilib   https://slackware.nl/people/alien/multilib/15.0
 
 # ── Per-repo verification override (optional) ───────────────────────────────
 # Append `verify=...` to a repo line to override the global VERIFY (set in

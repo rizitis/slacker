@@ -9,7 +9,7 @@
 cd $(dirname $0) ; CWD=$(pwd)
 
 PRGNAM=slacker
-VERSION=${VERSION:-0.5.0}
+VERSION=${VERSION:-0.5.1}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
@@ -77,6 +77,7 @@ install -m0755 target/debug/slacker $PKG/usr/local/sbin/slacker
 # docs
 mkdir -p $PKG/usr/doc/$PRGNAM-$VERSION/examples
 install -m0644 README.md $PKG/usr/doc/$PRGNAM-$VERSION/
+cp -R wiki $PKG/usr/doc/$PRGNAM-$VERSION/
 install -m0644 examples/etc-slacker/"$DIR"/* $PKG/usr/doc/$PRGNAM-$VERSION/examples/
 cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
 

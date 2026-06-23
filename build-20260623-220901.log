@@ -1,61 +1,66 @@
     Updating crates.io index
-     Locking 95 packages to latest compatible versions
+     Locking 100 packages to latest compatible versions
       Adding generic-array v0.14.7 (available: v0.14.9)
       Adding md-5 v0.10.6 (available: v0.11.0)
       Adding ureq v2.12.1 (available: v3.3.0)
    Compiling proc-macro2 v1.0.106
-   Compiling quote v1.0.46
    Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
    Compiling stable_deref_trait v1.2.1
-   Compiling find-msvc-tools v0.1.9
    Compiling shlex v2.0.1
-   Compiling litemap v0.8.2
-   Compiling pkg-config v0.3.33
-   Compiling vcpkg v0.2.15
+   Compiling find-msvc-tools v0.1.9
    Compiling writeable v0.6.3
+   Compiling vcpkg v0.2.15
+   Compiling pkg-config v0.3.33
+   Compiling litemap v0.8.2
+   Compiling icu_normalizer_data v2.2.0
    Compiling utf8_iter v1.0.4
    Compiling icu_properties_data v2.2.0
    Compiling version_check v0.9.5
-   Compiling icu_normalizer_data v2.2.0
    Compiling cfg-if v1.0.4
    Compiling libc v0.2.186
-   Compiling typenum v1.20.1
    Compiling smallvec v1.15.2
+   Compiling typenum v1.20.1
    Compiling utf8parse v0.2.2
-   Compiling foreign-types-shared v0.1.1
-   Compiling openssl v0.10.81
    Compiling crc32fast v1.5.0
+   Compiling openssl v0.10.81
+   Compiling foreign-types-shared v0.1.1
+   Compiling bitflags v2.13.0
    Compiling anstyle-parse v1.0.0
    Compiling foreign-types v0.3.2
+   Compiling anstyle-query v1.1.5
+   Compiling adler2 v2.0.1
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling cc v1.2.65
+   Compiling memchr v2.8.2
+   Compiling native-tls v0.2.18
    Compiling simd-adler32 v0.3.9
    Compiling colorchoice v1.0.5
-   Compiling native-tls v0.2.18
-   Compiling cc v1.2.65
-   Compiling is_terminal_polyfill v1.70.2
-   Compiling percent-encoding v2.3.2
-   Compiling bitflags v2.13.0
-   Compiling adler2 v2.0.1
    Compiling anstyle v1.0.14
-   Compiling anstyle-query v1.1.5
-   Compiling log v0.4.33
-   Compiling heck v0.5.0
-   Compiling strsim v0.11.1
+   Compiling percent-encoding v2.3.2
    Compiling openssl-probe v0.2.1
    Compiling clap_lex v1.1.0
-   Compiling miniz_oxide v0.8.9
-   Compiling base64 v0.22.1
+   Compiling log v0.4.33
+   Compiling regex-syntax v0.8.11
+   Compiling heck v0.5.0
+   Compiling strsim v0.11.1
    Compiling once_cell v1.21.4
+   Compiling base64 v0.22.1
    Compiling form_urlencoded v1.2.2
-   Compiling generic-array v0.14.7
+   Compiling miniz_oxide v0.8.9
    Compiling anstream v1.0.0
+   Compiling generic-array v0.14.7
    Compiling clap_builder v4.6.0
    Compiling flate2 v1.1.9
+   Compiling aho-corasick v1.1.4
    Compiling syn v2.0.118
+   Compiling openssl-sys v0.9.117
    Compiling block-buffer v0.10.4
    Compiling crypto-common v0.1.7
-   Compiling openssl-sys v0.9.117
    Compiling digest v0.10.7
    Compiling md-5 v0.10.6
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.4
    Compiling synstructure v0.13.2
    Compiling zerovec-derive v0.11.3
    Compiling displaydoc v0.2.6
@@ -73,81 +78,82 @@
    Compiling icu_collections v2.2.0
    Compiling icu_locale_core v2.2.0
    Compiling icu_provider v2.2.0
-   Compiling icu_normalizer v2.2.0
    Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
    Compiling idna_adapter v1.2.2
    Compiling idna v1.1.0
    Compiling url v2.5.8
    Compiling ureq v2.12.1
-   Compiling slacker v0.4.3 (/tmp/FORGE)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.75s
+   Compiling slacker v0.5.1 (/tmp/FORGE)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.70s
    Compiling openssl-sys v0.9.117
    Compiling openssl v0.10.81
    Compiling native-tls v0.2.18
    Compiling ureq v2.12.1
-   Compiling slacker v0.4.3 (/tmp/FORGE)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.55s
-   Compiling slacker v0.4.3 (/tmp/FORGE)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.36s
-     Running unittests src/main.rs (target/debug/deps/slacker-7bf369259df70f56)
+   Compiling slacker v0.5.1 (/tmp/FORGE)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.02s
+   Compiling slacker v0.5.1 (/tmp/FORGE)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s
+     Running unittests src/main.rs (target/debug/deps/slacker-4889e3c06e969172)
 
-running 54 tests
+running 55 tests
 test config::tests::blacklist_lines ... ok
 test config::tests::mirrors_none_active ... ok
-test config::tests::repos_bad_input ... ok
 test config::tests::mirrors_one_active ... ok
-test config::tests::repos_duplicate_priority_is_error ... ok
 test config::tests::keyvals_and_comments ... ok
-test config::tests::mirrors_two_active_is_error ... ok
+test config::tests::arch_detected_from_aaa_base ... ok
 test config::tests::repos_columns_and_official ... ok
 test config::tests::repos_mirror_keyword_resolves ... ok
+test config::tests::mirrors_two_active_is_error ... ok
 test config::tests::repos_mirror_keyword_without_active_errors ... ok
-test config::tests::verify_policy_parsing ... ok
-test config::tests::arch_detected_from_aaa_base ... ok
+test config::tests::repos_bad_input ... ok
+test config::tests::repos_duplicate_priority_is_error ... ok
 test config::tests::verify_policy_wants_requires ... ok
-test download::tests::file_url_parsing ... ok
+test config::tests::verify_policy_parsing ... ok
 test download::tests::tls_handshake_works ... ignored
-test manifest::tests::finds_file_and_package ... ok
+test download::tests::file_url_parsing ... ok
 test download::tests::file_url_fetch_roundtrip ... ok
-test pkg::tests::bare_tag_without_ext ... ok
-test pkg::tests::build_tag_strips_number_both_styles ... ok
-test pkg::tests::dashed_name ... ok
 test manifest::tests::symlink_target_stripped ... ok
-test pkg::tests::rejects_garbage ... ok
-test pkg::tests::revision_detection ... ok
-test pkg::tests::simple_name ... ok
+test manifest::tests::finds_file_and_package ... ok
+test pkg::tests::build_tag_strips_number_both_styles ... ok
+test pkg::tests::bare_tag_without_ext ... ok
 test download::tests::md5_of_known_content ... ok
+test pkg::tests::dashed_name ... ok
+test pkg::tests::rejects_garbage ... ok
+test pkg::tests::simple_name ... ok
+test pkg::tests::revision_detection ... ok
 test newconfig::tests::finds_new_files_recursively ... ok
-test pkgdb::upgrade_tests::at_tag_selects_by_build_tag ... ok
 test pkgdb::upgrade_tests::at_repo_selects_whole_repo ... ok
-test pkgdb::upgrade_tests::bare_word_is_not_a_repo ... ok
+test pkgdb::upgrade_tests::at_tag_selects_by_build_tag ... ok
 test pkgdb::upgrade_tests::genuine_self_upgrade_within_same_repo ... ok
+test pkgdb::upgrade_tests::bare_word_is_not_a_repo ... ok
 test pkgdb::upgrade_tests::higher_priority_same_version_is_proposed ... ok
 test pkgdb::upgrade_tests::no_downgrade_from_lower_repo ... ok
-test pkgdb::upgrade_tests::official_upgrade_proposed ... ok
 test pkgdb::upgrade_tests::sbo_is_not_migrated_to_lower_repo ... ok
+test pkgdb::upgrade_tests::official_upgrade_proposed ... ok
 test pkgdb::upgrade_tests::substring_pattern_still_works ... ok
-test repo::arch_tests::accepts_native_noarch_fw_x86 ... ok
 test pkgdb::upgrade_tests::series_pattern_matches_only_series ... ok
+test repo::arch_tests::accepts_native_noarch_fw_x86 ... ok
 test repo::arch_tests::rejects_genuine_32bit_binaries_on_64 ... ok
 test repo::dep_tests::parses_names_and_skips_noise ... ok
-test repo::tests::parses_blocks_with_series ... ok
-test repo::tests::series_extraction ... ok
 test repo::tests::parses_checksums_ok ... ok
+test repo::tests::parses_blocks_with_series ... ok
 test repo::lossy_tests::reads_non_utf8_without_failing ... ok
+test repo::tests::series_extraction ... ok
 test selection_tests::closest_suggests_within_two ... ok
 test selection_tests::edit_distance_basics ... ok
 test selection_tests::privilege_classification ... ok
 test system::tests::missing_db_is_empty_not_error ... ok
 test selection_tests::parse_selection_works ... ok
 test ui::tests::plain_when_not_a_tty ... ok
-test system::tests::reads_fake_installed_db ... ok
 test template::tests::delete_removes_file_only ... ok
-test template::tests::generate_then_load_with_include ... ok
+test system::tests::reads_fake_installed_db ... ok
 test template::tests::name_suffix_is_normalized ... ok
+test template::tests::generate_then_load_with_include ... ok
+test config::tests::blacklist_rules ... ok
 test repo::tests::official_arch_subdir_picks_arch_dir ... ok
 
-test result: ok. 53 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 54 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
 
 Slackware package maker, version 3.141592653.
@@ -166,7 +172,7 @@ Would you like to reset all directory permissions to 755 (drwxr-xr-x) and
 directory ownerships to root:root ([y]es, [n]o)? n
 
 
-Creating Slackware package:  /tmp/slacker-0.4.3-x86_64-1_FRG.txz
+Creating Slackware package:  /tmp/slacker-0.5.1-x86_64-1_FRG.txz
 
 ./
 etc/
@@ -181,14 +187,17 @@ install/doinst.sh
 install/slack-desc
 usr/
 usr/doc/
-usr/doc/slacker-0.4.3/
-usr/doc/slacker-0.4.3/README.md
-usr/doc/slacker-0.4.3/examples/
-usr/doc/slacker-0.4.3/examples/blacklist
-usr/doc/slacker-0.4.3/examples/mirrors
-usr/doc/slacker-0.4.3/examples/repos
-usr/doc/slacker-0.4.3/examples/slacker.conf
-usr/doc/slacker-0.4.3/slacker.SlackBuild
+usr/doc/slacker-0.5.1/
+usr/doc/slacker-0.5.1/README.md
+usr/doc/slacker-0.5.1/examples/
+usr/doc/slacker-0.5.1/examples/blacklist
+usr/doc/slacker-0.5.1/examples/mirrors
+usr/doc/slacker-0.5.1/examples/repos
+usr/doc/slacker-0.5.1/examples/slacker.conf
+usr/doc/slacker-0.5.1/slacker.SlackBuild
+usr/doc/slacker-0.5.1/wiki/
+usr/doc/slacker-0.5.1/wiki/blacklist-reference-multilang.md
+usr/doc/slacker-0.5.1/wiki/blacklist-reference.md
 usr/local/
 usr/local/sbin/
 usr/local/sbin/slacker
@@ -196,5 +205,5 @@ usr/man/
 usr/man/man8/
 usr/man/man8/slacker.8.gz
 
-Slackware package /tmp/slacker-0.4.3-x86_64-1_FRG.txz created.
+Slackware package /tmp/slacker-0.5.1-x86_64-1_FRG.txz created.
 

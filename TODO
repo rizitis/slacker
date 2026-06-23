@@ -1,5 +1,7 @@
 - check if its better to have glibc as crate (?)
 
+- fix blacklist to accept *
+
 - ask to remove “orphan” dependencies if they are not used elsewhere (for repos that support it)
 
 - cmd to list repos.
@@ -9,7 +11,7 @@
   - what was removed
   - when was the change made
 
-- inform when a mirror is outdated
+- inform when a mirror is outdated (only for official)
 
 - calculate total installed pkgs and list per repo (maybe inxi will help)
 

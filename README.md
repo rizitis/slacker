@@ -38,7 +38,7 @@ See `slacker.8` (`man slacker`) for the full manual.
     slacker.conf   KEY=value globals (ARCH, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY)
     mirrors        catalogue of official mirrors - uncomment exactly ONE
     repos          repo priorities/names + external repos
-    blacklist      one package name per line
+    blacklist      blacklist rules: [@repo] REGEX | [@repo] series/
     templates/     generated/created templates
 
 PKG_DB_DIR defaults to `/var/lib/pkgtools/packages`.
@@ -77,8 +77,8 @@ automatically.
 
     slacker update [gpg]          refresh metadata; `update gpg` imports repo keys
     slacker check-updates         per-repo update check; exit 100 if any pending
-    slacker show-changelog        print the cached ChangeLog
-    slacker search PATTERN        search names + descriptions
+    slacker show-changelog [REPO] print a ChangeLog (official by default, or a named repo)
+    slacker search PACKAGE        find a package by its exact name (case-insensitive)
     slacker file-search FILE      which package ships FILE (MANIFEST)
     slacker info PACKAGE          per-repo candidates + installed version
     slacker install PATTERN...    install new packages (refuses installed ones)
@@ -90,7 +90,7 @@ automatically.
     slacker upgrade-all           upgrade everything with a newer revision
     slacker install-new [REPO...] install newly-added packages (official only by default)
     slacker clean-system          remove packages in no configured repo
-    slacker frozen PKG...         freeze package(s): add to blacklist
+    slacker frozen RULE...        add blacklist rule(s): name/regex, series/, or @repo-scoped
     slacker new-config            handle leftover *.new config files
     slacker generate-template N   snapshot installed packages to template N
     slacker install-template N    install everything in template N
@@ -113,8 +113,12 @@ a `repo:name` pin, or a set selector `@repo` / `@_tag`. Global flags: `-y/--yes`
 
 GPG: `update gpg` imports each repo's GPG-KEY into a private keyring under the
 cache dir; subsequent `update` verifies CHECKSUMS.md5 against
-CHECKSUMS.md5.asc. Per-package integrity is md5 from the (signature-verified)
-CHECKSUMS. Run `slacker update gpg` once before trusting a mirror.
+CHECKSUMS.md5.asc. At install, integrity is checked per package: Slackware ships
+a per-package `.txz.asc`, so under the default `all` policy slacker GPG-verifies
+the package itself when a signature is present (falling back to the md5 from the
+signature-verified CHECKSUMS otherwise), and prints which checks passed. A repo
+with verification effectively off is flagged with a warning. Run
+`slacker update gpg` once before trusting a mirror.
 
 ---
 
@@ -123,7 +127,10 @@ CHECKSUMS. Run `slacker update gpg` once before trusting a mirror.
 
 ## Notes / limits
 
-- Pattern matching is substring + series + exact, not full regex.
+- Selector matching (install/upgrade/remove/...) is substring + series + exact,
+  not regex. The **blacklist** is different: its rules are unanchored regular
+  expressions (plus `series/` and `@repo` scoping) matched against the full
+  package id — see `frozen` and the `blacklist` file.
 - The `repos` file also accepts **build-tag priority** lines (`priority name tag`,
   e.g. `100 SBo _SBo`) that give SlackBuilds.org/local packages a priority on the
   same scale as repos. `upgrade-all` then only replaces a tagged package with a
@@ -147,8 +154,14 @@ CHECKSUMS. Run `slacker update gpg` once before trusting a mirror.
 - `install-new` installs packages newly added since the last update. By default
   it considers only the **official** repo(s); name one or more repos to opt in
   explicitly (e.g. `slacker install-new alienbob`).
-- `frozen <pkg>...` adds one or more packages to the `blacklist` so update,
-  upgrade-all, reinstall, and clean-system leave them alone (freeze a version).
+- `frozen <rule>...` adds one or more rules to the `blacklist`. A rule is a
+  name/regex, a `series/`, or an `@repo`-scoped form (quote rules with spaces,
+  e.g. `slacker frozen "@alienbob vlc"`). slacker validates each rule, flags a
+  likely mistake (an `@repo` that names no active repo, or a regex containing a
+  space — a forgotten `@` or quoting slip), prints what each rule will freeze,
+  and asks before writing (`--yes` skips the prompts). An installed match is
+  frozen; an uninstalled match is hidden from install-new/upgrades but still
+  shown by `search`/`info` marked `[blacklisted]`.
 - `remove-template <name>` uninstalls the packages a template lists (slackpkg
   behaviour); `delete-template <name>` removes only the template file.
 - `clean-system` lists installed packages absent from all configured repos and
@@ -156,10 +169,10 @@ CHECKSUMS. Run `slacker update gpg` once before trusting a mirror.
   whose build tag is in `IGNORE_TAGS` (e.g. `_SBo cf alien`) are never treated
   as foreign - essential when you have many SBo/source/custom packages that no
   binary repo manages. Add individual packages to `blacklist` too if needed.
-- The `blacklist` is honoured by every mutating command, including `reinstall`.
+- The `blacklist` is honoured by every mutating command (including `reinstall`), packages it freezes never appear in `clean-system`, and a frozen/blacklisted package is flagged `[blacklisted]` in `search` and `info`.
 - ChangeLog is fetched (on `update`) only for the official repo, and powers
   `show-changelog`. `check-updates` covers every repo: official via ChangeLog,
-  external repos by comparing PACKAGES.TXT to the cached copy.
+  external repos by comparing CHECKSUMS.md5 to the cached copy.
 
 ---
 

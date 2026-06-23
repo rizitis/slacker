@@ -5,34 +5,35 @@ parity, plus slackpkg+ multi-repo priority resolution and .dep dependency
 handling.
 
 Build needs current Slackware's Rust (1.96+; edition 2021 for broad
-compatibility). Direct deps: clap, ureq, native-tls, md-5. Heavy lifting (bzip2
+compatibility). Direct deps: clap, ureq, native-tls, md-5, regex. Heavy lifting (bzip2
 for MANIFEST, GPG) shells out to the system tools Slackware already ships - no
 extra Rust deps.
 
 ### Source_Tree
 ```
 slacker/
-├── Cargo.toml                      <- build manifest (deps: clap, ureq, native-tls, md-5; Apache-2.0)
+├── Cargo.toml                      <- build manifest (deps: clap, ureq, native-tls, md-5, regex; Apache-2.0)
 ├── README.md
 ├── slacker.8                       <- man page (section 8)
 ├── examples/etc-slacker/           <- config templates for /etc/slacker/
 │   ├── slacker.conf                <- globals (ARCH auto-detect, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS)
 │   ├── mirrors                     <- catalogue of official mirrors - uncomment ONE (none by default)
 │   ├── repos                       <- binary repos + tag-priority lines
-│   └── blacklist                   <- one package_name per line
-└── src/                            <- 12 modules
+│   └── blacklist                   <- blacklist rules: [@repo] REGEX | [@repo] series/
+└── src/                            <- 13 modules
     ├── main.rs        CLI + commands (21 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection)
-    ├── config.rs      plain-text config + arch auto-detect + tag-priorities + VerifyPolicy/Check
+    ├── config.rs      plain-text config + arch auto-detect + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series)
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
     ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch
-    ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans
+    ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, blacklist source lookups
     ├── download.rs    https/http (ureq+native-tls) + file:// + md5 + sha256 (sha256sum)
     ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path
     ├── manifest.rs    file-search (decompressed MANIFEST)
     ├── changelog.rs   check-updates / show-changelog (pager when on a TTY)
     ├── gpg.rs         GPG import + verify (captured output, fail-closed)
     ├── template.rs    templates (generate/load/delete, includes)
-    └── newconfig.rs   .new config file handling
+    ├── newconfig.rs   .new config file handling
+    └── ui.rs           minimal ANSI colouring (TTY + NO_COLOR aware), plan tables
 ```
 
 ### Config_Model
@@ -54,9 +55,17 @@ slacker/
     carrying a build tag a priority on the same scale, so SBo/local/source
     packages are never silently migrated to another repo or downgraded by
     `upgrade-all`. Tag-priority lines may share priority values.
-- **blacklist** - packages never installed/upgraded/reinstalled/removed;
-  honoured by every mutating command, and hidden from `clean-system`. The
-  `frozen` command appends to this file.
+- **blacklist** - one rule per line: `[@repo] PATTERN`. `PATTERN` is a
+  Slackware series when it ends in `/` (e.g. `kde/`), otherwise an unanchored
+  **regex** matched against the full package id `name-version-arch-build`
+  (slackpkg-style, so `xf86-.*-202.*` works; anchor with `^...$` for exact). An
+  optional `@repo` scopes the rule to one repo (for an available package its
+  candidate repo, for an installed one its source). An installed match is
+  **frozen** (never installed/upgraded/reinstalled/removed, and never listed by
+  `clean-system`); an uninstalled match is **hidden** from `install-new`,
+  upgrades and `check-updates`, but still shown by `search`/`info` marked
+  `[blacklisted]`. The `frozen` command validates and appends rules to this
+  file.
 
 ### Build-tag priority model
 
@@ -102,7 +111,15 @@ generate-template  install-template  remove-template  delete-template
   metadata or GPG keys under CACHE_DIR/repos.
 - `remove-template` uninstalls a template's packages (slackpkg behaviour);
   `delete-template` removes only the template file.
-- `frozen PKG...` - add one or more packages to the blacklist.
+- `frozen RULE...` - add one or more blacklist rules. Each argument is one
+  rule (quote rules with spaces, e.g. `"@alienbob vlc"`); slacker validates them,
+  warns about a likely typo (unknown `@repo`, or a regex with a space — package
+  ids never contain spaces / a forgotten `@`), shows what each rule freezes, and
+  asks for confirmation before writing (`--yes` skips the prompts).
+- `show-changelog [REPO]` - print a ChangeLog: the official repo by default, or a
+  named repo (fetched on demand if not cached).
+- `search` matches an **exact** package name (case-insensitive); use `info` or
+  `file-search` for broader lookups.
 
 Global flags: `-y/--yes`, `--dry-run`, `--no-deps`, `--config-dir`.
 Exit codes: 0 ok ; 1 error ; 20 nothing found ; 50 self-upgrade ; 100 pending.
@@ -115,10 +132,15 @@ and `verify=` (repos, per-repo override). Policy types live in config.rs
 
 - GPG is verified at `update` (the repo's CHECKSUMS file is signed); a bad
   signature is always fatal, a missing one is skipped under `all`.
-- Per-package integrity (md5 and/or sha) is verified at install in
-  `fetch_and_verify`. Under `all`, at least one of md5/sha must be present and
-  match; if neither is available the install stops. `sha` uses CHECKSUMS.sha256
-  if a repo ships it (none do today) and is computed via `sha256sum`.
+- Per-package integrity is verified at install in `fetch_and_verify`. Slackware
+  ships a per-package `.txz.asc`, so under `all` slacker also GPG-verifies the
+  package itself (best-effort: a missing `.asc` falls back to md5); under an
+  explicit `gpg` policy the package signature is required. At least one of
+  gpg/md5/sha must pass; if none is available the install stops. `sha` uses
+  CHECKSUMS.sha256 if a repo ships it (none do today), via `sha256sum`. On
+  success slacker prints which checks passed (e.g. `verified: gpg (signer) + md5`).
+- A repo whose effective policy does no checks at all triggers a visible WARNING
+  after `update` and in `check-updates`.
 - A `Required(list)` policy (e.g. `gpg,md5,sha`) fails if a listed method is
   absent, with a message pointing at where to relax it. The official repo gets
   no exemption.
@@ -127,17 +149,19 @@ and `verify=` (repos, per-repo override). Policy types live in config.rs
 
 If a package has a `.dep` file beside it in the repo, slacker pulls in missing
 deps from the *same* repo, recursively, before installing. A dep already
-satisfied by that repo's build is left alone; one installed but differing from
-the repo's version (e.g. another source) prompts: skip / replace / skip-all /
-abort (`--yes` keeps the installed one). New deps are shown up front (before the
-confirm) as `new-dep: [repo] pkg (for parent)`. On by default; off via
+satisfied by that repo's build is left alone. A dep installed but differing from
+the repo's version is handled by source priority: if its source is of LOWER
+priority it prompts skip / replace / skip-all / abort; if of HIGHER-or-equal
+priority it is kept by the priority rule but still surfaced in a table with a
+keep / replace / keep-all choice (`--yes` keeps the installed one in both cases).
+New deps are shown up front (before the confirm) as `new-dep: [repo] pkg (for parent)`. On by default; off via
 `RESOLVE_DEPS=no` or per-run `--no-deps`. Applies to install, upgrade,
 reinstall, upgrade-all, install-new, install-template.
 
 ### Build_and_Tests
 
 > NO root needed for build & tests (only the mutating actions need root).
-> 49 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
+> 54 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
 
 ```
 cargo build --release

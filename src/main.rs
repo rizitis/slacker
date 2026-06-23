@@ -104,7 +104,8 @@ enum Cmd {
     RemoveTemplate { name: String },
     /// Delete a template file (does not touch installed packages).
     DeleteTemplate { name: String },
-    /// Add one or more packages to the blacklist ("freeze" them).
+    /// Add one or more blacklist rules ("freeze"). Each argument is one rule:
+    /// a regex, a `series/`, or `@repo regex` (quote rules with spaces).
     Frozen { names: Vec<String> },
 }
 
@@ -159,7 +160,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::InstallTemplate { name } => cmd_install_template(cli, &cfg, name),
         Cmd::RemoveTemplate { name } => cmd_remove_template(cli, &cfg, name),
         Cmd::DeleteTemplate { name } => cmd_delete_template(cli, &cfg, name),
-        Cmd::Frozen { names } => cmd_frozen(&cfg, names),
+        Cmd::Frozen { names } => cmd_frozen(&cli, &cfg, names),
     }
 }
 
@@ -299,21 +300,15 @@ fn confirm(prompt: &str, assume_yes: bool) -> bool {
     if assume_yes {
         return true;
     }
-    print!("{} ", ui::blue(&format!("{prompt} [y/N/a]")));
+    print!("{} ", ui::blue(&format!("{prompt} [y/N]")));
     std::io::stdout().flush().ok();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
         return false;
     }
-    match line.trim() {
-        "y" | "Y" | "yes" => true,
-        "a" | "A" | "abort" => {
-            println!("{}", ui::blue("aborted — nothing changed"));
-            false
-        }
-        // anything else (including the default empty Enter and 'n') cancels
-        _ => false,
-    }
+    // Only an explicit yes proceeds; Enter (the capital-N default) or anything
+    // else cancels. Callers that want a cancellation message print their own.
+    matches!(line.trim(), "y" | "Y" | "yes")
 }
 
 /// What pkgtool action a planned package needs.
@@ -561,7 +556,14 @@ fn add_with_deps(
     if resolve {
         if let Some(repo) = cfg.repo_by_name(&pkg.repo) {
             for dep in repo::fetch_dep(repo, &pkg) {
-                if cfg.is_blacklisted(&dep) {
+                // A blacklisted dependency is never pulled in — whether it would
+                // come fresh from this repo, or is already installed/frozen.
+                let bl = db
+                    .resolve(&format!("{}:{}", pkg.repo, dep))
+                    .map_or(false, |o| bl_avail(cfg, o))
+                    || system::installed_by_name(installed, &dep)
+                        .map_or(false, |i| bl_installed(cfg, Some(db), i));
+                if bl {
                     continue;
                 }
                 // A dependency that is itself a root (will be upgraded anyway)
@@ -1105,6 +1107,38 @@ fn kept_detail(
     )
 }
 
+// ---- blacklist helpers ---------------------------------------------------
+
+/// Is an available candidate blacklisted? Matched against its full id, series
+/// and candidate repo.
+fn bl_avail(cfg: &Config, p: &repo::AvailPkg) -> bool {
+    cfg.blacklist_hit(&p.id.tag(), Some(p.series.as_str()), Some(p.repo.as_str()))
+}
+
+/// Is an installed package blacklisted (frozen)? Matched against its full id,
+/// the series looked up from the db, and its source repo — the official repo
+/// for an empty build tag, otherwise the repo owning that tag. `db` may be None
+/// when a command hasn't loaded it; then only plain regex rules can match.
+fn bl_installed(cfg: &Config, db: Option<&PkgDb>, i: &pkg::PkgId) -> bool {
+    let series = db.and_then(|d| d.series_of(&i.name));
+    let tag = i.build_tag();
+    let repo = if tag.is_empty() {
+        cfg.official_repo_name()
+    } else {
+        db.and_then(|d| d.repo_for_tag(tag))
+    };
+    cfg.blacklist_hit(&i.tag(), series, repo)
+}
+
+/// Frozen if either the candidate or the installed copy of the same name is
+/// blacklisted (so an `@repo`-scoped rule on the installed source still freezes
+/// even when the winning candidate now comes from a different repo).
+fn bl_frozen(cfg: &Config, db: &PkgDb, installed: &[pkg::PkgId], p: &repo::AvailPkg) -> bool {
+    bl_avail(cfg, p)
+        || system::installed_by_name(installed, &p.id.name)
+            .map_or(false, |i| bl_installed(cfg, Some(db), i))
+}
+
 // ---- commands ------------------------------------------------------------
 
 /// Warn about active repos whose effective verify policy performs NO checks at
@@ -1331,13 +1365,19 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
         } else {
             ui::red(&format!("{:<11}", "uninstalled"))
         };
+        let bl = if bl_frozen(cfg, &db, &installed, p) {
+            ui::purple(" [blacklisted]")
+        } else {
+            String::new()
+        };
         println!(
-            "{} {} {}{}  {}",
+            "{} {} {}{}  {}{}",
             ui::cyan(&format!("[{}]", p.repo)),
             mark,
             ui::white(&p.id.name),
             ui::dim(&format!("-{}", p.id.version)),
-            p.summary
+            p.summary,
+            bl
         );
     }
     Ok(Outcome::Ok)
@@ -1420,7 +1460,12 @@ fn cmd_info(cfg: &Config, name: &str) -> Result<Outcome, String> {
         let csize = p.size_k.map(|k| format!("{k} K")).unwrap_or_else(|| "?".into());
         let usize_ = p.size_uncompressed_k.map(|k| format!("{k} K")).unwrap_or_else(|| "?".into());
         let md5 = if p.md5.is_some() { "md5 ok" } else { "no md5" };
-        println!("  [{}] {}", p.repo, p.id.tag());
+        println!(
+            "  [{}] {}{}",
+            p.repo,
+            p.id.tag(),
+            if bl_frozen(cfg, &db, &installed, p) { ui::purple("  [blacklisted]") } else { String::new() }
+        );
         println!("        series: {}   compressed: {csize}   uncompressed: {usize_}   {md5}", p.series);
         if !p.description.is_empty() {
             for line in p.description.lines() {
@@ -1446,7 +1491,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     let todo: Vec<_> = matched
         .into_iter()
         .filter(|p| {
-            if cfg.is_blacklisted(&p.id.name) {
+            if bl_frozen(cfg, &db, &installed, p) {
                 frozen.push(p.id.name.clone());
                 return false;
             }
@@ -1500,7 +1545,7 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     let todo: Vec<_> = cands
         .into_iter()
         .filter(|p| {
-            if cfg.is_blacklisted(&p.id.name) {
+            if bl_frozen(cfg, &db, &installed, p) {
                 frozen.push(p.id.name.clone());
                 return false;
             }
@@ -1546,7 +1591,7 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     let todo: Vec<_> = cands
         .into_iter()
         .filter(|p| {
-            if cfg.is_blacklisted(&p.id.name) {
+            if bl_frozen(cfg, &db, &installed, p) {
                 frozen.push(p.id.name.clone());
                 return false;
             }
@@ -1605,7 +1650,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
             };
             for inst in &installed {
                 if tags.contains(inst.build_tag()) && seen.insert(inst.name.clone()) {
-                    if cfg.is_blacklisted(&inst.name) {
+                    if bl_installed(cfg, Some(db), inst) {
                         frozen.push(inst.name.clone());
                         continue;
                     }
@@ -1618,7 +1663,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
         let term = pat.split_once(':').map(|x| x.1).unwrap_or(pat);
         for inst in &installed {
             if (inst.name == term || inst.name.contains(term)) && seen.insert(inst.name.clone()) {
-                if cfg.is_blacklisted(&inst.name) {
+                if bl_installed(cfg, db.as_ref(), inst) {
                     frozen.push(inst.name.clone());
                     continue;
                 }
@@ -1735,7 +1780,7 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let mut ups = db.upgrades_for(&installed, &cfg.tag_priorities);
-    ups.retain(|u| !cfg.is_blacklisted(&u.installed.name));
+    ups.retain(|u| !bl_installed(cfg, Some(&db), &u.installed));
     if ups.is_empty() {
         println!("Everything is up to date.");
         return Ok(Outcome::Ok);
@@ -1836,7 +1881,7 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
         }
     }
     let news = db.newly_added(&new_by_repo, &installed);
-    let todo: Vec<_> = news.into_iter().filter(|p| !cfg.is_blacklisted(&p.id.name)).collect();
+    let todo: Vec<_> = news.into_iter().filter(|p| !bl_avail(cfg, p)).collect();
     if todo.is_empty() {
         println!("No new packages to install.");
         return Ok(Outcome::NothingFound);
@@ -1883,7 +1928,7 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let orphans: Vec<_> = db
         .orphans(&installed)
         .into_iter()
-        .filter(|p| !cfg.is_blacklisted(&p.name) && !cfg.is_ignored_tag(p.build_tag()))
+        .filter(|p| !bl_installed(cfg, Some(&db), p) && !cfg.is_ignored_tag(p.build_tag()))
         .collect();
     if orphans.is_empty() {
         println!("No foreign packages found.");
@@ -2447,10 +2492,13 @@ fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, 
     let names = template::load(&cfg.config_dir, name, true)?;
     let mut todo = Vec::new();
     for n in &names {
-        if system::is_installed(&installed, n) || cfg.is_blacklisted(n) {
+        if system::is_installed(&installed, n) {
             continue;
         }
         if let Some(p) = db.resolve(n) {
+            if bl_avail(cfg, p) {
+                continue;
+            }
             todo.push(p);
         } else {
             eprintln!("template package not found in repos: {n}");
@@ -2477,10 +2525,15 @@ fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, 
 
 fn cmd_remove_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
+    // Loaded so blacklist series/@repo rules can be evaluated against installed
+    // packages (whose series/source aren't recorded locally).
+    let db = PkgDb::load(cfg)?;
     let names = template::load(&cfg.config_dir, name, true)?;
     let todo: Vec<&String> = names
         .iter()
-        .filter(|n| system::is_installed(&installed, n) && !cfg.is_blacklisted(n))
+        .filter(|n| {
+            system::installed_by_name(&installed, n).map_or(false, |i| !bl_installed(cfg, Some(&db), i))
+        })
         .collect();
     if todo.is_empty() {
         println!("Nothing to remove from template '{name}'.");
@@ -2541,38 +2594,165 @@ fn cmd_delete_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, S
 
 /// Add one or more package names to the blacklist ("freeze" them so update,
 /// upgrade-all, reinstall, and clean-system leave them alone).
-fn cmd_frozen(cfg: &Config, names: &[String]) -> Result<Outcome, String> {
-    if names.is_empty() {
-        return Err("frozen: give one or more package names".into());
+/// A soft warning for a `frozen` rule that parses but is almost certainly a
+/// mistake: an `@repo` naming no active repo, or a plain regex whose pattern
+/// contains whitespace — a package id (`name-version-arch-build`) never does,
+/// so it usually means a forgotten `@` or a quoting slip. None if it looks ok.
+fn frozen_warn(raw: &str, rule: &config::BlacklistRule, active: &[&str]) -> Option<String> {
+    let q = format!("\"{raw}\"");
+    if let Some(r) = rule.repo() {
+        if !active.contains(&r) {
+            return Some(format!("{q:<22} no active repo '{r}'"));
+        }
     }
+    if let Some(pat) = rule.pattern() {
+        if pat.contains(char::is_whitespace) {
+            let first = pat.split_whitespace().next().unwrap_or("");
+            if active.contains(&first) {
+                return Some(format!(
+                    "{q:<22} looks like repo '{first}' without '@' — did you mean \"@{raw}\"?"
+                ));
+            }
+            return Some(format!("{q:<22} pattern has a space; package names never do"));
+        }
+    }
+    None
+}
+
+fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
+    if names.is_empty() {
+        return Err(
+            "frozen: give one or more rules, e.g. \"vlc\", \"kde/\", \"xf86-.*-202.*\", \"@alienbob vlc\""
+                .into(),
+        );
+    }
+    let active: Vec<&str> = cfg.repos.iter().map(|r| r.name.as_str()).collect();
+
+    // Single pre-flight pass: parse every argument and collect *all* problems
+    // (syntax errors and unknown-@repo typos) so they can be reported together,
+    // before anything is written.
+    let mut rules: Vec<(String, config::BlacklistRule)> = Vec::new();
+    let mut syntax_errs: Vec<String> = Vec::new();
+    let mut all_warns: Vec<String> = Vec::new();
+    for (idx, n) in names.iter().enumerate() {
+        let raw = n.trim().to_string();
+        match config::parse_blacklist_rule(n) {
+            Ok(rule) => {
+                if let Some(w) = frozen_warn(&raw, &rule, &active) {
+                    all_warns.push(w);
+                }
+                rules.push((raw, rule));
+            }
+            Err(e) => {
+                // Drop the leading "'raw': " the parser prepends so the batched
+                // list stays aligned, then append the unquoted-@repo hint when
+                // a bare `@repo` is followed by another argument.
+                let pfx = format!("'{raw}': ");
+                let detail = e.strip_prefix(pfx.as_str()).unwrap_or(e.as_str()).to_string();
+                let mut msg = format!("{:<22} {detail}", format!("\"{raw}\""));
+                if n.starts_with('@') && !n.contains(char::is_whitespace) {
+                    if let Some(next) = names.get(idx + 1) {
+                        msg.push_str(&format!("  (did you mean \"{n} {next}\" ?)"));
+                    }
+                }
+                syntax_errs.push(msg);
+            }
+        }
+    }
+
+    // Any syntax error is fatal: report every problem found (syntax + repo
+    // typos) so the user can fix them all in one pass, and change nothing.
+    if !syntax_errs.is_empty() {
+        let total = syntax_errs.len() + all_warns.len();
+        let mut out = format!("{total} problem(s), nothing changed:\n");
+        for s in syntax_errs.iter().chain(all_warns.iter()) {
+            out.push_str(&format!("  {s}\n"));
+        }
+        if !all_warns.is_empty() {
+            out.push_str(&format!("  active repos: {}", active.join(", ")));
+        }
+        return Err(out.trim_end().to_string());
+    }
+
+    // Load the current blacklist and drop rules already present, so the
+    // confirmation reflects exactly what will be added (not duplicates).
     let path = cfg.config_dir.join("blacklist");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut present: HashSet<String> = existing
+    let present: HashSet<String> = existing
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(String::from)
         .collect();
 
-    let mut added = Vec::new();
-    for n in names {
-        if present.insert(n.clone()) {
-            added.push(n.clone());
+    let mut to_add: Vec<(String, config::BlacklistRule)> = Vec::new();
+    let mut already: Vec<String> = Vec::new();
+    for (raw, rule) in rules {
+        if present.contains(&raw) {
+            already.push(raw);
+        } else {
+            to_add.push((raw, rule));
         }
     }
-    if added.is_empty() {
-        println!("Already frozen: {}", names.join(", "));
+    if !already.is_empty() {
+        println!(
+            "{}",
+            ui::dim(&format!("already frozen, skipping: {}", already.join(", ")))
+        );
+    }
+    if to_add.is_empty() {
+        println!("Nothing new to add — every given rule is already frozen.");
         return Ok(Outcome::Ok);
     }
+
+    // Rules that parse but look like mistakes (unknown @repo, or a regex with a
+    // space that can never match) — considered only among the ones being added.
+    let warns: Vec<String> = to_add
+        .iter()
+        .filter_map(|(raw, rule)| frozen_warn(raw, rule, &active))
+        .collect();
+    if !warns.is_empty() {
+        println!(
+            "{}",
+            ui::purple(&format!("{} rule(s) look like a mistake:", warns.len()))
+        );
+        for s in &warns {
+            println!("  {s}");
+        }
+        println!("  active repos: {}", active.join(", "));
+        if !confirm("declare them anyway?", cli.yes) {
+            println!("{}", ui::blue("aborted — nothing changed"));
+            return Ok(Outcome::Ok);
+        }
+    }
+
+    // Always confirm before writing: spell out exactly what will be frozen.
+    println!("About to add {} blacklist rule(s):", to_add.len());
+    for (i, (raw, rule)) in to_add.iter().enumerate() {
+        println!(
+            "  {}. {}  {}  {}",
+            i + 1,
+            ui::white(&format!("\"{raw}\"")),
+            ui::dim("→"),
+            rule.describe()
+        );
+    }
+    if !confirm("Add these to the blacklist?", cli.yes) {
+        println!("{}", ui::blue("aborted — nothing changed"));
+        return Ok(Outcome::Ok);
+    }
+
+    // Append the new rules.
     let mut body = existing;
     if !body.is_empty() && !body.ends_with('\n') {
         body.push('\n');
     }
-    for n in &added {
-        body.push_str(n);
+    for (raw, _) in &to_add {
+        body.push_str(raw);
         body.push('\n');
     }
     std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let added: Vec<&str> = to_add.iter().map(|(r, _)| r.as_str()).collect();
     println!("Frozen (added to blacklist): {}", added.join(", "));
     Ok(Outcome::Ok)
 }

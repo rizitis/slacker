@@ -1,4 +1,4 @@
-.TH SLACKER 8 "June 2026" "slacker 0.5.0" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.5.1" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -193,9 +193,26 @@ to delete only the template file use
 .BI delete-template " NAME"
 Delete a template file. Installed packages are not touched.
 .TP
-.BI frozen " NAME..."
-Add one or more packages to the blacklist, freezing them so that update,
-upgrade-all, reinstall, and clean-system leave them alone.
+.BI frozen " RULE..."
+Add one or more rules to the blacklist (see
+.BR FILES ).
+Each argument is a single rule; quote any rule that contains spaces (an
+.IR @repo " rule, for instance)."
+Rules are validated before being written. A bare
+.I @repo
+typed without its pattern is reported with a suggested correction. A rule that
+parses but looks like a mistake \(em an
+.I @repo
+naming no active repository, or a plain regex containing whitespace (no package
+id has spaces, so this is usually a forgotten
+.RB ` @ `
+or a quoting slip) \(em is listed together with the active repos, and you are
+asked whether to declare it anyway. Rules already present are skipped. Before
+anything is written,
+.B frozen
+prints what each rule will freeze and asks for confirmation;
+.B \-\-yes
+skips the prompts.
 .SH PRIVILEGES
 Read-only commands
 .RB ( search ", " info ", " file-search ", " check-updates ", " show-changelog )
@@ -339,7 +356,38 @@ which is filled in from the active line in
 .IR mirrors .
 .TP
 .I /etc/slacker/blacklist
-Package names that must never be installed, upgraded or removed, one per line.
+Blacklist rules, one per line (`#` comments). A rule is
+.RI [ @repo "] " PATTERN ,
+where
+.I PATTERN
+is a Slackware series when it ends in
+.RB ` / `
+(e.g.\&
+.IR kde/ ),
+otherwise an unanchored regular expression matched against the full package id
+.RI ( name\-version\-arch\-build ),
+exactly like slackpkg \(em so
+.I xf86\-.*\-202.*
+catches a 202x build and a bare
+.I vlc
+matches any id containing
+.IR vlc ;
+anchor with
+.RI ^ \&...\& $
+for an exact match. The optional
+.I @repo
+prefix scopes the rule to one repository: for an available package its candidate
+repo, for an installed package its source. An installed package that matches is
+frozen (never changed); an uninstalled match is hidden from
+.BR install\-new ,
+upgrades and
+.BR check\-updates ,
+but still shown by
+.B search
+and
+.B info
+marked
+.IR [blacklisted] .
 .TP
 .I /etc/slacker/templates/
 Generated and user\-created template files.

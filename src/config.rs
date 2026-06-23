@@ -3,7 +3,7 @@
 //!
 //!   slacker.conf   KEY=value globals (ARCH, CACHE_DIR, PKG_DB_DIR)
 //!   repos          every repo, one per line: `priority  name  url  [official]`
-//!   blacklist      one package name per line
+//!   blacklist      one rule per line: `[@repo] REGEX` or `[@repo] series/`
 //!
 //! All repos — including the official Slackware mirror — live in the single
 //! `repos` file with their priority in the same column, so the ordering is
@@ -16,6 +16,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use regex::Regex;
 
 /// One integrity/authenticity check that can be applied to a repo's packages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,7 +111,7 @@ pub struct Config {
     pub cache_dir: PathBuf,
     /// Directory holding the installed-package database.
     pub pkg_db_dir: PathBuf,
-    pub blacklist: Vec<String>,
+    pub blacklist: Vec<BlacklistRule>,
     pub repos: Vec<Repo>,
     /// Resolve .dep files and pull in dependencies (RESOLVE_DEPS, default on).
     pub resolve_deps: bool,
@@ -204,7 +206,7 @@ impl Config {
         let (repos, tag_priorities) =
             parse_repos(&read_optional(&dir.join("repos"))?, active_mirror.as_deref())?;
 
-        let blacklist = parse_lines(&read_optional(&dir.join("blacklist"))?);
+        let blacklist = parse_blacklist(&read_optional(&dir.join("blacklist"))?);
 
         let cfg = Config {
             arch,
@@ -250,8 +252,16 @@ impl Config {
         !build_tag.is_empty() && self.ignore_tags.iter().any(|t| t == build_tag)
     }
 
-    pub fn is_blacklisted(&self, name: &str) -> bool {
-        self.blacklist.iter().any(|b| b == name)
+    /// Does any blacklist rule match a package with this full id
+    /// (`name-version-arch-build`), series and source repo? `series`/`repo` may
+    /// be None when unknown, in which case series/`@repo` rules don't match.
+    pub fn blacklist_hit(&self, id: &str, series: Option<&str>, repo: Option<&str>) -> bool {
+        self.blacklist.iter().any(|r| r.matches(id, series, repo))
+    }
+
+    /// Name of the official repository, if one is configured.
+    pub fn official_repo_name(&self) -> Option<&str> {
+        self.repos.iter().find(|r| r.official).map(|r| r.name.as_str())
     }
 
     pub fn repo_by_name(&self, name: &str) -> Option<&Repo> {
@@ -360,6 +370,103 @@ fn parse_keyvals(text: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+/// One blacklist entry. Syntax: `[@repo] PATTERN`, where PATTERN is a Slackware
+/// series when it ends in `/` (e.g. `kde/`), otherwise an unanchored regular
+/// expression matched against the full package id `name-version-arch-build`,
+/// like slackpkg. The optional `@repo` prefix scopes the rule to one repo: for
+/// an available package that is its candidate repo, for an installed package
+/// its source (build tag).
+pub struct BlacklistRule {
+    repo: Option<String>,
+    series: Option<String>,
+    name: Option<Regex>,
+}
+
+impl BlacklistRule {
+    /// Match a package given its full id, series and source repo. `series`/`repo`
+    /// may be None (then series/`@repo` rules simply do not match).
+    pub fn matches(&self, id: &str, series: Option<&str>, repo: Option<&str>) -> bool {
+        if let Some(want) = &self.repo {
+            if repo != Some(want.as_str()) {
+                return false;
+            }
+        }
+        if let Some(s) = &self.series {
+            return series == Some(s.as_str());
+        }
+        match &self.name {
+            Some(re) => re.is_match(id),
+            None => false,
+        }
+    }
+
+    /// The `@repo` scope of this rule, if any.
+    pub fn repo(&self) -> Option<&str> {
+        self.repo.as_deref()
+    }
+
+    /// The regex source for a name/regex rule (None for a series rule).
+    pub fn pattern(&self) -> Option<&str> {
+        self.name.as_ref().map(|re| re.as_str())
+    }
+
+    /// A short human description of what this rule freezes.
+    pub fn describe(&self) -> String {
+        let scope = match &self.repo {
+            Some(r) => format!("in repo '{r}' only"),
+            None => "in all repos".to_string(),
+        };
+        match (&self.series, &self.name) {
+            (Some(s), _) => format!("series '{s}' {scope}"),
+            (None, Some(re)) => format!("regex /{}/ {scope}", re.as_str()),
+            (None, None) => format!("(empty rule) {scope}"),
+        }
+    }
+}
+
+/// Parse one blacklist line into a rule, returning a human-readable error on an
+/// empty pattern or an invalid regex so callers (e.g. `frozen`) can reject it.
+pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
+    let raw = line.trim().to_string();
+    let mut rest = raw.as_str();
+    let mut repo = None;
+    if let Some(after) = rest.strip_prefix('@') {
+        let mut it = after.splitn(2, char::is_whitespace);
+        let r = it.next().unwrap_or("").trim();
+        let pat = it.next().unwrap_or("").trim();
+        if r.is_empty() {
+            return Err(format!("'{raw}': missing repo name after '@'"));
+        }
+        if pat.is_empty() {
+            return Err(format!("'{raw}': '@{r}' has no pattern after it"));
+        }
+        repo = Some(r.to_string());
+        rest = pat;
+    }
+    if let Some(series) = rest.strip_suffix('/') {
+        let series = series.trim();
+        if series.is_empty() {
+            return Err(format!("'{raw}': empty series name before '/'"));
+        }
+        return Ok(BlacklistRule { repo, series: Some(series.to_string()), name: None });
+    }
+    let re = Regex::new(rest).map_err(|e| format!("'{raw}': invalid pattern: {e}"))?;
+    Ok(BlacklistRule { repo, series: None, name: Some(re) })
+}
+
+/// Parse the whole `blacklist` file, warning about and skipping any malformed
+/// line rather than aborting the load.
+fn parse_blacklist(text: &str) -> Vec<BlacklistRule> {
+    let mut out = Vec::new();
+    for line in parse_lines(text) {
+        match parse_blacklist_rule(&line) {
+            Ok(rule) => out.push(rule),
+            Err(e) => eprintln!("warning: ignoring blacklist entry {e}"),
+        }
+    }
+    out
 }
 
 /// Non-empty, non-comment lines (e.g. blacklist entries).
@@ -634,5 +741,26 @@ mod tests {
     fn blacklist_lines() {
         let b = parse_lines("# skip these\nkernel-generic\n\nkernel-huge # comment\n");
         assert_eq!(b, vec!["kernel-generic", "kernel-huge"]);
+    }
+
+    #[test]
+    fn blacklist_rules() {
+        let re = parse_blacklist_rule("xlibre.*").unwrap();
+        assert!(re.matches("xlibre-server-25.2.0-x86_64-1", Some("x"), Some("slackware")));
+        assert!(!re.matches("mesa-25-x86_64-1", Some("x"), Some("slackware")));
+
+        let ver = parse_blacklist_rule("xf86-.*-202.*").unwrap();
+        assert!(ver.matches("xf86-video-intel-20260518_931b1d93-x86_64-1", Some("x"), Some("slackware")));
+
+        let series = parse_blacklist_rule("kde/").unwrap();
+        assert!(series.matches("plasma-6-x86_64-1", Some("kde"), Some("slackware")));
+        assert!(!series.matches("plasma-6-x86_64-1", Some("ap"), Some("slackware")));
+
+        let scoped = parse_blacklist_rule("@alienbob vlc").unwrap();
+        assert!(scoped.matches("vlc-3-x86_64-1", None, Some("alienbob")));
+        assert!(!scoped.matches("vlc-3-x86_64-1", None, Some("slackware")));
+
+        assert!(parse_blacklist_rule("@alienbob").is_err());
+        assert!(parse_blacklist_rule("a[b").is_err());
     }
 }

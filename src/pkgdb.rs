@@ -69,6 +69,20 @@ impl PkgDb {
             .collect()
     }
 
+    /// The series of a package by name (first repo that lists it), if known.
+    /// Installed packages carry no series, so series blacklist rules look it up
+    /// here.
+    pub fn series_of(&self, name: &str) -> Option<&str> {
+        self.all.iter().find(|p| p.id.name == name).map(|p| p.series.as_str())
+    }
+
+    /// Which repo a (non-empty) build tag belongs to — the first repo shipping a
+    /// package with that exact tag. Used to evaluate `@repo` blacklist rules
+    /// against an installed package, whose source is recorded only as a tag.
+    pub fn repo_for_tag(&self, build_tag: &str) -> Option<&str> {
+        self.all.iter().find(|p| p.id.build_tag() == build_tag).map(|p| p.repo.as_str())
+    }
+
     /// Resolve a single name (or `repo:name`) to the winning candidate.
     pub fn resolve(&self, query: &str) -> Option<&AvailPkg> {
         let (pinned, name) = split_pin(query);
@@ -159,9 +173,9 @@ impl PkgDb {
         out
     }
 
-    /// Find the package whose name matches `term` exactly (case-insensitive),
-    /// picking the highest-priority repo if several carry it. Unlike file-search
-    /// this is an exact-name lookup: `foo` does not match `foobar`/`libfoo`.
+    /// Search names and summaries (one winner per name).
+    /// Find packages by exact name, case-insensitively (one entry per name, the
+    /// highest-priority repo winning). `info` is the place for substrings.
     pub fn search(&self, term: &str) -> Vec<&AvailPkg> {
         let needle = term.to_lowercase();
         let mut seen: HashMap<&str, &AvailPkg> = HashMap::new();
@@ -210,13 +224,9 @@ impl PkgDb {
         i32::MAX // unknown source — protect it
     }
 
-    /// Whether `candidate` may replace the installed package of the same name
-    /// without migrating it to a *lower*-priority source. Allowed when the
-    /// candidate's repo priority is >= the installed package's own source
-    /// priority (equal = a genuine self-upgrade; higher = the source
-    /// legitimately wins). A lower-priority candidate is refused. The explicit
-    /// `repo:name` pin is the deliberate override and bypasses this — that is
-    /// handled by the caller.
+    /// True if upgrading `inst` to `candidate` respects the source-priority
+    /// rule: the candidate's repo is of *equal or higher* priority than the
+    /// installed package's source, so it is not a migration to a lower repo.
     pub fn upgrade_respects_priority(
         &self,
         inst: &PkgId,
@@ -226,10 +236,9 @@ impl PkgDb {
         self.repo_priority(&candidate.repo) >= self.installed_priority(inst, tag_prios)
     }
 
-    /// True when an installed dependency is from a source of priority >= what
-    /// `candidate` (the same repo's offer) provides — so it is protected and the
-    /// dependency is considered satisfied as-is, never replaced or prompted
-    /// about. The mirror of `upgrade_respects_priority` for the dep resolver.
+    /// True if the installed package `inst` comes from a source of *higher or
+    /// equal* priority than `candidate`'s repo — i.e. the priority rule keeps
+    /// the installed one rather than replacing it with the candidate.
     pub fn installed_outranks(
         &self,
         inst: &PkgId,
@@ -280,9 +289,9 @@ impl PkgDb {
         out
     }
 
-    /// install-new: packages whose *name* is newly added to a repo since the
-    /// last update and that are not installed. `new_by_repo` maps repo name ->
-    /// the set of package names that appeared since the previous snapshot.
+    /// install-new: packages newly added to a repo since the last update that
+    /// are not installed. `new_filenames` maps repo name -> filenames that
+    /// appeared since the previous snapshot.
     pub fn newly_added<'a>(
         &'a self,
         new_by_repo: &HashMap<String, HashSet<String>>,
@@ -295,7 +304,7 @@ impl PkgDb {
             .filter(|p| {
                 new_by_repo
                     .get(&p.repo)
-                    .map_or(false, |set| set.contains(&p.id.name))
+                    .map_or(false, |set| set.contains(&p.filename))
                     && !inst_names.contains(p.id.name.as_str())
             })
             .collect();
