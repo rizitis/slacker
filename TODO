@@ -9,9 +9,4 @@
 
 - inform when a mirror is outdated (only for official)
 
-- cmd: slacker addrepo:priorityN url @name
-   - slacker addtag::priorityN _TAG
-   - slacker deltag _TAG
-   - slacker delrepo @reponame
-
 - release stable before 2034
