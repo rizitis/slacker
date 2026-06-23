@@ -1,8 +1,10 @@
 - check if its better to have glibc as crate (?)
 
-- make sure that VERIFY=gpg,md5 etc is working 100%
+!- make sure that VERIFY=gpg,md5 etc is working 100%
 
-- slacker new-config
+!- cmd: slacker search name | search for exaclty name
+
+!- slacker new-config
   - need to diff .new file in a nice format so user can make a choise, thats missiing!
 
 - ask to remove “orphan” dependencies if they are not used elsewhere (for repos that support it)
@@ -15,8 +17,6 @@
   - when was the change made
 
 - inform when a mirror is outdated
-
-- compare pkg per repo and version installed vs repo in tables
 
 - calculate total installed pkgs and list per repo (maybe inxi will help)
 

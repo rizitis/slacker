@@ -1,6 +1,6 @@
-.TH SLACKER 8 "June 2026" "slacker 0.4.1" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.4.2" "Slackware Package Management"
 .SH NAME
-slacker \- minimal and fast package manager for Slackware (slackpkg + slackpkg+ in one)
+slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
 .B slacker
 .RI [ OPTIONS ]
@@ -152,7 +152,20 @@ are never touched. Limit to named repos, or clean every repo. Asks before
 deleting and reports how much space is freed.
 .TP
 .B new-config
-Handle leftover \fI*.new\fR configuration files under /etc and /usr/share/vim.
+Reconcile leftover \fI*.new\fR configuration files under /etc and
+/usr/share/vim. For each one a coloured unified diff against the installed file
+is shown, then you choose to (K)eep both files unchanged and decide later
+(the default, nothing is deleted), (O)verwrite the installed file with the
+\fI.new\fR, (R)emove just the \fI.new\fR and keep your current file, (M)erge the
+two with an external tool, or (D)iff again. A \fI.new\fR byte-identical to the
+installed file is removed automatically. The merge tool is
+.B vimdiff
+by default and may be overridden with the
+.B SLACKER_MERGE
+environment variable. After
+.B upgrade-all
+any pending \fI.new\fR files \(em both newly installed and pre-existing \(em are
+listed with a reminder to run this command.
 .SS Templates
 .TP
 .BI generate-template " NAME"
@@ -374,6 +387,18 @@ upgraded itself and must be re\-run.
 .B 100
 There are pending updates (from
 .BR check-updates ).
+.SH ENVIRONMENT
+.TP
+.B SLACKER_MERGE
+External merge tool invoked by
+.B new-config
+for the (M)erge action, called as \fItool installed-file file.new\fR. Defaults
+to
+.BR vimdiff .
+.TP
+.B NO_COLOR
+When set (to any value), all coloured output is disabled. Colour is also
+suppressed automatically when standard output is not a terminal.
 .SH EXAMPLES
 .PP
 First\-time setup: choose a mirror in

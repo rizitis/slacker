@@ -1406,7 +1406,12 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     if !confirm("\nProceed with upgrade-all?", cli.yes) {
         return Ok(Outcome::Ok);
     }
+    let before_cfgs: HashSet<PathBuf> = newconfig::find_new_configs(&newconfig::default_roots())
+        .into_iter()
+        .map(|nc| nc.new_file)
+        .collect();
     execute_plan(cfg, &plan)?;
+    report_pending_configs(&before_cfgs);
     if self_upgrade {
         println!("slacker upgraded itself; please re-run.");
         return Ok(Outcome::SelfUpgrade);
@@ -1755,6 +1760,87 @@ fn select_packages<'a>(
         .collect()
 }
 
+/// Byte-for-byte comparison. A missing/unreadable file counts as "not
+/// identical" so the caller falls through to the interactive path.
+fn files_identical(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (std::fs::read(a), std::fs::read(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// Show a coloured unified diff between the installed file and the .new one,
+/// shelling out to the system `diff` (as slacker already does for bzip2/gpg).
+fn show_config_diff(old: &std::path::Path, new: &std::path::Path) {
+    match std::process::Command::new("diff").arg("-u").arg(old).arg(new).output() {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if text.trim().is_empty() {
+                println!("    {}", ui::dim("(no differences)"));
+                return;
+            }
+            for line in text.lines() {
+                let painted = if line.starts_with("+++") || line.starts_with("---") {
+                    ui::dim(line)
+                } else if line.starts_with("@@") {
+                    ui::cyan(line)
+                } else if line.starts_with('+') {
+                    ui::green(line)
+                } else if line.starts_with('-') {
+                    ui::red(line)
+                } else {
+                    line.to_string()
+                };
+                println!("    {painted}");
+            }
+        }
+        Err(_) => println!("    {}", ui::dim("(system `diff` not available)")),
+    }
+}
+
+/// Open an external merge tool on (installed, .new). Honours $SLACKER_MERGE,
+/// defaulting to vimdiff. Ok only if the tool ran successfully.
+fn merge_config(old: &std::path::Path, new: &std::path::Path) -> Result<(), String> {
+    let tool = std::env::var("SLACKER_MERGE").unwrap_or_else(|_| "vimdiff".to_string());
+    match std::process::Command::new(&tool).arg(old).arg(new).status() {
+        Ok(s) if s.success() => Ok(()),
+        Ok(_) => Err(format!("'{tool}' exited with an error")),
+        Err(_) => Err(format!("merge tool '{tool}' not found (set $SLACKER_MERGE)")),
+    }
+}
+
+/// After packages are applied, report pending *.new config files, separating
+/// ones created by this run from leftovers already on disk, and point at
+/// `slacker new-config`. Silent when there are none. `before` is the set of
+/// .new paths that existed prior to the operation.
+fn report_pending_configs(before: &HashSet<PathBuf>) {
+    let current = newconfig::find_new_configs(&newconfig::default_roots());
+    if current.is_empty() {
+        return;
+    }
+    let (old, fresh): (Vec<_>, Vec<_>) =
+        current.iter().partition(|nc| before.contains(&nc.new_file));
+    if !fresh.is_empty() {
+        println!(
+            "\n{}",
+            ui::blue("New configuration files were installed (your current ones were kept):")
+        );
+        for nc in &fresh {
+            println!("  {}", ui::white(&nc.new_file.display().to_string()));
+        }
+    }
+    if !old.is_empty() {
+        println!("\n{}", ui::blue("Configuration files still pending from before:"));
+        for nc in &old {
+            println!("  {}", ui::white(&nc.new_file.display().to_string()));
+        }
+    }
+    println!(
+        "\n{}",
+        ui::blue("Run `slacker new-config` to keep, overwrite, or merge them.")
+    );
+}
+
 fn cmd_new_config(cli: &Cli) -> Result<Outcome, String> {
     let found = newconfig::find_new_configs(&newconfig::default_roots());
     if found.is_empty() {
@@ -1762,38 +1848,90 @@ fn cmd_new_config(cli: &Cli) -> Result<Outcome, String> {
         return Ok(Outcome::Ok);
     }
     for nc in &found {
-        println!("\n{}", nc.new_file.display());
+        println!("\n{}", ui::white(&nc.new_file.display().to_string()));
+
+        // A .new only reaches us when the installed file exists and differs:
+        // the package's own doinst.sh moves a .new into place when there is no
+        // previous file, and removes one identical to it. So a .new with no
+        // installed counterpart should never happen; if it does, the package is
+        // most likely broken. We cannot diff or merge it, so warn loudly and
+        // leave it untouched for the user to deal with.
         if !nc.target.exists() {
-            // No original: just install the .new in place.
+            let bar = "=".repeat(66);
+            println!("{}", ui::red(&format!("  {bar}")));
+            println!("{}", ui::red("  !! WARNING: this package looks broken"));
+            println!("{}", ui::red("  !! a .new config file was installed but no previous version exists:"));
+            println!("{}{}", ui::red("  !!   "), ui::white(&nc.new_file.display().to_string()));
+            println!("{}", ui::red("  !! slacker cannot diff or merge it. Please review it manually,"));
+            println!("{}", ui::red("  !! at your own responsibility."));
+            println!("{}", ui::red(&format!("  {bar}")));
+            continue;
+        }
+
+        // Identical to the installed file: the .new is redundant, drop it.
+        if files_identical(&nc.target, &nc.new_file) {
             if cli.dry_run {
-                println!("  would install (no existing target)");
+                println!("    {}", ui::dim("identical to the installed file (would remove .new)"));
                 continue;
             }
-            if confirm("  install this new file?", cli.yes) {
-                std::fs::rename(&nc.new_file, &nc.target)
-                    .map_err(|e| format!("rename: {e}"))?;
-            }
+            std::fs::remove_file(&nc.new_file).map_err(|e| format!("remove: {e}"))?;
+            println!("    {}", ui::dim("identical to the installed file — removed redundant .new"));
             continue;
         }
+
         if cli.dry_run {
-            println!("  target exists: {}", nc.target.display());
+            println!("    {}", ui::dim(&format!("differs from {}", nc.target.display())));
             continue;
         }
-        // Keep / Overwrite / Remove .new
-        print!("  (K)eep both / (O)verwrite / (R)emove .new ? [K/o/r] ");
-        std::io::stdout().flush().ok();
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).ok();
-        match line.trim() {
-            "o" | "O" => {
-                std::fs::rename(&nc.new_file, &nc.target).map_err(|e| format!("rename: {e}"))?;
-                println!("  overwritten");
+
+        show_config_diff(&nc.target, &nc.new_file);
+        loop {
+            print!(
+                "  {} ",
+                ui::blue("[K]eep both  [O]verwrite  [R]emove .new  [M]erge  [D]iff ? [K]")
+            );
+            std::io::stdout().flush().ok();
+            let mut line = String::new();
+            if std::io::stdin().read_line(&mut line).is_err() {
+                break;
             }
-            "r" | "R" => {
-                std::fs::remove_file(&nc.new_file).map_err(|e| format!("remove: {e}"))?;
-                println!("  removed .new");
+            match line.trim().to_lowercase().as_str() {
+                "" | "k" => {
+                    println!("    {}", ui::dim("kept both — decide later"));
+                    break;
+                }
+                "o" => {
+                    std::fs::rename(&nc.new_file, &nc.target).map_err(|e| format!("rename: {e}"))?;
+                    println!("    {}", ui::dim("overwritten with the new file"));
+                    break;
+                }
+                "r" => {
+                    std::fs::remove_file(&nc.new_file).map_err(|e| format!("remove: {e}"))?;
+                    println!("    {}", ui::dim("kept your current config — removed .new"));
+                    break;
+                }
+                "m" => {
+                    match merge_config(&nc.target, &nc.new_file) {
+                        Ok(()) => {
+                            if confirm("  merge done — remove the .new file?", false) {
+                                std::fs::remove_file(&nc.new_file)
+                                    .map_err(|e| format!("remove: {e}"))?;
+                                println!("    {}", ui::dim("merged, .new removed"));
+                            } else {
+                                println!("    {}", ui::dim("merged, .new left in place"));
+                            }
+                        }
+                        Err(e) => println!("    {}", ui::red(&e)),
+                    }
+                    break;
+                }
+                "d" => {
+                    show_config_diff(&nc.target, &nc.new_file);
+                }
+                other => {
+                    println!("    {}", ui::dim(&format!("'{other}'? choose K, O, R, M or D")));
+                }
             }
-            _ => println!("  kept both"),
         }
     }
     Ok(Outcome::Ok)
