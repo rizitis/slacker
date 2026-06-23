@@ -193,6 +193,8 @@ and install-template.
 
 ---
 
+![slacker](slacker6.png)
+
 ## NOTE
 
 **slacker** status is `developing mode` and that means:
