@@ -57,7 +57,7 @@ struct Cli {
 enum Cmd {
     /// Refresh metadata from every repo. `update gpg` imports repo GPG keys.
     Update { mode: Option<String> },
-    /// Search package names and descriptions.
+    /// Find a package by its exact name (case-insensitive).
     Search { pattern: String },
     /// Find which package ships a file (uses MANIFEST).
     FileSearch { filename: String },
@@ -321,16 +321,6 @@ enum InstallAction {
     Install,
     Upgrade,
     Reinstall,
-}
-
-impl InstallAction {
-    fn verb(self) -> &'static str {
-        match self {
-            InstallAction::Install => "install",
-            InstallAction::Upgrade => "upgrade",
-            InstallAction::Reinstall => "reinstall",
-        }
-    }
 }
 
 /// One package in the resolved install plan (dependencies come before the
@@ -685,6 +675,35 @@ fn fetch_and_verify(
         download::download_to(&url, dest)?;
     }
 
+    // Track which verifications actually ran, to report them on success.
+    let mut checks: Vec<String> = Vec::new();
+
+    // Per-package GPG signature, when the policy wants gpg. Slackware repos ship
+    // a detached `<pkg>.asc` next to each package; verifying it directly is a
+    // stronger check than the md5-via-signed-CHECKSUMS chain (md5 is weak). The
+    // signature is fetched best-effort: present-and-good passes, present-and-bad
+    // is fatal, absent falls back to md5/sha unless gpg is explicitly required.
+    if policy.wants(config::Check::Gpg) {
+        let asc_url = format!("{}.asc", p.url(repo));
+        let mut asc = dest.as_os_str().to_os_string();
+        asc.push(".asc");
+        let asc = std::path::PathBuf::from(asc);
+        let _ = download::download_to(&asc_url, &asc);
+        match gpg::verify_detached(repo, &cfg.cache_dir, dest, &asc) {
+            Ok(gpg::Verify::Good(signer)) => checks.push(format!("gpg ({signer})")),
+            Ok(gpg::Verify::NoSignature) => {
+                if policy.requires(config::Check::Gpg) {
+                    return Err(verify_unavailable_error(
+                        &p.repo,
+                        config::Check::Gpg,
+                        &cfg.config_dir,
+                    ));
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
     // Integrity: md5 and/or sha. The two are alternatives — at least ONE must
     // be present and pass. Any present-and-checked hash that mismatches is
     // fatal. If a method is explicitly required (Required policy) but absent,
@@ -709,6 +728,7 @@ fn fetch_and_verify(
                         ));
                     }
                     any_checked = true;
+                    checks.push("md5".into());
                 }
                 None => {
                     if policy.requires(config::Check::Md5) {
@@ -734,6 +754,7 @@ fn fetch_and_verify(
                         ));
                     }
                     any_checked = true;
+                    checks.push("sha".into());
                 }
                 None => {
                     if policy.requires(config::Check::Sha) {
@@ -760,6 +781,12 @@ fn fetch_and_verify(
                 cfg.config_dir.join("slacker.conf").display(),
             ));
         }
+    }
+
+    if checks.is_empty() {
+        println!("  {}", ui::dim("(verification is disabled for this repo)"));
+    } else {
+        println!("  {}", ui::green(&format!("verified: {}", checks.join(" + "))));
     }
     Ok(())
 }
@@ -898,7 +925,7 @@ fn collect_installed_targets<'a>(
                     if db.upgrade_respects_priority(inst, c, tag_prios) {
                         out.push(c);
                     } else {
-                        protected.push(inst.name.clone());
+                        protected.push(kept_detail(db, inst, c, tag_prios));
                     }
                 }
             }
@@ -914,7 +941,7 @@ fn collect_installed_targets<'a>(
                     continue;
                 }
                 if !pinned && !db.upgrade_respects_priority(inst, p, tag_prios) {
-                    protected.push(p.id.name.clone());
+                    protected.push(kept_detail(db, inst, p, tag_prios));
                     continue;
                 }
                 out.push(p);
@@ -924,7 +951,111 @@ fn collect_installed_targets<'a>(
     Ok((out, protected))
 }
 
+/// One "kept (priority)" detail line, explaining why an installed package was
+/// not replaced — e.g. `webkit2gtk4.1  installed _SBo (100) — conraid (80) not
+/// applied`. Source priority alone decides; versions are never compared.
+fn kept_detail(
+    db: &PkgDb,
+    inst: &pkg::PkgId,
+    cand: &repo::AvailPkg,
+    tag_prios: &[crate::config::TagPriority],
+) -> String {
+    let tag = inst.build_tag();
+    let src = if tag.is_empty() { "official" } else { tag };
+    format!(
+        "{}  installed {} ({}) — {} ({}) not applied",
+        inst.name,
+        src,
+        db.installed_priority(inst, tag_prios),
+        cand.repo,
+        db.repo_priority(&cand.repo),
+    )
+}
+
 // ---- commands ------------------------------------------------------------
+
+/// Warn about active repos whose effective verify policy performs NO checks at
+/// all — either global `VERIFY=none` with no per-repo override, or an explicit
+/// `verify=none` on the repo line. Shown after `update` and in `check-updates`.
+fn warn_unverified_repos(cfg: &Config) {
+    let bare: Vec<&str> = cfg
+        .repos
+        .iter()
+        .filter(|r| {
+            let p = r.verify_policy(&cfg.verify);
+            !p.wants(config::Check::Gpg)
+                && !p.wants(config::Check::Md5)
+                && !p.wants(config::Check::Sha)
+        })
+        .map(|r| r.name.as_str())
+        .collect();
+    if bare.is_empty() {
+        return;
+    }
+    let who = if bare.len() == cfg.repos.len() {
+        "ALL active repos".to_string()
+    } else {
+        bare.join(", ")
+    };
+    println!(
+        "\n{}",
+        ui::purple(&format!(
+            "WARNING: verification is OFF for {who} — packages from there install completely unchecked."
+        ))
+    );
+    println!(
+        "{}",
+        ui::blue(
+            "Are you sure? For protection set VERIFY=all in slacker.conf (or verify=gpg,md5 on the \
+             repo line in repos), then run `slacker update gpg` to import keys."
+        )
+    );
+}
+
+/// Fetch one repo's metadata and run its GPG verification. On a verification
+/// failure the repo's metadata is discarded and its name pushed to `failed`,
+/// rather than aborting the whole run.
+fn update_one_repo(
+    cfg: &Config,
+    r: &config::Repo,
+    track_changelog: bool,
+    failed: &mut Vec<String>,
+) {
+    println!("Updating '{}' (priority {}):", r.name, r.priority);
+    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, track_changelog) {
+        println!("  FAILED: {e}");
+        return;
+    }
+    let policy = r.verify_policy(&cfg.verify);
+    if policy.wants(config::Check::Gpg) {
+        match gpg::verify_checksums(r, &cfg.cache_dir) {
+            Ok(gpg::Verify::Good(signer)) => println!("  GPG: good signature ({signer})"),
+            Ok(gpg::Verify::NoSignature) => {
+                if policy.requires(config::Check::Gpg) {
+                    println!(
+                        "{}",
+                        ui::red("  GPG: required signature is missing — this repo will NOT be used.")
+                    );
+                    repo::invalidate_metadata(r, &cfg.cache_dir);
+                    failed.push(r.name.clone());
+                } else {
+                    println!("  GPG: no signature provided (skipped)");
+                }
+            }
+            Err(e) => {
+                println!("{}", ui::red(&format!("  GPG: {e}")));
+                println!(
+                    "{}",
+                    ui::red("  this repo's metadata was discarded and will NOT be used.")
+                );
+                repo::invalidate_metadata(r, &cfg.cache_dir);
+                failed.push(r.name.clone());
+            }
+        }
+    } else {
+        println!("  GPG: skipped (verify policy)");
+    }
+}
 
 fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     if mode == Some("gpg") {
@@ -939,38 +1070,117 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
         return Ok(Outcome::Ok);
     }
 
-    let changelog_repo = changelog::changelog_repo(&cfg.repos).map(|r| r.name.clone());
-    for r in cfg.repos_by_priority() {
-        println!("Updating '{}' (priority {}):", r.name, r.priority);
-        let track = changelog_repo.as_deref() == Some(r.name.as_str());
-        match repo::update_repo(r, &cfg.cache_dir, track) {
-            Ok(()) => {}
-            Err(e) => {
-                println!("  FAILED: {e}");
-                continue;
-            }
-        }
-        // GPG verification, governed by this repo's verify policy.
-        let policy = r.verify_policy(&cfg.verify);
-        if policy.wants(config::Check::Gpg) {
-            match gpg::verify_checksums(r, &cfg.cache_dir) {
-                Ok(gpg::Verify::Good(signer)) => println!("  GPG: good signature ({signer})"),
-                Ok(gpg::Verify::NoSignature) => {
-                    if policy.requires(config::Check::Gpg) {
-                        return Err(verify_unavailable_error(
-                            &r.name,
-                            config::Check::Gpg,
-                            &cfg.config_dir,
-                        ));
-                    }
-                    println!("  GPG: no signature provided (skipped)");
-                }
-                Err(e) => return Err(e), // a BAD signature is always fatal
-            }
+    // ---- check phase: see which repos actually changed, without touching the
+    // cache (so unchanged repos keep their metadata, including the MANIFEST). ----
+    let repos: Vec<&config::Repo> = cfg.repos_by_priority();
+    println!("Checking repositories for updates ...");
+    let statuses: Vec<changelog::UpdateStatus> = repos
+        .iter()
+        .map(|r| changelog::check_repo_updates(*r, &cfg.cache_dir))
+        .collect();
+
+    let needs = |s: &changelog::UpdateStatus| {
+        matches!(s, changelog::UpdateStatus::Pending | changelog::UpdateStatus::Unknown)
+    };
+    let wname = repos.iter().map(|r| r.name.len()).chain(std::iter::once(10)).max().unwrap();
+
+    println!(
+        "  {}  {}  {}  {}",
+        ui::blue(&format!("{:>2}", "#")),
+        ui::blue(&format!("{:<wname$}", "Repo")),
+        ui::blue(&format!("{:>4}", "Pri")),
+        ui::blue("Status"),
+    );
+    println!("  {}", ui::dim(&"-".repeat(2 + 2 + wname + 2 + 4 + 2 + 17)));
+
+    let mut needing: Vec<&config::Repo> = Vec::new();
+    for (r, s) in repos.iter().zip(statuses.iter()) {
+        let (num, status_txt) = if needs(s) {
+            needing.push(*r);
+            let txt = match s {
+                changelog::UpdateStatus::Unknown => ui::yellow("new (will update)"),
+                _ => ui::yellow("updates available"),
+            };
+            (ui::cyan(&format!("{:>2}", needing.len())), txt)
         } else {
-            println!("  GPG: skipped (verify policy)");
-        }
+            (ui::dim(&format!("{:>2}", "-")), ui::green("up-to-date"))
+        };
+        println!(
+            "  {}  {}  {}  {}",
+            num,
+            ui::white(&format!("{:<wname$}", r.name)),
+            ui::dim(&format!("{:>4}", r.priority)),
+            status_txt,
+        );
     }
+
+    if needing.is_empty() {
+        println!("\n{}", ui::green("All up-to-date — no news is good news."));
+        warn_unverified_repos(cfg);
+        return Ok(Outcome::Ok);
+    }
+
+    // ---- selection: update many, one, or none ----
+    print!(
+        "\n{} ",
+        ui::blue(&format!(
+            "{} repo(s) have updates. Update [a]ll / numbers (e.g. 1 2) / [n]one? [a]:",
+            needing.len()
+        ))
+    );
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).ok();
+    let trimmed = line.trim();
+    let chosen: Vec<&config::Repo> = match trimmed.to_lowercase().as_str() {
+        "n" | "no" | "none" | "q" => {
+            println!("Nothing updated.");
+            return Ok(Outcome::Ok);
+        }
+        "" | "a" | "all" => needing.clone(),
+        _ => {
+            let sel = parse_selection(trimmed, needing.len());
+            if sel.is_empty() {
+                println!("Nothing selected.");
+                return Ok(Outcome::Ok);
+            }
+            needing
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| sel.contains(&(i + 1)))
+                .map(|(_, r)| *r)
+                .collect()
+        }
+    };
+
+    // ---- update phase: only the chosen repos (their stale MANIFEST is dropped
+    // by update_repo; every other repo is left untouched). ----
+    let changelog_repo = changelog::changelog_repo(&cfg.repos).map(|r| r.name.clone());
+    let mut failed_verify: Vec<String> = Vec::new();
+    println!();
+    for r in &chosen {
+        let track = changelog_repo.as_deref() == Some(r.name.as_str());
+        update_one_repo(cfg, *r, track, &mut failed_verify);
+    }
+
+    if !failed_verify.is_empty() {
+        println!(
+            "\n{}",
+            ui::red(&format!(
+                "{} repo(s) failed verification and were skipped: {}.",
+                failed_verify.len(),
+                failed_verify.join(", ")
+            ))
+        );
+        println!(
+            "{}",
+            ui::blue(
+                "If you trust one, set `verify=none` (or `verify=md5`) for it in the repos file, \
+                 or import its key with `slacker update gpg`, then run `slacker update` again."
+            )
+        );
+    }
+    warn_unverified_repos(cfg);
     Ok(Outcome::Ok)
 }
 
@@ -983,8 +1193,19 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
         return Ok(Outcome::NothingFound);
     }
     for p in results {
-        let mark = if system::is_installed(&installed, &p.id.name) { "installed" } else { "uninstalled" };
-        println!("[{}] {:<11} {}-{}  {}", p.repo, mark, p.id.name, p.id.version, p.summary);
+        let mark = if system::is_installed(&installed, &p.id.name) {
+            ui::green(&format!("{:<11}", "installed"))
+        } else {
+            ui::red(&format!("{:<11}", "uninstalled"))
+        };
+        println!(
+            "{} {} {}{}  {}",
+            ui::cyan(&format!("[{}]", p.repo)),
+            mark,
+            ui::white(&p.id.name),
+            ui::dim(&format!("-{}", p.id.version)),
+            p.summary
+        );
     }
     Ok(Outcome::Ok)
 }
@@ -1118,7 +1339,12 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     if !confirm("Proceed with installation?", cli.yes) {
         return Ok(Outcome::Ok);
     }
+    let before_cfgs: HashSet<PathBuf> = newconfig::find_new_configs(&newconfig::default_roots())
+        .into_iter()
+        .map(|nc| nc.new_file)
+        .collect();
     execute_plan(cfg, &plan)?;
+    report_pending_configs(&before_cfgs);
     Ok(Outcome::Ok)
 }
 
@@ -1159,7 +1385,12 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     if !confirm("Proceed with upgrade?", cli.yes) {
         return Ok(Outcome::Ok);
     }
+    let before_cfgs: HashSet<PathBuf> = newconfig::find_new_configs(&newconfig::default_roots())
+        .into_iter()
+        .map(|nc| nc.new_file)
+        .collect();
     execute_plan(cfg, &plan)?;
+    report_pending_configs(&before_cfgs);
     Ok(Outcome::Ok)
 }
 
@@ -1558,10 +1789,29 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
             return Ok(Outcome::Ok);
         }
         if !keep.is_empty() {
-            println!("{}", ui::blue(&format!("Keeping {} package(s); will remove {}:", keep.len(), chosen.len())));
-            for p in &chosen {
-                println!("{}{}", ui::red(&format!("  {:<9} ", "remove")), ui::white(&p.tag()));
-            }
+            println!(
+                "{}",
+                ui::blue(&format!(
+                    "Keeping {} package(s); will remove {}:",
+                    keep.len(),
+                    chosen.len()
+                ))
+            );
+            let rows: Vec<PlanRow> = chosen
+                .iter()
+                .map(|p| PlanRow {
+                    action: "remove",
+                    color: ui::red,
+                    name: p.name.clone(),
+                    version: format!("{}-{}-{}", p.version, p.arch, p.build),
+                    repo: {
+                        let t = p.build_tag();
+                        if t.is_empty() { "-".to_string() } else { t.to_string() }
+                    },
+                    note: String::new(),
+                })
+                .collect();
+            print_table(&rows);
         }
         chosen
     };
@@ -1958,6 +2208,7 @@ fn cmd_check_updates(cfg: &Config) -> Result<Outcome, String> {
         };
         println!("  {:<width$}  {label}", r.name, width = width);
     }
+    warn_unverified_repos(cfg);
     if any_pending {
         println!("\nRun `slacker update` then `slacker upgrade-all`.");
         Ok(Outcome::Pending)
@@ -2074,9 +2325,30 @@ fn cmd_remove_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, S
         println!("Nothing to remove from template '{name}'.");
         return Ok(Outcome::NothingFound);
     }
-    for n in &todo {
-        println!("{}{}", ui::red(&format!("  {:<9} ", "remove")), ui::white(n));
-    }
+    let rows: Vec<PlanRow> = todo
+        .iter()
+        .map(|n| {
+            let (version, repo) = match installed.iter().find(|i| &i.name == *n) {
+                Some(p) => (
+                    format!("{}-{}-{}", p.version, p.arch, p.build),
+                    {
+                        let t = p.build_tag();
+                        if t.is_empty() { "-".to_string() } else { t.to_string() }
+                    },
+                ),
+                None => ("-".to_string(), "-".to_string()),
+            };
+            PlanRow {
+                action: "remove",
+                color: ui::red,
+                name: (*n).clone(),
+                version,
+                repo,
+                note: String::new(),
+            }
+        })
+        .collect();
+    print_table(&rows);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);

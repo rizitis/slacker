@@ -27,8 +27,9 @@ pub enum UpdateStatus {
 
 /// Check a single repo for pending updates, working for official and external
 /// repos alike. If a ChangeLog is cached for this repo (the official one), it
-/// is compared — cheap. Otherwise the remote PACKAGES.TXT is compared against
-/// the cached copy, which works uniformly for any repo. Returns Unknown if the
+/// is compared — cheap. Otherwise the remote CHECKSUMS.md5 is compared against
+/// the cached copy: it is smaller than PACKAGES.TXT and changes whenever any
+/// package does, so it is a reliable, cheaper signal. Returns Unknown if the
 /// repo has never been updated (nothing cached to compare against).
 pub fn check_repo_updates(repo_: &Repo, cache_root: &Path) -> UpdateStatus {
     // Cheap path: compare ChangeLog when we have one cached (official repo).
@@ -44,12 +45,14 @@ pub fn check_repo_updates(repo_: &Repo, cache_root: &Path) -> UpdateStatus {
             Err(_) => UpdateStatus::Unknown,
         };
     }
-    // Uniform path: compare PACKAGES.TXT against the cached copy.
-    let cached = repo::meta_path(repo_, cache_root, repo::PACKAGES_TXT);
+    // Uniform path: compare the (smaller) CHECKSUMS.md5 against the cached copy.
+    // Every successfully-updated repo caches it, and its md5 lines change
+    // whenever any package does — a reliable signal, cheaper than PACKAGES.TXT.
+    let cached = repo::meta_path(repo_, cache_root, repo::CHECKSUMS);
     let Ok(local) = std::fs::read(&cached) else {
         return UpdateStatus::Unknown; // never updated — nothing to compare
     };
-    match download::get_bytes(&repo_.join_url(repo::PACKAGES_TXT)) {
+    match download::get_bytes(&repo_.join_url(repo::CHECKSUMS)) {
         Ok(remote) => {
             if remote == local {
                 UpdateStatus::UpToDate

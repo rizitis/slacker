@@ -91,6 +91,53 @@ pub fn verify_checksums(repo_: &Repo, cache_root: &Path) -> Result<Verify, Strin
     Err(format!("could not verify GPG signature for repo '{}'", repo_.name))
 }
 
+/// Verify an arbitrary file against a detached `.asc` signature using our
+/// keyring. Same fail-closed contract as `verify_checksums`: a BAD signature or
+/// a missing public key both return Err; a signature file that is simply not
+/// present returns Ok(NoSignature) so the caller can fall back (e.g. to md5).
+pub fn verify_detached(
+    repo_: &Repo,
+    cache_root: &Path,
+    data: &Path,
+    sig: &Path,
+) -> Result<Verify, String> {
+    if !sig.exists() {
+        return Ok(Verify::NoSignature);
+    }
+    let dir = keyring_dir(cache_root);
+    let out = Command::new("gpg")
+        .args(["--homedir", &dir.to_string_lossy(), "--batch", "--status-fd", "1", "--verify"])
+        .arg(sig)
+        .arg(data)
+        .output()
+        .map_err(|e| format!("failed to run gpg: {e}"))?;
+
+    let status = String::from_utf8_lossy(&out.stdout);
+    if status.lines().any(|l| l.starts_with("[GNUPG:] GOODSIG")) {
+        let signer = status
+            .lines()
+            .find_map(|l| l.strip_prefix("[GNUPG:] GOODSIG "))
+            .and_then(|rest| rest.splitn(2, ' ').nth(1))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| repo_.name.clone());
+        return Ok(Verify::Good(signer));
+    }
+    if status.lines().any(|l| l.starts_with("[GNUPG:] BADSIG")) {
+        return Err(format!(
+            "BAD GPG signature for {} (repo '{}') — refusing to install (possible tampering)",
+            data.display(),
+            repo_.name
+        ));
+    }
+    if status.lines().any(|l| l.starts_with("[GNUPG:] NO_PUBKEY")) {
+        return Err(format!(
+            "no public key for repo '{}' — run `slacker update gpg` first",
+            repo_.name
+        ));
+    }
+    Err(format!("could not verify GPG signature for {}", data.display()))
+}
+
 #[cfg(unix)]
 fn set_mode_700(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;

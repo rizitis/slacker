@@ -1,4 +1,4 @@
-.TH SLACKER 8 "June 2026" "slacker 0.4.2" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.4.0" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -62,10 +62,13 @@ Print version and exit.
 .SS Metadata
 .TP
 .B update \fR[\fBgpg\fR]
-Refresh metadata (PACKAGES.TXT, CHECKSUMS.md5, signatures, ChangeLog) from every
-repository. The ChangeLog is fetched only for the official repository (the one tracked by
-.BR check-updates ).
-The form
+First checks every active repository for changes (cheaply: the official repo by
+its ChangeLog, the others by comparing CHECKSUMS.md5) and prints a status table.
+If nothing has changed it stops with \fIAll up\-to\-date\fR and touches nothing.
+Otherwise it lists the repositories that have updates and lets you refresh all
+of them, a chosen subset (by number), or none. Only the repositories you pick
+are downloaded; the rest \(em including their cached MANIFEST \(em are left
+untouched. The form
 .B update gpg
 downloads and imports each repository's GPG key into a private keyring, and
 should be run once before the first
@@ -74,15 +77,19 @@ should be run once before the first
 .B check-updates
 Check every configured repository for pending updates since the last update, one
 status line per repo. The official repo is checked via its ChangeLog; external
-repos by comparing PACKAGES.TXT against the cached copy. Exits 100 if any repo
+repos by comparing CHECKSUMS.md5 against the cached copy. Exits 100 if any repo
 has updates pending.
 .TP
 .B show-changelog
 Print the cached ChangeLog.
 .SS Querying
 .TP
-.BI search " PATTERN"
-Search package names and descriptions across all repositories.
+.BI search " NAME"
+Find a package by its exact name (case-insensitive), across all repositories,
+showing the candidate from the highest-priority repo. Unlike
+.BR file-search ,
+this does not substring-match: \fIfoo\fR matches only \fIfoo\fR, not
+\fIlibfoo\fR or \fIfoobar\fR.
 .TP
 .BI file-search " FILENAME"
 Report which package ships a given file, using the repository MANIFEST. The
@@ -363,10 +370,34 @@ When a repository GPG key has been imported with
 .B slacker
 verifies CHECKSUMS.md5 against its detached signature on every
 .BR update .
-Verification is fail\-closed: a bad signature, or a missing public key, aborts
-the operation. Downloaded packages are additionally checked against their md5
-sums from the (signature\-verified) CHECKSUMS before installation. This applies
-to
+If that signature is bad or its key is missing, the repository is not aborted
+wholesale: slacker warns, discards that repo's freshly\-fetched metadata so it
+is never used unverified, and continues with the other repositories. It then
+tells you how to proceed if you trust the repo anyway (relax its
+.I verify=
+in the repos file, or import its key) and re\-run.
+.PP
+Before installation each package is checked according to the repo's policy: its
+md5 (and sha when provided) from the signature\-verified CHECKSUMS, and \(em when
+the policy includes gpg \(em its own detached
+.I .txz.asc
+signature, which most Slackware repositories ship per package. A bad per\-package
+signature is fatal. Under
+.I all
+a missing per\-package signature falls back to the checksum; under an explicit
+.I gpg
+it is required.
+.PP
+If any active repository ends up with no verification at all (global
+.B VERIFY=none
+with no per\-repo override, or an explicit
+.IR verify=none ),
+.B slacker
+prints a warning after
+.B update
+and in
+.B check-updates
+naming those repositories. This applies to
 .I file://
 repositories as well.
 .SH EXIT STATUS

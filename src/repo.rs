@@ -263,6 +263,17 @@ pub fn meta_path(repo: &Repo, cache_root: &Path, fname: &str) -> PathBuf {
     repo.cache_subdir(cache_root).join(fname)
 }
 
+/// Drop a repo's downloaded integrity metadata from the cache so unverified
+/// data can never be used. Called when GPG verification fails: the repo is
+/// treated as "not updated" until a later successful update (or relaxed
+/// verification). PACKAGES.TXT goes too, so the repo's packages fall out of the
+/// database entirely rather than risk being installed unverified.
+pub fn invalidate_metadata(repo: &Repo, cache_root: &Path) {
+    for f in [PACKAGES_TXT, CHECKSUMS, CHECKSUMS_ASC, CHECKSUMS_SHA] {
+        let _ = std::fs::remove_file(meta_path(repo, cache_root, f));
+    }
+}
+
 /// Series from a location like "./slackware64/ap/" -> "ap".
 fn series_from_location(location: &str) -> String {
     location

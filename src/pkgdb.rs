@@ -25,7 +25,7 @@ impl PkgDb {
         Ok(PkgDb { all, priority, official_priority })
     }
 
-    fn repo_priority(&self, repo: &str) -> i32 {
+    pub fn repo_priority(&self, repo: &str) -> i32 {
         *self.priority.get(repo).unwrap_or(&0)
     }
 
@@ -159,14 +159,14 @@ impl PkgDb {
         out
     }
 
-    /// Search names and summaries (one winner per name).
+    /// Find the package whose name matches `term` exactly (case-insensitive),
+    /// picking the highest-priority repo if several carry it. Unlike file-search
+    /// this is an exact-name lookup: `foo` does not match `foobar`/`libfoo`.
     pub fn search(&self, term: &str) -> Vec<&AvailPkg> {
         let needle = term.to_lowercase();
         let mut seen: HashMap<&str, &AvailPkg> = HashMap::new();
         for p in &self.all {
-            if p.id.name.to_lowercase().contains(&needle)
-                || p.summary.to_lowercase().contains(&needle)
-            {
+            if p.id.name.to_lowercase() == needle {
                 let better = match seen.get(p.id.name.as_str()) {
                     Some(e) => self.repo_priority(&p.repo) > self.repo_priority(&e.repo),
                     None => true,
@@ -189,7 +189,7 @@ impl PkgDb {
     ///      same build tag (so `cf` -> conraid, `alien` -> alienbob)
     ///   3. an empty tag (official-style `-1`) -> the official repo's priority
     ///   4. an unknown tag -> i32::MAX, i.e. never auto-replace it
-    fn installed_priority(&self, inst: &PkgId, tag_prios: &[crate::config::TagPriority]) -> i32 {
+    pub fn installed_priority(&self, inst: &PkgId, tag_prios: &[crate::config::TagPriority]) -> i32 {
         let tag = inst.build_tag();
         if let Some(tp) = tag_prios.iter().find(|t| t.tag == tag) {
             return tp.priority;
