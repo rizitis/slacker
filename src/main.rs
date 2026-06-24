@@ -149,6 +149,15 @@ enum Cmd {
     AddTag { priority: String, name: String, tag: String },
     /// Remove a build-tag priority line (by its TAG) from the `repos` file.
     DelTag { tag: String },
+    /// Re-run the safety vetting on a repo on demand (fetches metadata only).
+    /// Quarantines it if it fails, or clears a prior quarantine if it now passes.
+    VetRepo { name: String },
+    /// Trust a quarantined repo, lifting its freeze so it can be used again.
+    /// This overrides slacker's safety verdict — at your own responsibility.
+    TrustRepo { name: String },
+    /// Manually quarantine (freeze) a repo so it provides no packages until you
+    /// `trust-repo` it again.
+    DistrustRepo { name: String },
 }
 
 fn main() -> ExitCode {
@@ -211,6 +220,9 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::DelRepo { name } => cmd_del_repo(cli, &cfg, name),
         Cmd::AddTag { priority, name, tag } => cmd_add_tag(cli, &cfg, priority, name, tag),
         Cmd::DelTag { tag } => cmd_del_tag(cli, &cfg, tag),
+        Cmd::VetRepo { name } => cmd_vet_repo(&cfg, name),
+        Cmd::TrustRepo { name } => cmd_trust_repo(cli, &cfg, name),
+        Cmd::DistrustRepo { name } => cmd_distrust_repo(cli, &cfg, name),
     }
 }
 
@@ -351,6 +363,9 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::DelRepo { .. } => "del-repo",
         Cmd::AddTag { .. } => "add-tag",
         Cmd::DelTag { .. } => "del-tag",
+        Cmd::VetRepo { .. } => "vet-repo",
+        Cmd::TrustRepo { .. } => "trust-repo",
+        Cmd::DistrustRepo { .. } => "distrust-repo",
     }
 }
 
@@ -819,11 +834,34 @@ fn print_plan(plan: &[PlanItem]) {
     show_plan(plan, &[], &[]);
 }
 
+/// Build the on-disk package path, refusing any repo-supplied filename that is
+/// not a safe basename. This is the second line of defence behind the parser
+/// filter: even if a path-like filename ever reached here, slacker (as root)
+/// must never write or install through it.
+fn package_dest(cfg: &Config, repo: &str, filename: &str) -> Result<std::path::PathBuf, String> {
+    if !pkg::is_safe_filename(filename) {
+        return Err(format!(
+            "repo '{repo}' supplied an unsafe package filename {filename:?} — refusing \
+             (possible path-traversal attack)"
+        ));
+    }
+    let dest = system::cached_pkg_path(&cfg.cache_dir, repo, filename);
+    // Confirm the result really stays inside the per-repo package directory.
+    let base = cfg.cache_dir.join("packages").join(repo);
+    if dest.parent() != Some(base.as_path()) {
+        return Err(format!(
+            "refusing package path outside the cache for repo '{repo}': {}",
+            dest.display()
+        ));
+    }
+    Ok(dest)
+}
+
 /// Download, verify and install/upgrade/reinstall every item in a plan.
 fn execute_plan(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
     for it in plan {
         let r = cfg.repo_by_name(&it.pkg.repo).ok_or("internal repo lookup failed")?;
-        let dest = system::cached_pkg_path(&cfg.cache_dir, &it.pkg.repo, &it.pkg.filename);
+        let dest = package_dest(cfg, &it.pkg.repo, &it.pkg.filename)?;
         fetch_and_verify(cfg, r, &it.pkg, &dest)?;
         match it.action {
             InstallAction::Install => system::install(&dest)?,
@@ -998,8 +1036,20 @@ fn fetch_and_verify(
 
     if checks.is_empty() {
         println!("  {}", ui::dim("(verification is disabled for this repo)"));
-    } else {
+    } else if checks.iter().any(|c| c.starts_with("gpg")) {
         println!("  {}", ui::green(&format!("verified: {}", checks.join(" + "))));
+    } else {
+        // md5/sha prove the bytes match the repo's OWN checksum file, which —
+        // without a GPG signature on that file — a malicious or MITM'd repo
+        // controls too. Be honest: this is integrity, not authenticity.
+        println!(
+            "  {}",
+            ui::yellow(&format!(
+                "integrity only: {} — NOT cryptographically authenticated (no GPG signature; \
+                 enable gpg for this repo)",
+                checks.join(" + ")
+            ))
+        );
     }
     Ok(())
 }
@@ -1237,6 +1287,17 @@ fn unverified_repo_names(cfg: &Config) -> Vec<String> {
         .collect()
 }
 
+/// Repos fetched over plaintext http:// — a network attacker can rewrite their
+/// metadata and packages in transit, which (without a pinned GPG key) is the
+/// same as a malicious repo.
+fn insecure_http_repos(cfg: &Config) -> Vec<String> {
+    cfg.repos
+        .iter()
+        .filter(|r| r.url.to_ascii_lowercase().starts_with("http://"))
+        .map(|r| r.name.clone())
+        .collect()
+}
+
 fn warn_unverified_repos(cfg: &Config) {
     let bare = unverified_repo_names(cfg);
     if bare.is_empty() {
@@ -1269,15 +1330,94 @@ fn update_one_repo(
     cfg: &Config,
     r: &config::Repo,
     track_changelog: bool,
-    failed: &mut Vec<String>,
+    failed_verify: &mut Vec<String>,
+    quarantined: &mut Vec<String>,
 ) {
     println!("{}", ui::blue(&format!("Updating '{}' (priority {}):", r.name, r.priority)));
+
+    // Has this repo already been accepted (vetted, or trusted by the user)? An
+    // established repo is not re-vetted here and a transient fetch failure does
+    // NOT freeze it; an untrusted one (newly added / never vetted) is vetted now.
+    let trusted = repo::is_trusted(&cfg.cache_dir, &r.name);
+
     if let Err(e) = repo::update_repo(r, &cfg.cache_dir, track_changelog) {
-        println!("{}", ui::red(&format!("  FAILED: {e}")));
+        if trusted {
+            // Established repo: most likely a transient network problem.
+            println!("{}", ui::red(&format!("  FAILED: {e}")));
+        } else {
+            // Never-vetted repo we cannot even reach: freeze it.
+            let _ = repo::quarantine(r, &cfg.cache_dir, &format!("could not fetch metadata: {e}"));
+            println!("{}", ui::red(&format!("  FAILED: {e}")));
+            println!(
+                "{}",
+                ui::yellow(&format!(
+                    "  I do NOT trust an unreachable repo — '{}' has been FROZEN. \
+                     If it is legitimate, run `slacker trust-repo {}`.",
+                    r.name, r.name
+                ))
+            );
+            quarantined.push(r.name.clone());
+        }
         return;
     }
+
+    // A repo advertising path-traversal filenames is malicious — freeze it even
+    // if it was previously trusted.
+    let bad = malicious_filename_count(cfg, r);
+    if bad > 0 {
+        let _ = repo::quarantine(
+            r,
+            &cfg.cache_dir,
+            &format!("advertises {bad} unsafe/path-traversal filename(s) — malicious"),
+        );
+        println!(
+            "{}",
+            ui::red(&format!(
+                "  MALICIOUS: '{}' advertises {bad} path-traversal filename(s) — FROZEN and discarded.",
+                r.name
+            ))
+        );
+        quarantined.push(r.name.clone());
+        return;
+    }
+
+    // Passed the light onboarding checks (reachable, not malicious): trust it so
+    // it isn't re-vetted and a future transient failure won't freeze it.
+    if !trusted {
+        repo::mark_trusted(&cfg.cache_dir, &r.name);
+    }
+
     let policy = r.verify_policy(&cfg.verify);
     if policy.wants(config::Check::Gpg) {
+        // Self-healing TOFU: if this repo wants gpg but we have no pinned key
+        // yet (e.g. first update after enabling gpg), import+pin it now and show
+        // the fingerprint, so the user isn't forced to run `update gpg` first.
+        // A key that fetches but differs from an existing pin is refused inside
+        // import_key; a key that can't be fetched leaves verification to fail
+        // below with clear guidance.
+        if !gpg::is_pinned(&cfg.cache_dir, &r.name) {
+            match gpg::import_key(r, &cfg.cache_dir) {
+                Ok(gpg::ImportOutcome::NewlyPinned(fpr)) => {
+                    println!("  {}", ui::green("GPG: pinned key (first contact)"));
+                    println!("    {}", ui::white(&format!("fingerprint: {fpr}")));
+                    println!(
+                        "    {}",
+                        ui::yellow("verify this matches the repo's published key")
+                    );
+                }
+                Ok(gpg::ImportOutcome::AlreadyTrusted) => {}
+                Err(e) => {
+                    println!("{}", ui::red(&format!("  GPG: {e}")));
+                    println!(
+                        "{}",
+                        ui::red("  this repo's metadata was discarded and will NOT be used.")
+                    );
+                    repo::invalidate_metadata(r, &cfg.cache_dir);
+                    failed_verify.push(r.name.clone());
+                    return;
+                }
+            }
+        }
         match gpg::verify_checksums(r, &cfg.cache_dir) {
             Ok(gpg::Verify::Good(signer)) => {
                 println!("  {}", ui::green(&format!("GPG: good signature ({signer})")))
@@ -1289,7 +1429,7 @@ fn update_one_repo(
                         ui::red("  GPG: required signature is missing — this repo will NOT be used.")
                     );
                     repo::invalidate_metadata(r, &cfg.cache_dir);
-                    failed.push(r.name.clone());
+                    failed_verify.push(r.name.clone());
                 } else {
                     println!("  {}", ui::dim("GPG: no signature provided (skipped)"));
                 }
@@ -1301,7 +1441,7 @@ fn update_one_repo(
                     ui::red("  this repo's metadata was discarded and will NOT be used.")
                 );
                 repo::invalidate_metadata(r, &cfg.cache_dir);
-                failed.push(r.name.clone());
+                failed_verify.push(r.name.clone());
             }
         }
     } else {
@@ -1309,22 +1449,208 @@ fn update_one_repo(
     }
 }
 
+/// Count how many `PACKAGE NAME:` entries in a repo's cached PACKAGES.TXT carry
+/// an unsafe / path-traversal filename. A nonzero count means the repo is
+/// actively advertising the arbitrary-write attack and must not be used.
+fn malicious_filename_count(cfg: &Config, r: &config::Repo) -> usize {
+    let pkgs_path = repo::meta_path(r, &cfg.cache_dir, repo::PACKAGES_TXT);
+    match std::fs::read_to_string(&pkgs_path) {
+        Ok(text) => text
+            .lines()
+            .filter_map(|l| l.strip_prefix("PACKAGE NAME:"))
+            .map(|s| s.trim())
+            .filter(|f| !f.is_empty() && !pkg::is_safe_filename(f))
+            .count(),
+        Err(_) => 0,
+    }
+}
+
+/// Safety-vet a repo by fetching ONLY its metadata (no packages, nothing
+/// installed) and running the full set of checks. Returns the list of problems
+/// found; an empty list means the repo passed. On a clean pass the repo's key
+/// is also pinned as a side effect. This is the thorough probe used by add-repo
+/// and `vet-repo`, so an inexperienced user can't unknowingly wire in a hostile
+/// source.
+fn vet_repo(cfg: &Config, r: &config::Repo) -> Vec<String> {
+    let mut issues: Vec<String> = Vec::new();
+    let policy = r.verify_policy(&cfg.verify);
+
+    // 1. Transport: plaintext http is tamperable in flight.
+    if r.url.to_ascii_lowercase().starts_with("http://") {
+        issues.push("served over plaintext http — a network attacker could tamper with it".into());
+    }
+
+    // 2. Fetch metadata only (downloads are size-capped; no packages fetched).
+    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, r.official) {
+        issues.push(format!("could not fetch metadata: {e}"));
+        return issues; // nothing else is checkable without metadata
+    }
+
+    // 3. Scan the raw PACKAGES.TXT for path-traversal filenames. A repo that
+    //    advertises those is actively trying the arbitrary-write attack.
+    let bad = malicious_filename_count(cfg, r);
+    if bad > 0 {
+        issues.push(format!(
+            "advertises {bad} unsafe/path-traversal filename(s) — this repo is malicious"
+        ));
+    }
+
+    // 4. It must actually contain installable packages for this arch.
+    match repo::load_repo(r, &cfg.cache_dir, &cfg.arch) {
+        Ok(p) if p.is_empty() => issues.push("no usable packages found in PACKAGES.TXT".into()),
+        Ok(_) => {}
+        Err(e) => issues.push(format!("metadata unreadable: {e}")),
+    }
+
+    // 5. Authentication: unless the repo's policy explicitly relaxes to md5/none
+    //    (the user opting out of gpg), it must ship a signature that verifies
+    //    against a key we can pin. md5 alone is integrity, not authenticity.
+    if policy.wants(config::Check::Gpg) {
+        let asc = repo::meta_path(r, &cfg.cache_dir, repo::CHECKSUMS_ASC);
+        if !asc.exists() {
+            issues.push(
+                "ships no GPG signature (CHECKSUMS.md5.asc) — packages cannot be authenticated \
+                 (set verify=md5 on this repo if you accept md5-only integrity)"
+                    .into(),
+            );
+        } else {
+            if let Err(e) = gpg::import_key(r, &cfg.cache_dir) {
+                issues.push(format!("GPG key problem: {e}"));
+            }
+            match gpg::verify_checksums(r, &cfg.cache_dir) {
+                Ok(gpg::Verify::Good(_)) => {}
+                Ok(gpg::Verify::NoSignature) => {
+                    issues.push("signature file is present but empty or unreadable".into())
+                }
+                Err(e) => issues.push(format!("GPG signature does not verify: {e}")),
+            }
+        }
+    }
+
+    issues
+}
+
+/// Run the vetting probe on a repo and act on the verdict: a clean repo is
+/// trusted (and any prior quarantine lifted); a repo that fails is FROZEN
+/// (quarantined) with a clear explanation and the override command. Returns
+/// true if the repo ended up trusted.
+fn apply_vet(cfg: &Config, r: &config::Repo) -> bool {
+    println!(
+        "{}",
+        ui::blue(&format!(
+            "Vetting '{}' (safety check — fetches metadata only, installs nothing) ...",
+            r.name
+        ))
+    );
+    let issues = vet_repo(cfg, r);
+    if issues.is_empty() {
+        repo::clear_quarantine(&cfg.cache_dir, &r.name);
+        repo::mark_trusted(&cfg.cache_dir, &r.name);
+        println!(
+            "  {}",
+            ui::green("passed: metadata looks safe and verification is in order.")
+        );
+        return true;
+    }
+
+    let reason = issues.join("; ");
+    let _ = repo::quarantine(r, &cfg.cache_dir, &reason);
+    let bar = "=".repeat(66);
+    println!("{}", ui::red(&bar));
+    println!("{}", ui::red(&format!("I do NOT trust repo '{}' — it has been FROZEN (quarantined).", r.name)));
+    println!("{}", ui::dim("Reasons:"));
+    for i in &issues {
+        println!("  {}", ui::yellow(&format!("- {i}")));
+    }
+    println!("{}", ui::red("While quarantined it provides NO packages and is skipped by update."));
+    println!(
+        "{}",
+        ui::white(&format!(
+            "If you are certain you trust it, override with:  slacker trust-repo {}",
+            r.name
+        ))
+    );
+    println!("{}", ui::dim("Doing so is entirely at your own responsibility."));
+    println!("{}", ui::red(&bar));
+    false
+}
+
+/// Re-load config from disk and return an owned clone of the named repo, for
+/// commands that have just rewritten the repos file.
+fn reload_repo(cfg: &Config, name: &str) -> Result<config::Repo, String> {
+    let fresh = config::Config::load_dir(&cfg.config_dir)?;
+    fresh
+        .repo_by_name(name)
+        .cloned()
+        .ok_or_else(|| format!("internal: repo '{name}' not found after writing config"))
+}
+
 fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     if mode == Some("gpg") {
+        let mut newly = 0;
         for r in cfg.repos_by_priority() {
+            if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+                println!("{}", ui::dim(&format!("Skipping '{}' (quarantined).", r.name)));
+                continue;
+            }
             print!("Importing GPG key for '{}' ... ", r.name);
             std::io::stdout().flush().ok();
             match gpg::import_key(r, &cfg.cache_dir) {
-                Ok(()) => println!("ok"),
-                Err(e) => println!("skipped ({e})"),
+                Ok(gpg::ImportOutcome::NewlyPinned(fpr)) => {
+                    newly += 1;
+                    println!("{}", ui::green("pinned (first time)"));
+                    println!("    {}", ui::white(&format!("fingerprint: {fpr}")));
+                }
+                Ok(gpg::ImportOutcome::AlreadyTrusted) => println!("{}", ui::dim("ok (already pinned)")),
+                Err(e) => println!("{}", ui::red(&format!("skipped ({e})"))),
             }
+        }
+        if newly > 0 {
+            println!(
+                "\n{}",
+                ui::yellow(
+                    "A key was pinned for the first time. Verify each fingerprint above against \
+                     the repository's officially published key before trusting it — slacker will \
+                     refuse the repo if its key ever changes."
+                )
+            );
         }
         return Ok(Outcome::Ok);
     }
 
     // ---- check phase: see which repos actually changed, without touching the
     // cache (so unchanged repos keep their metadata, including the MANIFEST). ----
-    let repos: Vec<&config::Repo> = cfg.repos_by_priority();
+    let all_repos = cfg.repos_by_priority();
+
+    // Grandfather: a repo that already has cached metadata was accepted before
+    // this run (or by a prior slacker), so treat it as trusted. This keeps
+    // existing working repos from being re-vetted or frozen by a transient
+    // network failure on the first update; only genuinely new/unreachable repos
+    // get vetted below.
+    for r in &all_repos {
+        if !repo::is_quarantined(&cfg.cache_dir, &r.name)
+            && !repo::is_trusted(&cfg.cache_dir, &r.name)
+            && repo::meta_path(r, &cfg.cache_dir, repo::PACKAGES_TXT).exists()
+        {
+            repo::mark_trusted(&cfg.cache_dir, &r.name);
+        }
+    }
+
+    for r in &all_repos {
+        if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+            println!(
+                "{}",
+                ui::yellow(&format!(
+                    "Skipping '{}' — quarantined (run `slacker vet-repo {}` or `trust-repo {}`).",
+                    r.name, r.name, r.name
+                ))
+            );
+        }
+    }
+    let repos: Vec<&config::Repo> = all_repos
+        .into_iter()
+        .filter(|r| !repo::is_quarantined(&cfg.cache_dir, &r.name))
+        .collect();
     println!("Checking repositories for updates ...");
     let statuses: Vec<changelog::UpdateStatus> = repos
         .iter()
@@ -1409,10 +1735,11 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     // by update_repo; every other repo is left untouched). ----
     let changelog_repo = changelog::changelog_repo(&cfg.repos).map(|r| r.name.clone());
     let mut failed_verify: Vec<String> = Vec::new();
+    let mut quarantined_now: Vec<String> = Vec::new();
     println!();
     for r in &chosen {
         let track = changelog_repo.as_deref() == Some(r.name.as_str());
-        update_one_repo(cfg, *r, track, &mut failed_verify);
+        update_one_repo(cfg, *r, track, &mut failed_verify, &mut quarantined_now);
     }
 
     if !failed_verify.is_empty() {
@@ -1429,6 +1756,23 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
             ui::blue(
                 "If you trust one, set `verify=none` (or `verify=md5`) for it in the repos file, \
                  or import its key with `slacker update gpg`, then run `slacker update` again."
+            )
+        );
+    }
+    if !quarantined_now.is_empty() {
+        println!(
+            "\n{}",
+            ui::red(&format!(
+                "{} repo(s) were FROZEN this update (unreachable or unsafe): {}.",
+                quarantined_now.len(),
+                quarantined_now.join(", ")
+            ))
+        );
+        println!(
+            "{}",
+            ui::blue(
+                "If you trust one, run `slacker trust-repo NAME` to use it anyway, or \
+                 `slacker del-repo NAME` to remove it."
             )
         );
     }
@@ -1698,6 +2042,9 @@ fn cmd_list_repos(cfg: &Config) -> Result<Outcome, String> {
         if r.official {
             line.push_str(&ui::cyan("  (official)"));
         }
+        if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+            line.push_str(&ui::red("  [QUARANTINED]"));
+        }
         println!("{line}");
     }
 
@@ -1820,6 +2167,46 @@ fn cmd_status(cfg: &Config) -> Result<Outcome, String> {
         srow(&ok, "Verify", &ui::green("every repo verifies packages"));
     } else {
         srow(&warn, "Verify", &ui::yellow(&format!("OFF for: {}", unverified.join(", "))));
+    }
+
+    // Transport security
+    let insecure = insecure_http_repos(cfg);
+    if insecure.is_empty() {
+        srow(&ok, "Transport", &ui::dim("all repos use https or file"));
+    } else {
+        srow(
+            &warn,
+            "Transport",
+            &ui::yellow(&format!(
+                "plaintext http (MITM-able): {} — prefer https",
+                insecure.join(", ")
+            )),
+        );
+    }
+
+    // Quarantined repos (failed safety vetting)
+    let quarantined: Vec<&config::Repo> = cfg
+        .repos
+        .iter()
+        .filter(|r| repo::is_quarantined(&cfg.cache_dir, &r.name))
+        .collect();
+    if quarantined.is_empty() {
+        srow(&ok, "Repo trust", &ui::dim("no repos are quarantined"));
+    } else {
+        let names: Vec<String> = quarantined.iter().map(|r| r.name.clone()).collect();
+        srow(
+            &warn,
+            "Repo trust",
+            &ui::red(&format!(
+                "QUARANTINED (frozen, unused): {} — review with `slacker vet-repo NAME`, trust with `trust-repo NAME`",
+                names.join(", ")
+            )),
+        );
+        for r in &quarantined {
+            if let Some(reason) = repo::quarantine_reason(&cfg.cache_dir, &r.name) {
+                println!("             {}", ui::dim(&format!("{}: {reason}", r.name)));
+            }
+        }
     }
 
     // GPG keys — verify EMPIRICALLY. A repo is "covered" if its cached CHECKSUMS
@@ -2338,6 +2725,13 @@ fn cmd_download(
 
     for p in &matched {
         let r = cfg.repo_by_name(&p.repo).ok_or("internal repo lookup failed")?;
+        if !pkg::is_safe_filename(&p.filename) {
+            return Err(format!(
+                "repo '{}' supplied an unsafe package filename {:?} — refusing \
+                 (possible path-traversal attack)",
+                p.repo, p.filename
+            ));
+        }
         let dest = match &out_dir {
             Some(d) => d.join(&p.filename),
             None => system::cached_pkg_path(&cfg.cache_dir, &p.repo, &p.filename),
@@ -3465,13 +3859,26 @@ fn cmd_add_repo(
     }
     std::fs::write(&path, candidate).map_err(|e| format!("write {}: {e}", path.display()))?;
     println!("{}", ui::green(&format!("Added repo '{name}'.")));
+
+    // Vet it right away (the "enable" action): fetch only its metadata in a
+    // sandbox and run safety checks. A repo that fails is quarantined and the
+    // user is told plainly, with the override command.
+    let trusted = match reload_repo(cfg, name) {
+        Ok(r) => apply_vet(cfg, &r),
+        Err(e) => {
+            println!("{}", ui::yellow(&format!("(could not vet just now: {e})")));
+            true
+        }
+    };
+    if trusted {
+        println!(
+            "{}",
+            ui::blue("Run `slacker update` to refresh, then `slacker status` to review.")
+        );
+    }
     println!(
         "{}",
-        ui::blue("Next: run `slacker update` to fetch its metadata, then `slacker status` to check.")
-    );
-    println!(
-        "{}",
-        ui::dim(&format!("If something looks wrong, undo with:  slacker del-repo {name}"))
+        ui::dim(&format!("To undo entirely, remove it with:  slacker del-repo {name}"))
     );
     Ok(Outcome::Ok)
 }
@@ -3627,6 +4034,76 @@ fn cmd_del_tag(cli: &Cli, cfg: &Config, tag: &str) -> Result<Outcome, String> {
     }
     std::fs::write(&path, candidate).map_err(|e| format!("write {}: {e}", path.display()))?;
     println!("{}", ui::green(&format!("Removed tag priority '{tag}'.")));
+    Ok(Outcome::Ok)
+}
+
+fn cmd_vet_repo(cfg: &Config, name: &str) -> Result<Outcome, String> {
+    let r = cfg
+        .repo_by_name(name)
+        .ok_or_else(|| format!("no repo named '{name}' in {}", cfg.config_dir.join("repos").display()))?
+        .clone();
+    // Force a fresh verdict: drop any prior "trusted" mark so the checks run.
+    repo::unmark_trusted(&cfg.cache_dir, name);
+    apply_vet(cfg, &r);
+    Ok(Outcome::Ok)
+}
+
+fn cmd_trust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String> {
+    // Allow trusting even if the name isn't currently in repos (e.g. a stale
+    // marker), but prefer a clear error when the repo truly doesn't exist.
+    if cfg.repo_by_name(name).is_none() {
+        return Err(format!(
+            "no repo named '{name}' in {}",
+            cfg.config_dir.join("repos").display()
+        ));
+    }
+    if !repo::is_quarantined(&cfg.cache_dir, name) {
+        println!("{}", ui::dim(&format!("repo '{name}' is not quarantined — nothing to do.")));
+        return Ok(Outcome::Ok);
+    }
+    if let Some(reason) = repo::quarantine_reason(&cfg.cache_dir, name) {
+        println!("{}", ui::yellow(&format!("'{name}' was frozen because: {reason}")));
+    }
+    println!(
+        "{}",
+        ui::red("Trusting it overrides slacker's safety verdict — you accept full responsibility.")
+    );
+    if !confirm(&format!("Trust repo '{name}' and lift the freeze?"), cli.yes) {
+        println!("{}", ui::dim("aborted — repo stays quarantined"));
+        return Ok(Outcome::Ok);
+    }
+    repo::clear_quarantine(&cfg.cache_dir, name);
+    repo::mark_trusted(&cfg.cache_dir, name);
+    println!(
+        "{}",
+        ui::green(&format!("Repo '{name}' is now trusted. Run `slacker update` to fetch it."))
+    );
+    Ok(Outcome::Ok)
+}
+
+fn cmd_distrust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String> {
+    let r = cfg
+        .repo_by_name(name)
+        .ok_or_else(|| format!("no repo named '{name}' in {}", cfg.config_dir.join("repos").display()))?
+        .clone();
+    if repo::is_quarantined(&cfg.cache_dir, name) {
+        println!("{}", ui::dim(&format!("repo '{name}' is already quarantined.")));
+        return Ok(Outcome::Ok);
+    }
+    if !confirm(
+        &format!("Freeze (quarantine) repo '{name}' so it provides no packages?"),
+        cli.yes,
+    ) {
+        println!("{}", ui::dim("aborted — nothing changed"));
+        return Ok(Outcome::Ok);
+    }
+    repo::quarantine(&r, &cfg.cache_dir, "manually distrusted by the user")?;
+    println!(
+        "{}",
+        ui::green(&format!(
+            "Repo '{name}' is now quarantined. Re-enable later with:  slacker trust-repo {name}"
+        ))
+    );
     Ok(Outcome::Ok)
 }
 

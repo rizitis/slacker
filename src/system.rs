@@ -51,6 +51,9 @@ pub fn install(pkg_file: &Path) -> Result<(), String> {
 
 /// Remove an installed package by name (or tag): `removepkg`.
 pub fn remove_package(name: &str) -> Result<(), String> {
+    if name.starts_with('-') || name.contains('/') {
+        return Err(format!("refusing to remove suspicious package name {name:?}"));
+    }
     run("removepkg", &[name])
 }
 

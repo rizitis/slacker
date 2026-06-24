@@ -18,6 +18,10 @@ impl PkgDb {
         let mut all = Vec::new();
         let mut priority = HashMap::new();
         for r in &cfg.repos {
+            // A quarantined repo (failed safety vetting) is an inert source.
+            if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+                continue;
+            }
             priority.insert(r.name.clone(), r.priority);
             all.extend(repo::load_repo(r, &cfg.cache_dir, &cfg.arch)?);
         }
@@ -37,6 +41,11 @@ impl PkgDb {
         let mut missing = Vec::new();
         for r in &cfg.repos {
             priority.insert(r.name.clone(), r.priority);
+            if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+                // Inert source: contributes nothing. Reporting commands surface
+                // the quarantine separately.
+                continue;
+            }
             match repo::load_repo(r, &cfg.cache_dir, &cfg.arch) {
                 Ok(pkgs) => all.extend(pkgs),
                 Err(_) => missing.push(r.name.clone()),

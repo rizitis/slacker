@@ -62,15 +62,58 @@ fn hex_val(c: u8) -> Option<u8> {
     }
 }
 
+/// Hard ceiling for in-memory metadata fetches (PACKAGES.TXT, CHECKSUMS,
+/// ChangeLog, GPG-KEY). Far above any real file; stops a hostile repo from
+/// streaming gigabytes into memory and OOM-killing slacker (which runs as root).
+const MAX_METADATA: u64 = 512 * 1024 * 1024;
+/// Hard ceiling for a streamed download to disk (a package, MANIFEST.bz2, or
+/// the decompressed MANIFEST). Above any real artifact; stops an unbounded or
+/// disk-filling response, including a decompression bomb.
+pub const MAX_DOWNLOAD: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Copy `reader` into `writer`, aborting if more than `cap` bytes arrive.
+pub fn capped_copy<R: Read, W: std::io::Write>(
+    reader: &mut R,
+    writer: &mut W,
+    cap: u64,
+) -> Result<u64, String> {
+    let mut limited = reader.take(cap + 1);
+    let n = std::io::copy(&mut limited, writer).map_err(|e| e.to_string())?;
+    if n > cap {
+        return Err(format!(
+            "transfer exceeded the {cap}-byte safety limit — aborting (possible oversized \
+             or malicious response)"
+        ));
+    }
+    Ok(n)
+}
+
 /// Fetch a URL fully into memory (for small metadata files).
 pub fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    get_bytes_capped(url, MAX_METADATA)
+}
+
+/// Like get_bytes, but refuses anything larger than `cap` bytes.
+pub fn get_bytes_capped(url: &str, cap: u64) -> Result<Vec<u8>, String> {
     if let Some(path) = file_url_to_path(url) {
-        return std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()));
+        let data = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        if data.len() as u64 > cap {
+            return Err(format!("{} is larger than the {cap}-byte safety limit", path.display()));
+        }
+        return Ok(data);
     }
     let agent = build_agent(Duration::from_secs(60))?;
     let resp = agent.get(url).call().map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
-    resp.into_reader().read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    resp.into_reader()
+        .take(cap + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    if buf.len() as u64 > cap {
+        return Err(format!(
+            "response from {url} exceeded the {cap}-byte safety limit — aborting"
+        ));
+    }
     Ok(buf)
 }
 
@@ -105,8 +148,11 @@ pub fn download_to(url: &str, dest: &Path) -> Result<(), String> {
         let mut reader = resp.into_reader();
         let mut file = std::fs::File::create(&tmp)
             .map_err(|e| format!("create {}: {e}", tmp.display()))?;
-        std::io::copy(&mut reader, &mut file)
-            .map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        if let Err(e) = capped_copy(&mut reader, &mut file, MAX_DOWNLOAD) {
+            drop(file);
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("write {}: {e}", tmp.display()));
+        }
     }
     std::fs::rename(&tmp, dest)
         .map_err(|e| format!("rename into {}: {e}", dest.display()))?;
@@ -161,7 +207,10 @@ pub fn download_to_progress(url: &str, dest: &Path, label: &str) -> Result<(), S
         total,
         last: std::time::Instant::now(),
     };
-    std::io::copy(&mut reader, &mut writer).map_err(|e| format!("write {}: {e}", dest.display()))?;
+    if let Err(e) = capped_copy(&mut reader, &mut writer, MAX_DOWNLOAD) {
+        let _ = std::fs::remove_file(dest);
+        return Err(format!("write {}: {e}", dest.display()));
+    }
     // Final redraw + newline so the line stays put.
     print_progress(label, writer.done, total);
     println!();

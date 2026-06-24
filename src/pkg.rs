@@ -76,6 +76,36 @@ fn strip_pkg_ext(s: &str) -> &str {
     s
 }
 
+/// True if `name` is a safe, self-contained package filename: a single path
+/// component with no directory separators, no `.`/`..`, no leading `-`, and no
+/// control characters. Repo-supplied filenames are used to build cache paths
+/// and download URLs, so anything path-like (`../../etc/x`, `/etc/x`, `a/b`)
+/// MUST be rejected — otherwise a malicious or MITM'd repo could make slacker,
+/// running as root, write attacker bytes outside the cache (e.g. into
+/// /etc/cron.d), which is arbitrary code execution. This is the choke point
+/// for that class of attack and is enforced both where repo metadata is parsed
+/// and again where the on-disk path is built (defence in depth).
+pub fn is_safe_filename(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." {
+        return false;
+    }
+    if name.starts_with('-') {
+        return false; // could be mistaken for a flag by a downstream tool
+    }
+    if name.chars().any(|c| c == '/' || c == '\\' || c == '\0' || c.is_control()) {
+        return false;
+    }
+    // Must be exactly its own basename — no embedded separators of any kind.
+    std::path::Path::new(name).file_name().map(|f| f == name).unwrap_or(false)
+}
+
+/// True if a PACKAGE LOCATION (the in-repo directory, used only to build the
+/// download URL) is free of `..` traversal segments. Absolute or `..`-bearing
+/// locations are rejected so the fetch URL can't be steered off the repo.
+pub fn is_safe_location(loc: &str) -> bool {
+    !loc.split(['/', '\\']).any(|seg| seg == "..")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +160,33 @@ mod tests {
         let c = PkgId::parse("bash-5.2.21-x86_64-3").unwrap();
         assert!(a.is_other_revision_of(&b));
         assert!(!a.is_other_revision_of(&c));
+    }
+
+    #[test]
+    fn safe_filename_accepts_normal_packages() {
+        assert!(is_safe_filename("bash-5.2.21-x86_64-1.txz"));
+        assert!(is_safe_filename("xfce4-panel-4.18.6-x86_64-1_SBo.txz"));
+    }
+
+    #[test]
+    fn safe_filename_rejects_traversal_and_tricks() {
+        assert!(!is_safe_filename("../../../../etc/cron.d/x-1.0-x86_64-1.txz"));
+        assert!(!is_safe_filename("/etc/cron.d/x-1.0-x86_64-1.txz"));
+        assert!(!is_safe_filename("foo/bar-1.0-x86_64-1.txz"));
+        assert!(!is_safe_filename("a\\b-1.0-x86_64-1.txz"));
+        assert!(!is_safe_filename(".."));
+        assert!(!is_safe_filename("."));
+        assert!(!is_safe_filename(""));
+        assert!(!is_safe_filename("-rf")); // leading dash
+        assert!(!is_safe_filename("evil\u{0000}-1.0-x86_64-1.txz")); // NUL
+        assert!(!is_safe_filename("evil\n-1.0-x86_64-1.txz")); // control
+    }
+
+    #[test]
+    fn safe_location_rejects_dotdot() {
+        assert!(is_safe_location("./slackware64/l"));
+        assert!(is_safe_location("x86_64/multimedia"));
+        assert!(!is_safe_location("../../../etc"));
+        assert!(!is_safe_location("a/../../b"));
     }
 }

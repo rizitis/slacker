@@ -169,16 +169,37 @@ pub fn ensure_manifest(repo: &Repo, cache_root: &Path) -> Result<bool, String> {
         if download::download_to_progress(&url, &tmp_bz2, &label).is_err() {
             continue;
         }
-        // Decompress straight into the MANIFEST file (no big in-memory buffer).
-        let out = std::fs::File::create(&dest).map_err(|e| format!("create MANIFEST: {e}"))?;
-        let status = std::process::Command::new("bzip2")
+        // Decompress straight into the MANIFEST file, but cap the output so a
+        // bzip2 "decompression bomb" (a tiny .bz2 that expands to terabytes)
+        // can't fill the disk. Stream gpg/bzip2 stdout through a capped copy.
+        let mut child = match std::process::Command::new("bzip2")
             .arg("-dc")
             .arg(&tmp_bz2)
-            .stdout(std::process::Stdio::from(out))
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
-            .status();
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => {
+                let _ = std::fs::remove_file(&tmp_bz2);
+                continue;
+            }
+        };
+        let mut out = match std::fs::File::create(&dest) {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp_bz2);
+                return Err(format!("create MANIFEST: {e}"));
+            }
+        };
+        let copied = child
+            .stdout
+            .take()
+            .ok_or_else(|| "bzip2 produced no output".to_string())
+            .and_then(|mut s| download::capped_copy(&mut s, &mut out, download::MAX_DOWNLOAD));
+        let status = child.wait();
         let _ = std::fs::remove_file(&tmp_bz2);
-        if matches!(status, Ok(s) if s.success()) {
+        if copied.is_ok() && matches!(status, Ok(s) if s.success()) {
             println!("  MANIFEST for '{}' ready", repo.name);
             return Ok(true);
         }
@@ -297,7 +318,73 @@ pub fn invalidate_metadata(repo: &Repo, cache_root: &Path) {
     }
 }
 
-/// Series from a location like "./slackware64/ap/" -> "ap".
+/// Directory holding repo-quarantine markers.
+fn quarantine_dir(cache_root: &Path) -> PathBuf {
+    cache_root.join("quarantine")
+}
+
+fn quarantine_path(cache_root: &Path, repo_name: &str) -> PathBuf {
+    quarantine_dir(cache_root).join(repo_name)
+}
+
+/// True if a repo has been quarantined (failed safety vetting). A quarantined
+/// repo is treated as an inert source: it provides no packages and is skipped
+/// by update, until the user explicitly clears it with `trust-repo`.
+pub fn is_quarantined(cache_root: &Path, repo_name: &str) -> bool {
+    quarantine_path(cache_root, repo_name).exists()
+}
+
+/// The recorded reason a repo was quarantined (for display), if any.
+pub fn quarantine_reason(cache_root: &Path, repo_name: &str) -> Option<String> {
+    std::fs::read_to_string(quarantine_path(cache_root, repo_name)).ok()
+}
+
+/// Quarantine a repo, recording why. Its cached integrity metadata is dropped
+/// too, so nothing of it can be used while quarantined. A quarantined repo is
+/// never simultaneously "trusted".
+pub fn quarantine(repo: &Repo, cache_root: &Path, reason: &str) -> Result<(), String> {
+    let dir = quarantine_dir(cache_root);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    std::fs::write(quarantine_path(cache_root, &repo.name), reason)
+        .map_err(|e| format!("write quarantine marker: {e}"))?;
+    unmark_trusted(cache_root, &repo.name);
+    invalidate_metadata(repo, cache_root);
+    Ok(())
+}
+
+/// Lift a repo's quarantine.
+pub fn clear_quarantine(cache_root: &Path, repo_name: &str) {
+    let _ = std::fs::remove_file(quarantine_path(cache_root, repo_name));
+}
+
+/// Directory holding "vetted/trusted" markers. A repo is trusted once it has
+/// passed vetting (or the user ran `trust-repo`): update then uses it normally
+/// and a transient fetch failure does NOT quarantine it. Untrusted repos (newly
+/// added, never vetted) are vetted on first update.
+fn trusted_dir(cache_root: &Path) -> PathBuf {
+    cache_root.join("trusted")
+}
+
+fn trusted_path(cache_root: &Path, repo_name: &str) -> PathBuf {
+    trusted_dir(cache_root).join(repo_name)
+}
+
+pub fn is_trusted(cache_root: &Path, repo_name: &str) -> bool {
+    trusted_path(cache_root, repo_name).exists()
+}
+
+pub fn mark_trusted(cache_root: &Path, repo_name: &str) {
+    let dir = trusted_dir(cache_root);
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(trusted_path(cache_root, repo_name), "");
+    }
+}
+
+pub fn unmark_trusted(cache_root: &Path, repo_name: &str) {
+    let _ = std::fs::remove_file(trusted_path(cache_root, repo_name));
+}
+
+
 fn series_from_location(location: &str) -> String {
     location
         .trim_start_matches("./")
@@ -327,6 +414,11 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
                  summary: &str,
                  desc: &str| {
         if let Some(filename) = name {
+            // Reject path-like filenames/locations from the repo before they can
+            // ever reach a filesystem path or URL (see pkg::is_safe_filename).
+            if !crate::pkg::is_safe_filename(filename) || !crate::pkg::is_safe_location(loc) {
+                return;
+            }
             if let Some(id) = PkgId::parse(filename) {
                 out.push(AvailPkg {
                     id,

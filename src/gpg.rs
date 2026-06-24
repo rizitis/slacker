@@ -1,7 +1,15 @@
 //! GPG support, shelling out to the system `gpg`. We keep a private keyring
-//! under the cache dir so we never touch the user's keyring. All gpg output is
-//! captured and distilled into one clean line, while staying fail-closed: a
-//! bad signature, or a missing key, both stop the update.
+//! under the cache dir so we never touch the user's keyring.
+//!
+//! Trust model (this is the security anchor of the whole package manager):
+//! a repo serves its own GPG-KEY, so importing it proves nothing on its own —
+//! a malicious or MITM'd repo would simply serve its own key and signature.
+//! We therefore PIN the key fingerprint per repo on first import (trust on
+//! first use) and show it to the user to verify out of band. Every later
+//! verification requires the signature to come from that exact pinned
+//! fingerprint, and a key that changes is refused. This binds signer→repo and
+//! defeats both repo-supplied-key forgery (after the pin) and cross-repo
+//! signature reuse (a key pinned for one repo cannot validate another).
 
 use crate::config::Repo;
 use crate::download;
@@ -15,91 +23,151 @@ fn keyring_dir(cache_root: &Path) -> PathBuf {
     cache_root.join("gpg")
 }
 
+/// Where the pinned fingerprint(s) for a repo are stored.
+fn pin_path(cache_root: &Path, repo_name: &str) -> PathBuf {
+    keyring_dir(cache_root).join(format!("{repo_name}.fpr"))
+}
+
+fn read_pin(cache_root: &Path, repo_name: &str) -> Vec<String> {
+    match std::fs::read_to_string(pin_path(cache_root, repo_name)) {
+        Ok(s) => s
+            .lines()
+            .map(|l| l.trim().to_uppercase())
+            .filter(|l| l.len() == 40 && l.chars().all(|c| c.is_ascii_hexdigit()))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// True if a repo already has a pinned key fingerprint on record.
+pub fn is_pinned(cache_root: &Path, repo_name: &str) -> bool {
+    !read_pin(cache_root, repo_name).is_empty()
+}
+
 /// Outcome of verifying a repo's checksums signature.
 pub enum Verify {
     /// No signature file present (repo doesn't ship one).
     NoSignature,
-    /// Verified good; carries the signer's name.
+    /// Verified good against the pinned key; carries the signer's name.
     Good(String),
 }
 
-/// Download the repo's GPG-KEY and import it into our private keyring.
-/// Returns the number of keys imported (output is captured, not printed).
-pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<(), String> {
+/// Outcome of importing/pinning a repo's key.
+pub enum ImportOutcome {
+    /// First contact: this fingerprint was just pinned (user should verify it).
+    NewlyPinned(String),
+    /// The fetched key matches the already-pinned fingerprint.
+    AlreadyTrusted,
+}
+
+/// Read the fingerprint(s) contained in a key file WITHOUT importing it, using
+/// gpg's show-only mode. Reliable even if the key is already in the keyring.
+fn fingerprints_in_keyfile(dir: &Path, key_path: &Path) -> Result<Vec<String>, String> {
+    let out = Command::new("gpg")
+        .args(["--homedir", &dir.to_string_lossy(), "--batch", "--with-colons"])
+        .args(["--import-options", "show-only", "--import"])
+        .arg(key_path)
+        .output()
+        .map_err(|e| format!("failed to run gpg: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut fprs: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("fpr:") {
+            // fpr:::::::::<FINGERPRINT>:
+            let fpr = rest.trim_matches(':').to_uppercase();
+            if fpr.len() == 40 && fpr.chars().all(|c| c.is_ascii_hexdigit()) && !fprs.contains(&fpr)
+            {
+                fprs.push(fpr);
+            }
+        }
+    }
+    if fprs.is_empty() {
+        return Err("no usable public key found in the repo's GPG-KEY".into());
+    }
+    Ok(fprs)
+}
+
+/// Download the repo's GPG-KEY, read its fingerprint, and pin it (trust on
+/// first use). The key is also imported into our private keyring so gpg can
+/// later verify signatures with it. fail-closed: if a pin already exists and
+/// the fetched key's fingerprint differs, this is refused as a possible attack.
+pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, String> {
     let dir = keyring_dir(cache_root);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     set_mode_700(&dir);
 
     let url = repo_.join_url(GPG_KEY_FILE);
-    let key = download::get_bytes(&url).map_err(|e| format!("fetch {url}: {e}"))?;
+    // Cap the key download — a key is tiny; anything huge is hostile.
+    let key = download::get_bytes_capped(&url, 1 << 20).map_err(|e| format!("fetch {url}: {e}"))?;
     let key_path = dir.join(format!("{}-GPG-KEY", repo_.name));
     std::fs::write(&key_path, &key).map_err(|e| format!("write key: {e}"))?;
 
+    let fetched = fingerprints_in_keyfile(&dir, &key_path)?;
+    let pinned = read_pin(cache_root, &repo_.name);
+
+    // If we already pinned a fingerprint, the fetched key MUST match it.
+    if !pinned.is_empty() && pinned != fetched {
+        return Err(format!(
+            "the GPG key for repo '{}' CHANGED.\n  pinned:  {}\n  offered: {}\n\
+             Refusing — this can mean the repo was compromised or is being spoofed.\n\
+             If you are certain the new key is legitimate, remove the pin file\n  {}\n\
+             and run `slacker update gpg` again to re-pin (at your own responsibility).",
+            repo_.name,
+            pinned.join(", "),
+            fetched.join(", "),
+            pin_path(cache_root, &repo_.name).display(),
+        ));
+    }
+
+    // Import the key into the keyring for real (idempotent; gpg merges).
     let out = Command::new("gpg")
         .args(["--homedir", &dir.to_string_lossy(), "--batch", "--import"])
         .arg(&key_path)
         .output()
         .map_err(|e| format!("failed to run gpg: {e}"))?;
-    if out.status.success() {
-        Ok(())
+    if !out.status.success() {
+        return Err(format!("gpg --import failed for repo '{}'", repo_.name));
+    }
+
+    if pinned.is_empty() {
+        // Trust on first use: record the pin.
+        let _ = std::fs::write(pin_path(cache_root, &repo_.name), format!("{}\n", fetched.join("\n")));
+        Ok(ImportOutcome::NewlyPinned(fetched.join(", ")))
     } else {
-        Err(format!("gpg --import failed for repo '{}'", repo_.name))
+        Ok(ImportOutcome::AlreadyTrusted)
     }
 }
 
-/// Verify CHECKSUMS.md5 against CHECKSUMS.md5.asc using our keyring.
+/// Pull the VALIDSIG key fingerprints out of gpg's --status-fd output.
+fn validsig_fprs(status: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in status
+        .lines()
+        .filter_map(|l| l.strip_prefix("[GNUPG:] VALIDSIG "))
+        .flat_map(|rest| rest.split_whitespace())
+        .map(|t| t.to_uppercase())
+        .filter(|t| t.len() == 40 && t.chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        if !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    out
+}
+
+/// Run `gpg --verify sig data` and interpret the result against the repo's
+/// pinned fingerprint. Shared by both checksum and per-package verification.
 ///
-/// fail-closed: a BAD signature or a missing public key both return Err.
-/// A repo that simply ships no signature returns Ok(NoSignature).
-pub fn verify_checksums(repo_: &Repo, cache_root: &Path) -> Result<Verify, String> {
-    let sig = repo::meta_path(repo_, cache_root, repo::CHECKSUMS_ASC);
-    let data = repo::meta_path(repo_, cache_root, repo::CHECKSUMS);
-    if !sig.exists() {
-        return Ok(Verify::NoSignature);
-    }
-    let dir = keyring_dir(cache_root);
-    let out = Command::new("gpg")
-        .args(["--homedir", &dir.to_string_lossy(), "--batch", "--status-fd", "1", "--verify"])
-        .arg(&sig)
-        .arg(&data)
-        .output()
-        .map_err(|e| format!("failed to run gpg: {e}"))?;
-
-    // gpg --status-fd 1 emits machine-readable lines on stdout.
-    let status = String::from_utf8_lossy(&out.stdout);
-    if status.lines().any(|l| l.starts_with("[GNUPG:] GOODSIG")) {
-        let signer = status
-            .lines()
-            .find_map(|l| l.strip_prefix("[GNUPG:] GOODSIG "))
-            .and_then(|rest| rest.splitn(2, ' ').nth(1))
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| repo_.name.clone());
-        return Ok(Verify::Good(signer));
-    }
-    if status.lines().any(|l| l.starts_with("[GNUPG:] BADSIG")) {
-        return Err(format!(
-            "BAD GPG signature for repo '{}' — refusing to continue (possible tampering)",
-            repo_.name
-        ));
-    }
-    if status.lines().any(|l| l.starts_with("[GNUPG:] NO_PUBKEY")) {
-        return Err(format!(
-            "no public key for repo '{}' — run `slacker update gpg` first",
-            repo_.name
-        ));
-    }
-    Err(format!("could not verify GPG signature for repo '{}'", repo_.name))
-}
-
-/// Verify an arbitrary file against a detached `.asc` signature using our
-/// keyring. Same fail-closed contract as `verify_checksums`: a BAD signature or
-/// a missing public key both return Err; a signature file that is simply not
-/// present returns Ok(NoSignature) so the caller can fall back (e.g. to md5).
-pub fn verify_detached(
+/// fail-closed: a BAD signature, a missing public key, a signature from a key
+/// that is NOT the pinned one, or the absence of a pin entirely, all return
+/// Err. A signature file that is simply not present returns Ok(NoSignature) so
+/// the caller may fall back (e.g. to md5) when policy allows.
+fn verify_against_pin(
     repo_: &Repo,
     cache_root: &Path,
     data: &Path,
     sig: &Path,
+    what: &str,
 ) -> Result<Verify, String> {
     if !sig.exists() {
         return Ok(Verify::NoSignature);
@@ -111,21 +179,11 @@ pub fn verify_detached(
         .arg(data)
         .output()
         .map_err(|e| format!("failed to run gpg: {e}"))?;
-
     let status = String::from_utf8_lossy(&out.stdout);
-    if status.lines().any(|l| l.starts_with("[GNUPG:] GOODSIG")) {
-        let signer = status
-            .lines()
-            .find_map(|l| l.strip_prefix("[GNUPG:] GOODSIG "))
-            .and_then(|rest| rest.splitn(2, ' ').nth(1))
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| repo_.name.clone());
-        return Ok(Verify::Good(signer));
-    }
+
     if status.lines().any(|l| l.starts_with("[GNUPG:] BADSIG")) {
         return Err(format!(
-            "BAD GPG signature for {} (repo '{}') — refusing to install (possible tampering)",
-            data.display(),
+            "BAD GPG signature for {what} (repo '{}') — refusing (possible tampering)",
             repo_.name
         ));
     }
@@ -135,7 +193,56 @@ pub fn verify_detached(
             repo_.name
         ));
     }
-    Err(format!("could not verify GPG signature for {}", data.display()))
+    let good = status.lines().any(|l| l.starts_with("[GNUPG:] GOODSIG"));
+    if !good {
+        return Err(format!("could not verify GPG signature for {what} (repo '{}')", repo_.name));
+    }
+
+    // GOODSIG alone is not enough: the signing key must be the PINNED key.
+    let pinned = read_pin(cache_root, &repo_.name);
+    if pinned.is_empty() {
+        return Err(format!(
+            "repo '{}' has a valid signature but no pinned key — run `slacker update gpg` \
+             to pin it first (refusing to trust an unpinned key)",
+            repo_.name
+        ));
+    }
+    let signers = validsig_fprs(&status);
+    if !signers.iter().any(|s| pinned.contains(s)) {
+        return Err(format!(
+            "GPG signature for {what} (repo '{}') is from an UNPINNED key (got {}, pinned {}) — \
+             refusing (possible key-substitution attack)",
+            repo_.name,
+            if signers.is_empty() { "unknown".into() } else { signers.join(", ") },
+            pinned.join(", "),
+        ));
+    }
+
+    let signer = status
+        .lines()
+        .find_map(|l| l.strip_prefix("[GNUPG:] GOODSIG "))
+        .and_then(|rest| rest.splitn(2, ' ').nth(1))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| repo_.name.clone());
+    Ok(Verify::Good(signer))
+}
+
+/// Verify CHECKSUMS.md5 against CHECKSUMS.md5.asc using the pinned key.
+pub fn verify_checksums(repo_: &Repo, cache_root: &Path) -> Result<Verify, String> {
+    let sig = repo::meta_path(repo_, cache_root, repo::CHECKSUMS_ASC);
+    let data = repo::meta_path(repo_, cache_root, repo::CHECKSUMS);
+    verify_against_pin(repo_, cache_root, &data, &sig, "CHECKSUMS.md5")
+}
+
+/// Verify an arbitrary file against a detached `.asc` using the pinned key.
+pub fn verify_detached(
+    repo_: &Repo,
+    cache_root: &Path,
+    data: &Path,
+    sig: &Path,
+) -> Result<Verify, String> {
+    let what = data.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    verify_against_pin(repo_, cache_root, data, sig, &what)
 }
 
 #[cfg(unix)]

@@ -1,3 +1,4 @@
+Add: protection mechanism from "rogue" or tampered repositories will be put into auto-quarantine
 Fix: bug with staled changelogs on 3rd repos
 Add: slacker status
 Add: slacker list-repos + installed counts per repo
