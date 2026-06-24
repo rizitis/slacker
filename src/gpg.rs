@@ -39,17 +39,18 @@ fn read_pin(cache_root: &Path, repo_name: &str) -> Vec<String> {
     }
 }
 
-/// True if a repo already has a pinned key fingerprint on record.
-pub fn is_pinned(cache_root: &Path, repo_name: &str) -> bool {
-    !read_pin(cache_root, repo_name).is_empty()
-}
-
-/// Outcome of verifying a repo's checksums signature.
+/// Outcome of verifying a repo's checksums signature against the pinned key.
 pub enum Verify {
     /// No signature file present (repo doesn't ship one).
     NoSignature,
     /// Verified good against the pinned key; carries the signer's name.
     Good(String),
+    /// A signature is present but HOSTILE: a bad signature, or one made by a key
+    /// that is not the pinned key (key-substitution). Always fatal.
+    Tampered(String),
+    /// A signature is present but cannot be checked (no public key, or no pin).
+    /// Not necessarily hostile — under a best-effort policy we fall back to md5.
+    Unverifiable(String),
 }
 
 /// Outcome of importing/pinning a repo's key.
@@ -58,6 +59,24 @@ pub enum ImportOutcome {
     NewlyPinned(String),
     /// The fetched key matches the already-pinned fingerprint.
     AlreadyTrusted,
+}
+
+/// Why importing/pinning a key failed.
+pub enum ImportError {
+    /// The repo now serves a DIFFERENT key than the one pinned — possible
+    /// compromise/spoof. Always treated as hostile.
+    KeyChanged(String),
+    /// Anything else (key not served, unreadable, gpg error). Not by itself
+    /// proof of tampering.
+    Other(String),
+}
+
+impl ImportError {
+    pub fn message(&self) -> &str {
+        match self {
+            ImportError::KeyChanged(m) | ImportError::Other(m) => m,
+        }
+    }
 }
 
 /// Read the fingerprint(s) contained in a key file WITHOUT importing it, using
@@ -91,23 +110,25 @@ fn fingerprints_in_keyfile(dir: &Path, key_path: &Path) -> Result<Vec<String>, S
 /// first use). The key is also imported into our private keyring so gpg can
 /// later verify signatures with it. fail-closed: if a pin already exists and
 /// the fetched key's fingerprint differs, this is refused as a possible attack.
-pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, String> {
+pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, ImportError> {
     let dir = keyring_dir(cache_root);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ImportError::Other(format!("mkdir {}: {e}", dir.display())))?;
     set_mode_700(&dir);
 
     let url = repo_.join_url(GPG_KEY_FILE);
     // Cap the key download — a key is tiny; anything huge is hostile.
-    let key = download::get_bytes_capped(&url, 1 << 20).map_err(|e| format!("fetch {url}: {e}"))?;
+    let key = download::get_bytes_capped(&url, 1 << 20)
+        .map_err(|e| ImportError::Other(format!("fetch {url}: {e}")))?;
     let key_path = dir.join(format!("{}-GPG-KEY", repo_.name));
-    std::fs::write(&key_path, &key).map_err(|e| format!("write key: {e}"))?;
+    std::fs::write(&key_path, &key).map_err(|e| ImportError::Other(format!("write key: {e}")))?;
 
-    let fetched = fingerprints_in_keyfile(&dir, &key_path)?;
+    let fetched = fingerprints_in_keyfile(&dir, &key_path).map_err(ImportError::Other)?;
     let pinned = read_pin(cache_root, &repo_.name);
 
     // If we already pinned a fingerprint, the fetched key MUST match it.
     if !pinned.is_empty() && pinned != fetched {
-        return Err(format!(
+        return Err(ImportError::KeyChanged(format!(
             "the GPG key for repo '{}' CHANGED.\n  pinned:  {}\n  offered: {}\n\
              Refusing — this can mean the repo was compromised or is being spoofed.\n\
              If you are certain the new key is legitimate, remove the pin file\n  {}\n\
@@ -116,7 +137,7 @@ pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, Stri
             pinned.join(", "),
             fetched.join(", "),
             pin_path(cache_root, &repo_.name).display(),
-        ));
+        )));
     }
 
     // Import the key into the keyring for real (idempotent; gpg merges).
@@ -124,9 +145,9 @@ pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, Stri
         .args(["--homedir", &dir.to_string_lossy(), "--batch", "--import"])
         .arg(&key_path)
         .output()
-        .map_err(|e| format!("failed to run gpg: {e}"))?;
+        .map_err(|e| ImportError::Other(format!("failed to run gpg: {e}")))?;
     if !out.status.success() {
-        return Err(format!("gpg --import failed for repo '{}'", repo_.name));
+        return Err(ImportError::Other(format!("gpg --import failed for repo '{}'", repo_.name)));
     }
 
     if pinned.is_empty() {
@@ -182,40 +203,42 @@ fn verify_against_pin(
     let status = String::from_utf8_lossy(&out.stdout);
 
     if status.lines().any(|l| l.starts_with("[GNUPG:] BADSIG")) {
-        return Err(format!(
-            "BAD GPG signature for {what} (repo '{}') — refusing (possible tampering)",
+        return Ok(Verify::Tampered(format!(
+            "BAD GPG signature for {what} (repo '{}')",
             repo_.name
-        ));
+        )));
     }
     if status.lines().any(|l| l.starts_with("[GNUPG:] NO_PUBKEY")) {
-        return Err(format!(
-            "no public key for repo '{}' — run `slacker update gpg` first",
+        return Ok(Verify::Unverifiable(format!(
+            "no public key for repo '{}' — run `slacker update gpg`",
             repo_.name
-        ));
+        )));
     }
     let good = status.lines().any(|l| l.starts_with("[GNUPG:] GOODSIG"));
     if !good {
-        return Err(format!("could not verify GPG signature for {what} (repo '{}')", repo_.name));
+        return Ok(Verify::Unverifiable(format!(
+            "could not verify GPG signature for {what} (repo '{}')",
+            repo_.name
+        )));
     }
 
     // GOODSIG alone is not enough: the signing key must be the PINNED key.
     let pinned = read_pin(cache_root, &repo_.name);
     if pinned.is_empty() {
-        return Err(format!(
-            "repo '{}' has a valid signature but no pinned key — run `slacker update gpg` \
-             to pin it first (refusing to trust an unpinned key)",
+        return Ok(Verify::Unverifiable(format!(
+            "repo '{}' has a signature but no pinned key yet — run `slacker update gpg`",
             repo_.name
-        ));
+        )));
     }
     let signers = validsig_fprs(&status);
     if !signers.iter().any(|s| pinned.contains(s)) {
-        return Err(format!(
-            "GPG signature for {what} (repo '{}') is from an UNPINNED key (got {}, pinned {}) — \
-             refusing (possible key-substitution attack)",
+        return Ok(Verify::Tampered(format!(
+            "signature for {what} (repo '{}') is from an UNPINNED key (got {}, pinned {}) — \
+             possible key-substitution attack",
             repo_.name,
             if signers.is_empty() { "unknown".into() } else { signers.join(", ") },
             pinned.join(", "),
-        ));
+        )));
     }
 
     let signer = status

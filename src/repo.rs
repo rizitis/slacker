@@ -328,24 +328,61 @@ fn quarantine_path(cache_root: &Path, repo_name: &str) -> PathBuf {
 }
 
 /// True if a repo has been quarantined (failed safety vetting). A quarantined
-/// repo is treated as an inert source: it provides no packages and is skipped
-/// by update, until the user explicitly clears it with `trust-repo`.
+/// repo is treated as an inert source: it provides no packages, until it is
+/// cleared. SOFT quarantine (unreachable) is retried automatically by the next
+/// update; HARD quarantine (malicious / bad signature / manual distrust) stays
+/// until the user runs `trust-repo`.
 pub fn is_quarantined(cache_root: &Path, repo_name: &str) -> bool {
     quarantine_path(cache_root, repo_name).exists()
 }
 
-/// The recorded reason a repo was quarantined (for display), if any.
-pub fn quarantine_reason(cache_root: &Path, repo_name: &str) -> Option<String> {
-    std::fs::read_to_string(quarantine_path(cache_root, repo_name)).ok()
+/// Whether a quarantine is "soft" (unreachable, auto-retried) or "hard"
+/// (actively distrusted, needs explicit `trust-repo`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum QuarantineKind {
+    Soft,
+    Hard,
 }
 
-/// Quarantine a repo, recording why. Its cached integrity metadata is dropped
-/// too, so nothing of it can be used while quarantined. A quarantined repo is
-/// never simultaneously "trusted".
-pub fn quarantine(repo: &Repo, cache_root: &Path, reason: &str) -> Result<(), String> {
+/// Parse a quarantine marker: first line is the kind tag, the rest is the
+/// human-readable reason. Markers without a recognised tag are treated as soft.
+fn read_quarantine(cache_root: &Path, repo_name: &str) -> Option<(QuarantineKind, String)> {
+    let raw = std::fs::read_to_string(quarantine_path(cache_root, repo_name)).ok()?;
+    let mut it = raw.splitn(2, '\n');
+    let kind = match it.next().unwrap_or("").trim() {
+        "hard" => QuarantineKind::Hard,
+        _ => QuarantineKind::Soft,
+    };
+    let reason = it.next().unwrap_or("").trim().to_string();
+    Some((kind, reason))
+}
+
+/// True only for a HARD quarantine (the next update will NOT auto-retry it).
+pub fn is_hard_quarantined(cache_root: &Path, repo_name: &str) -> bool {
+    matches!(read_quarantine(cache_root, repo_name), Some((QuarantineKind::Hard, _)))
+}
+
+/// The recorded reason a repo was quarantined (for display), if any.
+pub fn quarantine_reason(cache_root: &Path, repo_name: &str) -> Option<String> {
+    read_quarantine(cache_root, repo_name).map(|(_, r)| r)
+}
+
+/// Quarantine a repo, recording the kind and why. Its cached integrity metadata
+/// is dropped too, so nothing of it can be used while quarantined. A quarantined
+/// repo is never simultaneously "trusted".
+pub fn quarantine(
+    repo: &Repo,
+    cache_root: &Path,
+    kind: QuarantineKind,
+    reason: &str,
+) -> Result<(), String> {
     let dir = quarantine_dir(cache_root);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
-    std::fs::write(quarantine_path(cache_root, &repo.name), reason)
+    let tag = match kind {
+        QuarantineKind::Soft => "soft",
+        QuarantineKind::Hard => "hard",
+    };
+    std::fs::write(quarantine_path(cache_root, &repo.name), format!("{tag}\n{reason}"))
         .map_err(|e| format!("write quarantine marker: {e}"))?;
     unmark_trusted(cache_root, &repo.name);
     invalidate_metadata(repo, cache_root);
