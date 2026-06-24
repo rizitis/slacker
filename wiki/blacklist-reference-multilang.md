@@ -30,6 +30,21 @@ che il pacchetto selezionato sia installato o no:
   `install-new`, dagli aggiornamenti e da `check-updates`. Compare ancora in
   `search` e `info`, contrassegnato con `[blacklisted]`.
 
+## Tenere un pacchetto fuori da clean-system
+
+Congelare un pacchetto con la blacklist è **uno dei tre** modi per tenerlo fuori
+da `clean-system`, che rimuove i pacchetti non più presenti nella base ufficiale
+(il `PACKAGES.TXT` ufficiale più ogni repo marcato `immutable`):
+
+- una regola di **blacklist** — per singolo pacchetto (questo file);
+- il suo **build tag** in `IGNORE_TAGS` (in `slacker.conf`), es. `_SBo cf alien`;
+- il suo repo marcato **`immutable`** in `repos`, che mantiene ogni pacchetto
+  attribuito a quel repo.
+
+Per un intero subtree di Slackware (`extra/`, `testing/`, `patches/`) è
+preferibile marcare il repo come `immutable` invece di mettere in blacklist ogni
+pacchetto a mano.
+
 ## Sintassi delle regole
 
 Ogni voce è una regola:
@@ -242,6 +257,20 @@ regola.
 - Не установлен и попал под правило: пакет **скрыт** из `install-new`, из
   обновлений и из `check-updates`. Он по-прежнему виден в `search` и `info` с
   пометкой `[blacklisted]`.
+
+## Как уберечь пакет от clean-system
+
+Заморозка пакета чёрным списком — **один из трёх** способов уберечь его от
+`clean-system`, который удаляет пакеты, отсутствующие в официальной базе
+(официальный `PACKAGES.TXT` плюс любой репозиторий, помеченный `immutable`):
+
+- правило **чёрного списка** — для отдельного пакета (этот файл);
+- его **build-тег** в `IGNORE_TAGS` (в `slacker.conf`), напр. `_SBo cf alien`;
+- его репозиторий, помеченный **`immutable`** в `repos`, — это сохраняет все
+  пакеты, относимые к этому репозиторию.
+
+Для целого subtree Slackware (`extra/`, `testing/`, `patches/`) лучше пометить
+репозиторий как `immutable`, чем вносить каждый пакет в чёрный список вручную.
 
 ## Синтаксис правил
 
@@ -457,6 +486,22 @@ paquete seleccionado está instalado:
   las actualizaciones y en `check-updates`. Sigue apareciendo en `search` e
   `info`, marcado con `[blacklisted]`.
 
+## Mantener un paquete fuera de clean-system
+
+Congelar un paquete con la lista negra es **una de tres** formas de mantenerlo
+fuera de `clean-system`, que elimina los paquetes que ya no están en la base
+oficial (el `PACKAGES.TXT` oficial más cualquier repositorio marcado
+`immutable`):
+
+- una regla de **lista negra** — por paquete (este archivo);
+- su **build tag** en `IGNORE_TAGS` (en `slacker.conf`), p. ej. `_SBo cf alien`;
+- su repositorio marcado **`immutable`** en `repos`, que conserva todos los
+  paquetes atribuidos a ese repositorio.
+
+Para todo un subtree de Slackware (`extra/`, `testing/`, `patches/`) es
+preferible marcar el repositorio como `immutable` en lugar de poner cada paquete
+en la lista negra a mano.
+
 ## Sintaxis de las reglas
 
 Cada entrada es una regla:
@@ -663,6 +708,18 @@ regla.
 - 未安装且被匹配：该包在 `install-new`、升级以及 `check-updates` 中被**隐藏**。它仍会
   出现在 `search` 和 `info` 中，并标记为 `[blacklisted]`。
 
+## 让软件包不被 clean-system 删除
+
+用黑名单冻结软件包，是让它**不被 `clean-system` 删除的三种方法之一**。`clean-system`
+会删除不在官方基准中的软件包（官方 `PACKAGES.TXT` 加上任何标记为 `immutable` 的仓库）：
+
+- 一条**黑名单**规则 —— 针对单个软件包（本文件）；
+- 把它的 **build tag** 写入 `IGNORE_TAGS`（在 `slacker.conf` 中），例如 `_SBo cf alien`；
+- 把它所属的仓库在 `repos` 中标记为 **`immutable`**，这样归属该仓库的所有软件包都会被保留。
+
+对于整个 Slackware 子树仓库（`extra/`、`testing/`、`patches/`），建议把该仓库标记为
+`immutable`，而不是逐个把软件包加入黑名单。
+
 ## 规则语法
 
 每一条记录就是一条规则：
@@ -858,6 +915,21 @@ paquet sélectionné soit installé ou non :
 - Non installé et sélectionné : le paquet est **masqué** dans `install-new`,
   dans les mises à jour et dans `check-updates`. Il apparaît toujours dans
   `search` et `info`, marqué `[blacklisted]`.
+
+## Garder un paquet hors de clean-system
+
+Geler un paquet avec la blacklist est **l'une des trois** façons de le garder
+hors de `clean-system`, qui supprime les paquets ne faisant plus partie de la
+base officielle (le `PACKAGES.TXT` officiel plus tout dépôt marqué `immutable`) :
+
+- une règle de **blacklist** — par paquet (ce fichier) ;
+- son **build tag** dans `IGNORE_TAGS` (dans `slacker.conf`), p. ex. `_SBo cf alien` ;
+- son dépôt marqué **`immutable`** dans `repos`, ce qui conserve tous les paquets
+  attribués à ce dépôt.
+
+Pour tout un sous-arbre Slackware (`extra/`, `testing/`, `patches/`), préférez
+marquer le dépôt comme `immutable` plutôt que de mettre chaque paquet en
+blacklist à la main.
 
 ## Syntaxe des règles
 

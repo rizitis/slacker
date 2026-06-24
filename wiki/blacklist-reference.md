@@ -16,6 +16,20 @@ package is installed:
   from upgrades, and from `check-updates`. It is still shown by `search` and
   `info`, marked `[blacklisted]`.
 
+## Keeping a package out of clean-system
+
+Freezing a package with the blacklist is **one of three** ways to keep it out of
+`clean-system`, which removes packages no longer in the official baseline (the
+official `PACKAGES.TXT` plus any repo marked `immutable`):
+
+- a **blacklist** rule — per package (this file);
+- its **build tag** in `IGNORE_TAGS` (in `slacker.conf`), e.g. `_SBo cf alien`;
+- its repo marked **`immutable`** in `repos`, which keeps every package
+  attributed to that repo.
+
+For a whole Slackware subtree repo (`extra/`, `testing/`, `patches/`) prefer
+marking the repo `immutable` over blacklisting each package by hand.
+
 ## Rule syntax
 
 Every entry is one rule:
