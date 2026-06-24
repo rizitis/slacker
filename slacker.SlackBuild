@@ -76,7 +76,7 @@ install -m0755 target/debug/slacker $PKG/usr/local/sbin/slacker
 
 # docs
 mkdir -p $PKG/usr/doc/$PRGNAM-$VERSION/examples
-install -m0644 README.md $PKG/usr/doc/$PRGNAM-$VERSION/
+install -m0644 README.md NEWS $PKG/usr/doc/$PRGNAM-$VERSION/
 cp -R wiki $PKG/usr/doc/$PRGNAM-$VERSION/
 install -m0644 examples/etc-slacker/"$DIR"/* $PKG/usr/doc/$PRGNAM-$VERSION/examples/
 cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild

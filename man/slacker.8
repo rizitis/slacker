@@ -1,4 +1,4 @@
-.TH SLACKER 8 "June 2026" "slacker 0.5.1" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.6.0" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -156,12 +156,29 @@ that introduces a brand\-new \fIlibfoo\fR to the distribution,
 offers \fIlibfoo\fR, but it never offers \fIemacs\fR just because you removed it.
 .TP
 .B clean-system
-List installed packages that exist in no configured repository (third\-party or
-removed packages) in a numbered table, then let you choose which to remove: type
-numbers to keep, press Enter to remove all, or cancel. Blacklisted packages, and packages
-whose build tag is listed in
-.B IGNORE_TAGS
-(SBo source builds, your own builds, etc.), are never listed or removed. With
+List installed packages that are no longer part of the official distribution
+\(em packages absent from the baseline (the official repo's
+.I PACKAGES.TXT
+plus any repo marked
+.BR immutable )
+\(em in a numbered table, then let you choose which to remove: type numbers to
+keep, press Enter to remove all, or cancel. This is slackpkg behaviour: a
+package the distribution itself dropped is removed even if some third\-party
+repo still ships the name. A package is kept (never listed) when any of three
+things is true: it is matched by a
+.B blacklist
+rule; its build tag is listed in
+.BR IGNORE_TAGS ;
+or it is attributed to an
+.B immutable
+repository (for a tagged package, the repo that owns its build tag; for a
+tagless one, any immutable repo that provides its name). Use these to protect
+SBo/local builds and packages from
+.IR extra/ ", " testing/ ", " patches/
+that you keep installed. As a safety guard slacker refuses to run if a baseline
+repo has no metadata loaded (run
+.B update
+first). With
 .B \-\-yes
 all listed packages are removed.
 .TP
@@ -224,6 +241,61 @@ anything is written,
 prints what each rule will freeze and asks for confirmation;
 .B \-\-yes
 skips the prompts.
+.SS Repositories
+.TP
+.B list-repos
+List the configured repositories with their priority, effective verify policy,
+URL, and how many installed packages slacker attributes to each. Flags are
+shown as
+.RI ( official ),
+.RI ( immutable ),
+.RI ( subtree ),
+and a quarantine marker when a repo is frozen.
+.TP
+.B status
+Health\-check the whole setup and report whether slacker is correctly
+configured and what to do next: active mirror, repos and priorities,
+verification policy, imported/pinned GPG keys, metadata freshness, blacklist,
+the sources of installed packages, and \(em when online \(em reachability and
+pending updates.
+.SS Managing repositories
+.TP
+.B add-repo \fIPRIORITY NAME URL\fR [\fIflags\fR]
+Append a binary repository to the
+.I repos
+file. The URL must be
+.IR http:// " or " https://
+and not already in use. Optional flags (separate words, any order):
+.BR official ", " immutable ", " subtree ", and " verify= gpg,md5,...
+The line is validated and, on confirmation, the repo is fetched and vetted (see
+.BR "Repository safety" ).
+.TP
+.B del-repo \fINAME\fR
+Remove a binary repository (by name) from the
+.I repos
+file.
+.TP
+.B add-tag \fIPRIORITY NAME TAG\fR
+Append a build\-tag priority line (e.g.
+.IR "add-tag 100 SBo _SBo" ).
+.TP
+.B del-tag \fITAG\fR
+Remove a build\-tag priority line by its tag.
+.SS Repository safety
+.TP
+.B vet-repo \fINAME\fR
+Re\-run slacker's safety vetting on a repo on demand (fetches metadata only):
+it quarantines the repo if it fails, or clears a prior quarantine if it now
+passes.
+.TP
+.B trust-repo \fINAME\fR
+Lift the quarantine on a repo so it can be used again. This overrides slacker's
+safety verdict, at your own responsibility.
+.TP
+.B distrust-repo \fINAME\fR
+Manually quarantine (freeze) a repo so it provides no packages until you
+.B trust-repo
+it again.
 .SH PRIVILEGES
 Read-only commands
 .RB ( search ", " info ", " file-search ", " check-updates ", " show-changelog )
@@ -486,6 +558,36 @@ and in
 naming those repositories. This applies to
 .I file://
 repositories as well.
+.PP
+.B Key pinning (trust on first use).
+The first time a repository's
+.I GPG-KEY
+is imported, slacker pins its fingerprint. On every later import the fetched key
+must match the pinned one; a changed or substituted key is refused as a possible
+attack rather than trusted silently. (For a
+.B subtree
+repo the key is fetched from the parent/root URL, where Slackware keeps the one
+key that signs the whole tree.)
+.PP
+.B Quarantine and trust.
+A repository that fails vetting \(em unreachable, or serving metadata that looks
+malformed or hostile \(em is put into quarantine and provides no packages until
+you act. A freshly added or as\-yet\-untrusted repo is light\-vetted on the next
+.BR update ;
+.B add-repo
+and
+.B vet-repo
+run a thorough vet. Use
+.B trust-repo
+to lift a quarantine you judge a false positive (overriding the verdict at your
+own responsibility),
+.B distrust-repo
+to freeze a repo yourself, and
+.B vet-repo
+to re\-check on demand. Quarantine state is shown by
+.B list-repos
+and
+.BR status .
 .SH EXIT STATUS
 .TP
 .B 0

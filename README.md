@@ -53,15 +53,30 @@ is uncommented.
 
 ### repos
 
-    # priority  name        url       [official]
-    100         slackware   mirror    official
+    # priority  name        url                                              [flags]
+    100         slackware   mirror                                           official
+    90          extras      https://slackware.uk/.../slackware64-current/extra   subtree immutable
     80          ktown       https://slackware.nl/people/alien/ktown/current/x86_64
     60          alienbob    https://slackware.nl/people/alien/sbrepos/current/x86_64
 
 Higher priority wins. Pin a repo with `name:package`. The official line's URL
 is the keyword **`mirror`**, filled in from the active line in `mirrors` - URL
-lives in `mirrors`, priority/placement live here. The `official` tag marks it
-for ChangeLog tracking; placement is by priority only.
+lives in `mirrors`, priority/placement live here. Flags (any order):
+
+- **`official`** - marks the tracked repo (ChangeLog, install-new default);
+  placement is still by priority only.
+- **`immutable`** - keeps every package attributed to this repo out of
+  `clean-system` (use it for `extra/`, `testing/`, `patches/` you keep
+  installed, instead of blacklisting each one).
+- **`subtree`** - this URL is a Slackware distribution subtree (`extra/`,
+  `patches/`, `testing/`, `pasture/`). Their `PACKAGES.TXT` lists package
+  locations relative to the distribution **root**, so packages and `GPG-KEY` are
+  fetched from the parent (root) URL while metadata comes from the URL itself.
+  Without this, those packages 404 with a doubled path segment.
+- **`verify=`** - per-repo verification override (see Security note).
+
+`add-repo`, `del-repo`, `add-tag`, `del-tag` edit this file for you (validated,
+with a confirmation prompt).
 
 **URL schemes:** `https://`, `http://`, and `file://` are supported (the last
 for a local clone, NFS mount, or mounted media - three slashes for an absolute
@@ -78,6 +93,8 @@ automatically.
     slacker update [gpg]          refresh metadata; `update gpg` imports repo keys
     slacker check-updates         per-repo update check; exit 100 if any pending
     slacker show-changelog [REPO] print a ChangeLog (official by default, or a named repo)
+    slacker status                health-check the whole setup; says what to fix next
+    slacker list-repos            list repos: priority, verify, flags, installed counts
     slacker search PACKAGE        find a package by its exact name (case-insensitive)
     slacker file-search FILE      which package ships FILE (MANIFEST)
     slacker info PACKAGE          per-repo candidates + installed version
@@ -89,9 +106,16 @@ automatically.
     slacker clean-cache [REPO...] delete downloaded *.txz (keeps metadata + GPG keys)
     slacker upgrade-all           upgrade everything with a newer revision
     slacker install-new [REPO...] install newly-added packages (official only by default)
-    slacker clean-system          remove packages in no configured repo
+    slacker clean-system          remove packages no longer in the official baseline
     slacker frozen RULE...        add blacklist rule(s): name/regex, series/, or @repo-scoped
     slacker new-config            handle leftover *.new config files
+    slacker add-repo  P NAME URL [official|immutable|subtree|verify=...]   add a repo line
+    slacker del-repo  NAME        remove a repo line
+    slacker add-tag   P NAME TAG  add a build-tag priority line (e.g. 100 SBo _SBo)
+    slacker del-tag   TAG         remove a build-tag priority line
+    slacker vet-repo  NAME        re-vet a repo on demand (quarantine on fail, clear on pass)
+    slacker trust-repo NAME       lift a repo's quarantine (override the verdict)
+    slacker distrust-repo NAME    manually quarantine (freeze) a repo
     slacker generate-template N   snapshot installed packages to template N
     slacker install-template N    install everything in template N
     slacker remove-template N     uninstall every package in template N
@@ -119,6 +143,19 @@ the package itself when a signature is present (falling back to the md5 from the
 signature-verified CHECKSUMS otherwise), and prints which checks passed. A repo
 with verification effectively off is flagged with a warning. Run
 `slacker update gpg` once before trusting a mirror.
+
+**Key pinning (TOFU):** the first GPG-KEY import pins the repo's fingerprint;
+any later key change is refused as a possible key-substitution attack rather
+than trusted silently. For a `subtree` repo the key is fetched from the root,
+where Slackware keeps the single key that signs the whole tree (so `extra/`,
+`testing/`, `patches/` pin the same fingerprint as the official repo).
+
+**Quarantine & trust:** a repo that fails vetting (unreachable, or serving
+malformed/hostile metadata) is auto-quarantined and provides no packages until
+you act. New/untrusted repos are light-vetted on the next `update`; `add-repo`
+and `vet-repo` vet thoroughly. Use `trust-repo` to lift a quarantine you judge a
+false positive, `distrust-repo` to freeze a repo yourself, and `vet-repo` to
+re-check. `list-repos` and `status` show the state.
 
 ---
 
@@ -169,11 +206,18 @@ with verification effectively off is flagged with a warning. Run
   shown by `search`/`info` marked `[blacklisted]`.
 - `remove-template <name>` uninstalls the packages a template lists (slackpkg
   behaviour); `delete-template <name>` removes only the template file.
-- `clean-system` lists installed packages absent from all configured repos and
-  lets you pick which to remove (numbers to keep, Enter to remove all). Packages
-  whose build tag is in `IGNORE_TAGS` (e.g. `_SBo cf alien`) are never treated
-  as foreign - essential when you have many SBo/source/custom packages that no
-  binary repo manages. Add individual packages to `blacklist` too if needed.
+- `clean-system` lists installed packages that are **no longer part of the
+  official distribution** - foreign meaning absent from the baseline (the
+  official repo's `PACKAGES.TXT` plus any `immutable` repo), slackpkg-style. So
+  a package the distro itself dropped is removed even if some third-party repo
+  still ships the name. Pick which to remove (numbers to keep, Enter to remove
+  all). A package is kept when any of three holds: it matches a `blacklist`
+  rule; its build tag is in `IGNORE_TAGS` (e.g. `_SBo cf alien`); or it is
+  attributed to an `immutable` repo (its tag-owning repo, or for a tagless
+  package any immutable repo that provides its name). Mark `extra/`/`testing/`/
+  `patches/` repos `immutable` to keep their packages without blacklisting each
+  one. As a safety guard, `clean-system` refuses to run if a baseline repo has
+  no metadata loaded (run `update` first).
 - The `blacklist` is honoured by every mutating command (including `reinstall`), packages it freezes never appear in `clean-system`, and a frozen/blacklisted package is flagged `[blacklisted]` in `search` and `info`.
 - ChangeLog is fetched (on `update`) only for the official repo, and powers
   `show-changelog`. `check-updates` covers every repo: official via ChangeLog,

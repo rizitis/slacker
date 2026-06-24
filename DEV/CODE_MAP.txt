@@ -17,7 +17,7 @@ Everything is synchronous. Errors are String (Result<_, String>) on purpose —
 simple, greppable messages, no error crates.
 
 --------------------------------------------------------------------------------
-pkg.rs            (~134 lines)   Slackware package-name parsing
+pkg.rs            (~192 lines)   Slackware package-name parsing
 --------------------------------------------------------------------------------
 Owns the PkgId type: a parsed "name-version-arch-build" 4-tuple, the atom the
 whole program passes around.
@@ -36,7 +36,7 @@ LOOK HERE IF: package names parse wrong (epoch, odd arch like fw/x86, names with
 dashes). Parsing is positional from the right, so unusual names are the risk.
 
 --------------------------------------------------------------------------------
-config.rs         (~766 lines)   read & model /etc/slacker
+config.rs         (~889 lines)   read & model /etc/slacker
 --------------------------------------------------------------------------------
 Parses the plain-text config files into typed structs. No network, no side
 effects beyond reading files.
@@ -51,8 +51,10 @@ effects beyond reading files.
                    matches(id, series, repo) + repo()/pattern()/describe()
   parse_blacklist_rule  parse one `[@repo] REGEX|series/` line (pub: the
                    `frozen` command reuses it to validate user input)
-  Repo             struct: priority, name, url, official, verify (per-repo
-                   override) + verify_policy(global) resolver
+  Repo             struct: priority, name, url, official, immutable, subtree,
+                   verify (per-repo override) + verify_policy(global) resolver +
+                   download_base()/join_download_url() (subtree -> parent/root
+                   URL for packages & GPG-KEY; metadata still from the repo URL)
   TagPriority      struct: priority, name, tag   (the `priority name tag` lines)
   Check            enum: Gpg | Md5 | Sha — one verification method
   VerifyPolicy     enum: All | Required(list) | None, with wants()/requires();
@@ -61,7 +63,8 @@ effects beyond reading files.
   detect_arch      reads ARCH from the installed aaa_base package
   parse_repos      splits binary-repo lines from tag-priority lines: the 3rd
                    field is a URL/"mirror" -> binary repo; otherwise -> tag line.
-                   Also parses `official` and `verify=` flags (any order)
+                   Also parses `official`, `immutable`, `subtree` and `verify=`
+                   flags (any order; an unknown flag is a fail-fast error)
   parse_mirrors    enforces "exactly one uncommented mirror"
 
 KEY RULES ENFORCED HERE:
@@ -74,7 +77,7 @@ repos-line form, or to change arch detection. Add a KEY in Config::load's
 key/val handling; add a struct field alongside.
 
 --------------------------------------------------------------------------------
-repo.rs           (~542 lines)   fetch + parse a repo's metadata
+repo.rs           (~690 lines)   fetch + parse a repo's metadata
 --------------------------------------------------------------------------------
 Turns a Repo's remote files into AvailPkg records and keeps the cache fresh.
 
@@ -95,6 +98,13 @@ Turns a Repo's remote files into AvailPkg records and keeps the cache fresh.
   fetch_changelog_text    on-demand ChangeLog fetch for show-changelog
   invalidate_metadata     drop a repo's cached PACKAGES.TXT/CHECKSUMS after a
                           failed GPG verification, so unverified data is unused
+  quarantine_dir / trusted_dir / *_marker   cache markers under CACHE_DIR:
+                          quarantine/<name> (frozen, inert) | trusted/<name>
+                          (vetted-pass or user-trusted) | neither (untrusted ->
+                          light-vetted on next update). is_quarantined /
+                          is_hard_quarantined / mark/clear helpers back the
+                          vet-repo / trust-repo / distrust-repo commands; load
+                          skips a quarantined repo entirely
 
 LOOK HERE IF: a repo's PACKAGES.TXT/CHECKSUMS parses wrong, a package is wrongly
 filtered out by arch, MANIFEST handling misbehaves, or .dep contents are
@@ -104,7 +114,7 @@ GOTCHA: always route new metadata reads through read_text_lossy, or a single
 non-UTF-8 byte will crash a command (this was a real bug on the extras repo).
 
 --------------------------------------------------------------------------------
-pkgdb.rs          (~510 lines)   the unified, priority-ordered brain
+pkgdb.rs          (~624 lines)   the unified, priority-ordered brain
 --------------------------------------------------------------------------------
 Merges every repo's AvailPkg list into one DB and answers the hard questions.
 This is where most behavioural bugs live — read carefully before changing.
@@ -138,15 +148,24 @@ This is where most behavioural bugs live — read carefully before changing.
                    against installed packages, which carry no series themselves)
   newly_added      install-new: names present now but absent from .prev and not
                    installed
-  orphans          clean-system: installed names found in NO repo (honours
-                   IGNORE_TAGS and blacklist via the caller)
+  names_provided_by  clean-system baseline: the set of package names provided
+                   by a given set of repos (official + every immutable repo),
+                   or all repos when no baseline is given. has_repo_packages
+                   reports whether a repo's metadata is loaded (the safety guard
+                   that makes clean-system refuse to run on missing baseline data)
+  repo_for_tag     which repo owns a build tag (first AvailPkg carrying it) ->
+                   used by clean-system's immutable rule and installed_attribution
+  orphans          installed names found in NO repo (now used by
+                   generate-template; clean-system uses the baseline rule above,
+                   not this)
   is_repo / tag_in_use / repo_build_tags / all_repos / all_build_tags
                    helpers for @-selectors and the "did you mean" diagnostics
 
 LOOK HERE IF: upgrade-all proposes something wrong (migration, downgrade, a
 missed upgrade) -> upgrades_for + installed_priority. A pattern matches too much
-or too little -> match_pattern. clean-system lists the wrong things -> orphans
-(+ the IGNORE_TAGS/blacklist filtering in cmd_clean_system).
+or too little -> match_pattern. clean-system lists the wrong things ->
+names_provided_by + the baseline/immutable/IGNORE_TAGS/blacklist logic in
+cmd_clean_system.
 
 THE SUBTLEST CODE IN THE PROJECT is installed_priority + upgrades_for. The
 "distinct, high priority locks a repo's packages" guarantee depends on them.
@@ -154,7 +173,7 @@ There are unit tests pinning this (sbo_not_migrated, no_downgrade,
 genuine_self_upgrade, higher_priority_same_version) — keep them green.
 
 --------------------------------------------------------------------------------
-download.rs       (~296 lines)   bytes over http/https/file
+download.rs       (~345 lines)   bytes over http/https/file
 --------------------------------------------------------------------------------
 The only module that talks to the network (via ureq + native-tls).
 
@@ -169,7 +188,7 @@ LOOK HERE IF: TLS/proxy/timeout issues, file:// URLs, or md5 mismatches. TLS is
 system OpenSSL through native-tls; a CA/proxy problem surfaces here.
 
 --------------------------------------------------------------------------------
-system.rs         (~97 lines)    the bridge to real pkgtools
+system.rs         (~100 lines)    the bridge to real pkgtools
 --------------------------------------------------------------------------------
 Reads the installed-package DB and shells out to the Slackware tools. This is
 the only module that mutates the system.
@@ -193,7 +212,7 @@ LOOK HERE IF: file-search misses or over-matches. The MANIFEST is large and
 fetched lazily by repo::ensure_manifest; this module only searches it.
 
 --------------------------------------------------------------------------------
-changelog.rs      (~65 lines)    check-updates / show-changelog
+changelog.rs      (~77 lines)    check-updates / show-changelog
 --------------------------------------------------------------------------------
   changelog_repo       which repo's ChangeLog to track (the official one)
   cached_changelog     read a repo's cached ChangeLog, if present
@@ -207,13 +226,22 @@ takes an optional repo name; the on-demand fetch for an uncached repo lives in
 repo::fetch_changelog_text.
 
 --------------------------------------------------------------------------------
-gpg.rs            (~148 lines)   key import + signature verify (fail-closed)
+gpg.rs            (~280 lines)   key import + signature verify (fail-closed)
 --------------------------------------------------------------------------------
-  import_key           `update gpg`: fetch + gpg --import into a per-cache keyring
-  verify_checksums     verify CHECKSUMS.md5.asc; FAIL-CLOSED (bad/missing -> stop)
+  import_key           `update gpg`: fetch GPG-KEY (from the repo's download
+                       base -> the root for a subtree repo) + gpg --import into
+                       a per-cache keyring, then PIN its fingerprint on first
+                       contact (TOFU). A later key whose fingerprint differs from
+                       the pin is refused as a possible key-substitution attack.
+                       Returns ImportOutcome / ImportError(KeyChanged | Other)
+  read_pin / pin       per-repo fingerprint pin under cache/gpg/<name>.fpr
+  verify_checksums     verify CHECKSUMS.md5.asc against the pinned key; FAIL-CLOSED
   verify_detached      verify any file against a detached .asc (per-package
-                       .txz.asc at install); same fail-closed contract
-  Verify               enum result (NoSignature | Good(signer))
+                       .txz.asc at install); same pinned-key, fail-closed contract
+  verify_against_pin   the shared check: GOODSIG + the signer must be the PINNED
+                       key, else Tampered (key substitution) / Unverifiable
+  Verify               enum result: NoSignature | Good(signer) | Tampered(msg) |
+                       Unverifiable(msg)
   set_mode_700         lock down the keyring dir (unix)
 LOOK HERE IF: GPG verification rejects a good repo or you need different key
 handling. Note: this is intentionally strict — do not make verification
@@ -247,7 +275,7 @@ Used by the plan tables, search/info output, and prompts. Piped/redirected
 output and `NO_COLOR` stay plain text.
 
 --------------------------------------------------------------------------------
-main.rs           (~2850 lines)  CLI, planning, and every command
+main.rs           (~4341 lines)  CLI, planning, and every command
 --------------------------------------------------------------------------------
 The orchestrator. clap definitions, the command dispatch, the install/upgrade
 PLAN builder, and one cmd_* function per action.
@@ -306,6 +334,21 @@ PLAN builder, and one cmd_* function per action.
   cmd_install_new, cmd_clean_system, cmd_clean_cache, cmd_new_config,
   cmd_check_updates, cmd_show_changelog, cmd_generate_template,
   cmd_install_template, cmd_remove_template, cmd_delete_template, cmd_frozen
+
+  REPO / TAG / STATUS / SAFETY COMMANDS:
+    cmd_list_repos    repos with priority, verify, flags, and per-repo installed
+                      counts (from installed_attribution)
+    cmd_status        whole-setup health check (mirror, repos, keys, freshness,
+                      reachability, pending) with "what to do next"
+    cmd_add_repo / cmd_del_repo / cmd_add_tag / cmd_del_tag   edit the `repos`
+                      file (validated via config::validate_repos_text, confirmed)
+    cmd_vet_repo / cmd_trust_repo / cmd_distrust_repo   the quarantine model:
+                      re-vet on demand, lift a quarantine (override), or freeze
+    installed_attribution   tag-based source mapping (empty tag -> official;
+                      else repo_for_tag) feeding list-repos counts + status
+    cmd_clean_system  the baseline rule: foreign = not provided by official +
+                      immutable repos; kept via blacklist / IGNORE_TAGS /
+                      immutable attribution; refuses on missing baseline metadata
   page_output   pipe long output through $PAGER/less when stdout is a TTY
 
 LOOK HERE IF: anything about how a command behaves end-to-end, prompts, dry-run
@@ -343,7 +386,10 @@ General hints for a forker
   from VERIFY= (global) and verify= (per-repo). Default `all` = GPG when present
   + at least one integrity hash mandatory. Security checks stop the run, never
   warn-and-continue. The official repo gets NO exemption — `official` only
-  affects install-new scope and ChangeLog tracking.
+  affects install-new scope and ChangeLog tracking. GPG keys are pinned on first
+  use (TOFU): a changed fingerprint is refused as key substitution. A repo that
+  fails vetting is auto-quarantined (markers under CACHE_DIR; see repo.rs) and
+  provides no packages until trust-repo/vet-repo clears it.
 
 - ERRORS ARE STRINGS by design. Keep messages short, specific, and actionable
   (the user sees them prefixed with "slacker: error:").

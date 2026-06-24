@@ -21,16 +21,16 @@ slacker/
 │   ├── repos                       <- binary repos + tag-priority lines
 │   └── blacklist                   <- blacklist rules: [@repo] REGEX | [@repo] series/
 └── src/                            <- 13 modules
-    ├── main.rs        CLI + commands (21 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection)
-    ├── config.rs      plain-text config + arch auto-detect + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series)
+    ├── main.rs        CLI + commands (30 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, quarantine)
+    ├── config.rs      plain-text config + arch auto-detect + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + repo flags (official/immutable/subtree) + subtree download base
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
-    ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch
-    ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, blacklist source lookups
+    ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch, quarantine/trust markers
+    ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, baseline names (clean-system), blacklist source lookups
     ├── download.rs    https/http (ureq+native-tls) + file:// + md5 + sha256 (sha256sum)
     ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path
     ├── manifest.rs    file-search (decompressed MANIFEST)
     ├── changelog.rs   check-updates / show-changelog (pager when on a TTY)
-    ├── gpg.rs         GPG import + verify (captured output, fail-closed)
+    ├── gpg.rs         GPG import + TOFU key pinning + verify (captured output, fail-closed)
     ├── template.rs    templates (generate/load/delete, includes)
     ├── newconfig.rs   .new config file handling
     └── ui.rs           minimal ANSI colouring (TTY + NO_COLOR aware), plan tables
@@ -47,10 +47,15 @@ slacker/
   default; 2+ -> error). Holds the official mirror URL (current/15.0 × 64/32,
   http/https/file://).
 - **repos** - two kinds of line:
-  - binary repo: `priority  name  url|mirror  [official]`. The official line's
-    url is the keyword `mirror` (filled from `mirrors`). Higher priority wins;
-    `name:package` pins a repo. Binary-repo priorities must be **distinct**
-    (duplicate -> fail-fast error).
+  - binary repo: `priority  name  url|mirror  [official] [immutable] [subtree]
+    [verify=...]`. The official line's url is the keyword `mirror` (filled from
+    `mirrors`). Higher priority wins; `name:package` pins a repo. Binary-repo
+    priorities must be **distinct** (duplicate -> fail-fast error). Flags:
+    `official` (tracked repo: ChangeLog + install-new default), `immutable`
+    (its packages never treated as foreign by clean-system), `subtree` (a
+    Slackware distribution subtree - extra/, patches/, testing/, pasture/ -
+    whose PACKAGES.TXT locations are root-relative, so packages and GPG-KEY are
+    fetched from the parent/root URL while metadata comes from the repo URL).
   - tag-priority: `priority  name  tag` (e.g. `100 SBo _SBo`). Gives packages
     carrying a build tag a priority on the same scale, so SBo/local/source
     packages are never silently migrated to another repo or downgraded by
@@ -94,15 +99,24 @@ An unknown `@repo`/`@tag` gives a helpful error with a "did you mean" suggestion
 more than one package, install/upgrade/reinstall/remove show a numbered list
 (Enter = all, numbers/ranges like `1 3 5` or `2-4`, `n` = cancel).
 
-### Actions (21; slackpkg parity + extras)
+### Actions (30; slackpkg parity + extras)
 
 ```
-update [gpg]    search        file-search   info        install
-upgrade         reinstall     remove        download     clean-cache
-upgrade-all     install-new   clean-system  frozen       new-config
-check-updates   show-changelog
+update [gpg]    search        file-search   info        list-repos
+status          install       upgrade       reinstall    remove
+download        clean-cache   upgrade-all   install-new  clean-system
+frozen          new-config    check-updates show-changelog
+add-repo        del-repo      add-tag       del-tag
+vet-repo        trust-repo    distrust-repo
 generate-template  install-template  remove-template  delete-template
 ```
+- `list-repos` / `status` - inspect repos (priority, verify, flags, installed
+  counts) and health-check the whole setup.
+- `add-repo`/`del-repo`/`add-tag`/`del-tag` - edit the `repos` file (validated,
+  with confirmation). `add-repo` flags: `official`, `immutable`, `subtree`,
+  `verify=...`.
+- `vet-repo`/`trust-repo`/`distrust-repo` - the quarantine model: re-vet a repo,
+  lift a quarantine (override the verdict), or freeze a repo yourself.
 - `install-new [REPO...]` - official repos only by default; name repos to opt in.
 - `download [-o DIR] PATTERN...` - saves to CACHE_DIR/packages/<repo>/ by default,
   or to DIR; confirms before bulk (>10) downloads; refuses to write through a
@@ -144,6 +158,15 @@ and `verify=` (repos, per-repo override). Policy types live in config.rs
 - A `Required(list)` policy (e.g. `gpg,md5,sha`) fails if a listed method is
   absent, with a message pointing at where to relax it. The official repo gets
   no exemption.
+- **Key pinning (TOFU):** the first GPG-KEY import pins the repo's fingerprint;
+  a later key change is refused (possible key-substitution attack), fail-closed.
+  A `subtree` repo fetches GPG-KEY from the root, so extra/testing/patches pin
+  the same Slackware key as the official repo.
+- **Quarantine model:** a repo that fails vetting (unreachable / malformed /
+  hostile metadata) is auto-quarantined and provides no packages. New/untrusted
+  repos are light-vetted on `update`; `add-repo`/`vet-repo` vet thoroughly.
+  `trust-repo` lifts a quarantine (override), `distrust-repo` freezes one,
+  `vet-repo` re-checks. Markers in cache: `quarantine/<name>`, `trusted/<name>`.
 
 ### Dependencies (.dep)
 
@@ -162,7 +185,7 @@ reinstall, upgrade-all, install-new, install-template.
 ### Build_and_Tests
 
 > NO root needed for build & tests (only the mutating actions need root).
-> 54 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
+> 61 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
 
 ```
 cargo build --release
@@ -193,10 +216,13 @@ sed -i 's|^CACHE_DIR=.*|CACHE_DIR=/tmp/slk/cache|' /tmp/slk/slacker.conf
 - GPG is fail-closed: a bad signature or missing key stops the update.
 - Dep resolution does one small `.dep` request per package at install time
   (404 = no deps, proceeds normally) - same as slackpkg+.
-- `clean-system` lists foreign packages (absent from every configured repo) in
-  a numbered table; pick which to keep (Enter removes all). Blacklisted packages
-  and packages whose build tag is in IGNORE_TAGS never appear. Third-party
-  +repo packages are NOT foreign - only truly unknown ones are.
+- `clean-system` lists packages **no longer in the official baseline** (the
+  official repo's PACKAGES.TXT plus any `immutable` repo) in a numbered table;
+  pick which to keep (Enter removes all). slackpkg-style: a package the distro
+  dropped is removed even if a third-party repo still ships the name. Kept when
+  any of three holds: a `blacklist` match; build tag in `IGNORE_TAGS`; or
+  attributed to an `immutable` repo. Refuses to run if a baseline repo has no
+  metadata loaded (safety guard against mass removal).
 - `clean-cache` frees disk by deleting cached package files; metadata and GPG
   keys are safe. `download -o DIR` and the symlink guard make explicit
   downloads (e.g. into /tmp) safe.
