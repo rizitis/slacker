@@ -320,8 +320,9 @@ impl PkgDb {
     }
 
     /// install-new: packages newly added to a repo since the last update that
-    /// are not installed. `new_filenames` maps repo name -> filenames that
-    /// appeared since the previous snapshot.
+    /// are not installed. `new_by_repo` maps repo name -> package *names* that
+    /// appeared since the previous snapshot (a new build/version of an existing
+    /// name is an upgrade, not a new package, so we key on name, not filename).
     pub fn newly_added<'a>(
         &'a self,
         new_by_repo: &HashMap<String, HashSet<String>>,
@@ -334,7 +335,7 @@ impl PkgDb {
             .filter(|p| {
                 new_by_repo
                     .get(&p.repo)
-                    .map_or(false, |set| set.contains(&p.filename))
+                    .map_or(false, |set| set.contains(&p.id.name))
                     && !inst_names.contains(p.id.name.as_str())
             })
             .collect();
@@ -343,10 +344,32 @@ impl PkgDb {
         out
     }
 
-    /// clean-system: installed packages that exist in no configured repo.
+    /// generate-template: installed packages whose name exists in no configured
+    /// repo (so they couldn't be reinstalled). clean-system does NOT use this; it
+    /// has its own tag-aware rule built on `names_provided_by`.
     pub fn orphans<'a>(&self, installed: &'a [PkgId]) -> Vec<&'a PkgId> {
         let known: HashSet<&str> = self.all.iter().map(|p| p.id.name.as_str()).collect();
         installed.iter().filter(|p| !known.contains(p.name.as_str())).collect()
+    }
+
+    /// The set of package *names* provided by the given repos (or by every repo
+    /// when `scope_repos` is `None`). clean-system uses this as the baseline of
+    /// names that keep a tagless (empty-tag) installed package.
+    pub fn names_provided_by<'a>(
+        &'a self,
+        scope_repos: Option<&HashSet<&str>>,
+    ) -> HashSet<&'a str> {
+        self.all
+            .iter()
+            .filter(|p| scope_repos.map_or(true, |set| set.contains(p.repo.as_str())))
+            .map(|p| p.id.name.as_str())
+            .collect()
+    }
+
+    /// Whether any loaded package comes from the named repo. clean-system uses
+    /// this to refuse running when a baseline repo's metadata is missing.
+    pub fn has_repo_packages(&self, repo: &str) -> bool {
+        self.all.iter().any(|p| p.repo == repo)
     }
 }
 
@@ -536,5 +559,66 @@ mod upgrade_tests {
         let ups = db.upgrades_for(&installed, &[]);
         assert_eq!(ups.len(), 1, "higher-priority same-version should be proposed");
         assert_eq!(ups[0].available.repo, "conraid");
+    }
+
+    #[test]
+    fn newly_added_matches_by_name_not_filename() {
+        // Regression guard: cmd_install_new builds new_by_repo keyed by package
+        // NAME (e.g. "plasmanano"), so newly_added must look candidates up by
+        // p.id.name, not by p.filename ("plasmanano-6.7.1-x86_64-1.txz"). An
+        // earlier rename left this comparing filenames, which silently made
+        // install-new match nothing.
+        let db = db(
+            vec![
+                avail("hello-1.0-x86_64-1", "r"),
+                avail("plasmanano-6.7.1-x86_64-1", "r"),
+            ],
+            &[("r", 90)],
+            None,
+        );
+        let mut new_by_repo: HashMap<String, HashSet<String>> = HashMap::new();
+        new_by_repo.insert("r".into(), HashSet::from(["plasmanano".to_string()]));
+
+        // nothing installed -> the newly-added name is offered
+        let news = db.newly_added(&new_by_repo, &[]);
+        assert_eq!(news.len(), 1, "the new package must be detected by name");
+        assert_eq!(news[0].id.name, "plasmanano");
+
+        // an existing name not in the new set is never offered
+        assert!(
+            !news.iter().any(|p| p.id.name == "hello"),
+            "an unchanged package must not be reported as new"
+        );
+
+        // already installed -> excluded
+        let installed = vec![PkgId::parse("plasmanano-6.7.1-x86_64-1").unwrap()];
+        assert!(
+            db.newly_added(&new_by_repo, &installed).is_empty(),
+            "an already-installed package must not be reported as new"
+        );
+    }
+
+    #[test]
+    fn names_provided_by_scopes_to_baseline() {
+        // keepme is in slackware (official); foo is only in alienbob.
+        let db = db(
+            vec![
+                avail("keepme-1.0-x86_64-1", "slackware"),
+                avail("foo-1.0-x86_64-1alien", "alienbob"),
+            ],
+            &[("alienbob", 10)],
+            Some(100),
+        );
+        // official-only baseline provides keepme, not foo.
+        let off: HashSet<&str> = HashSet::from(["slackware"]);
+        let names = db.names_provided_by(Some(&off));
+        assert!(names.contains("keepme") && !names.contains("foo"));
+        // baseline extended with an immutable repo also provides foo's name.
+        let both: HashSet<&str> = HashSet::from(["slackware", "alienbob"]);
+        assert!(db.names_provided_by(Some(&both)).contains("foo"));
+        // None scope = every repo (used by generate-template).
+        assert!(db.names_provided_by(None).contains("foo"));
+        // repo_for_tag maps the alien tag to alienbob (drives the tagged branch).
+        assert_eq!(db.repo_for_tag("alien"), Some("alienbob"));
     }
 }

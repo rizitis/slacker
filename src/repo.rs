@@ -29,7 +29,7 @@ pub struct AvailPkg {
 
 impl AvailPkg {
     pub fn url(&self, repo: &Repo) -> String {
-        repo.join_url(&format!("{}{}", self.location, self.filename))
+        repo.join_download_url(&format!("{}{}", self.location, self.filename))
     }
 }
 

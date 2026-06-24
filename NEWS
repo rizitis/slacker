@@ -1,9 +1,15 @@
-Add: protection mechanism from "rogue" or tampered repositories will be put into auto-quarantine
-Fix: bug with staled changelogs on 3rd repos
+Add: protection mechanism from "rogue" or tampered repositories will be put into auto-quarantine:
+slacker {trust-repo,distrust-repo,vet-repo}
 Add: slacker status
 Add: slacker list-repos + installed counts per repo
 Add: slacker add-repo
 Add: slacker del-repo
 Add: slacker add-tag
 Add: slacker del-tag
+Fix: bug with staled changelogs on 3rd repos
+Fix: bug in install-new
+NEW: slacker clean-system will remove all packages that not exist in slackware PACKAGES.TXT
+(excluded blacklisted packages, @repo packages and _tags in /etc/slacker.conf) This way will also be removed
+packages that distro official remove.
+NOTE: packages from testing extras must be mentioned in blacklist.
 ---

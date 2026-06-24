@@ -1,4 +1,4 @@
-.TH SLACKER 8 "June 2026" "slacker 0.6.0" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.5.1" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -360,11 +360,23 @@ errors out if two are active. Supports
 .TP
 .I /etc/slacker/repos
 Repository priorities, names and external repositories, one per line as
-.IR "priority name url" " [" official "]."
+.IR "priority name url" " [" official "] [" immutable "] [" subtree "] [" verify= ...].
 Higher priority wins. The official line's URL is the keyword
 .B mirror
 which is filled in from the active line in
 .IR mirrors .
+.B immutable
+keeps every package attributed to the repo out of
+.BR clean-system .
+.B subtree
+marks a Slackware distribution subtree
+.RI ( extra/ ", " patches/ ", " testing/ ", " pasture/ )
+whose
+.I PACKAGES.TXT
+lists package locations relative to the distribution root; its packages and
+.I GPG-KEY
+are fetched from the parent (root) URL while its metadata comes from the repo
+URL itself.
 .TP
 .I /etc/slacker/blacklist
 Blacklist rules, one per line (`#` comments). A rule is

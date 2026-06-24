@@ -11,9 +11,9 @@
 
 # priority  name        url       [official]
 100         slackware   mirror    official
-200         patches    https://slackware.uk/slackware/slackware64-15.0/patches
-90          testing    https://slackware.uk/slackware/slackware64-15.0/testing
-95          extras     https://slackware.uk/slackware/slackware64-15.0/extra/
+200         patches    https://slackware.uk/slackware/slackware64-15.0/patches subtree
+90          testing    https://slackware.uk/slackware/slackware64-15.0/testing subtree
+95          extras     https://slackware.uk/slackware/slackware64-15.0/extra subtree
 
 # ── External slackware64-15.0 repos ─────────────────────────────────────────
 

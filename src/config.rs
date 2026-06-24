@@ -131,6 +131,18 @@ pub struct Repo {
     pub url: String,
     pub priority: i32,
     pub official: bool,
+    /// `immutable` flag on the repos line: clean-system never reports a package
+    /// as foreign while it is attributed to this repo. For a tagged repo that
+    /// means every package carrying its build tag; for a tagless repo it means
+    /// every package it provides, by name (so a tagless repo can be kept whole).
+    pub immutable: bool,
+    /// `subtree` flag on the repos line: this repo is a Slackware distribution
+    /// subtree (extra/, patches/, testing/, pasture/). Its PACKAGES.TXT and
+    /// CHECKSUMS live in the subtree, but the package LOCATIONs are relative to
+    /// the distribution ROOT (e.g. `./extra/foo`), and GPG-KEY lives at the
+    /// root too. So packages and GPG-KEY are fetched against the parent of the
+    /// repo URL, while metadata still comes from the URL itself.
+    pub subtree: bool,
     /// Per-repo verification override (`verify=` on the repos line). None means
     /// "use the global VERIFY policy".
     pub verify: Option<VerifyPolicy>,
@@ -275,10 +287,39 @@ impl Repo {
     }
 
     pub fn join_url(&self, location: &str) -> String {
-        let base = self.url.trim_end_matches('/');
-        let rel = location.trim_start_matches("./").trim_start_matches('/');
-        format!("{base}/{rel}")
+        join_base(&self.url, location)
     }
+
+    /// Base URL that package LOCATIONs (and GPG-KEY) resolve against. For a
+    /// normal repo that is the repo URL. For a `subtree` repo (Slackware
+    /// extra/, patches/, ...) the LOCATIONs are root-relative (`./extra/foo`)
+    /// and GPG-KEY lives at the root, so downloads use the PARENT of the URL.
+    pub fn download_base(&self) -> &str {
+        if self.subtree {
+            let trimmed = self.url.trim_end_matches('/');
+            match trimmed.rsplit_once('/') {
+                // Don't strip the scheme's "//": require a non-empty parent.
+                Some((parent, _)) if !parent.ends_with(':') && !parent.is_empty() => parent,
+                _ => trimmed,
+            }
+        } else {
+            &self.url
+        }
+    }
+
+    /// Join a package LOCATION against the download base (see `download_base`).
+    /// For non-subtree repos this is identical to `join_url`.
+    pub fn join_download_url(&self, location: &str) -> String {
+        join_base(self.download_base(), location)
+    }
+}
+
+/// Join a relative repo location onto a base URL: trim a trailing slash off the
+/// base and a leading `./` (or `/`) off the location, then concatenate.
+fn join_base(base: &str, location: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let rel = location.trim_start_matches("./").trim_start_matches('/');
+    format!("{base}/{rel}")
 }
 
 // ---- plain-text parsing helpers ------------------------------------------
@@ -584,10 +625,16 @@ fn parse_repos(
         };
 
         let mut official = false;
+        let mut immutable = false;
+        let mut subtree = false;
         let mut verify: Option<VerifyPolicy> = None;
         for flag in fields {
             if flag == "official" {
                 official = true;
+            } else if flag == "immutable" {
+                immutable = true;
+            } else if flag == "subtree" {
+                subtree = true;
             } else if let Some(v) = flag.strip_prefix("verify=") {
                 verify = Some(
                     VerifyPolicy::parse(v)
@@ -595,7 +642,7 @@ fn parse_repos(
                 );
             } else {
                 return Err(format!(
-                    "repos:{}: unknown flag '{flag}' (allowed: official, verify=...)",
+                    "repos:{}: unknown flag '{flag}' (allowed: official, immutable, subtree, verify=...)",
                     lineno + 1
                 ));
             }
@@ -606,6 +653,8 @@ fn parse_repos(
             url,
             priority,
             official,
+            immutable,
+            subtree,
             verify,
         });
     }
@@ -742,6 +791,56 @@ mod tests {
         assert_eq!(tags.len(), 2);
         assert_eq!(tags[0].tag, "_SBo");
         assert_eq!(tags[1].priority, 100);
+    }
+
+    #[test]
+    fn repos_immutable_flag_parses() {
+        let (repos, _t) = parse_repos(
+            "100 slackware mirror official\n80 patches https://p/ immutable\n",
+            Some("https://off/"),
+        )
+        .unwrap();
+        let p = repos.iter().find(|r| r.name == "patches").unwrap();
+        assert!(p.immutable, "immutable flag must be parsed");
+        assert!(!p.official);
+        // combines with verify=; an unknown flag is still rejected.
+        assert!(parse_repos("80 x https://x/ immutable verify=md5\n", None).is_ok());
+        assert!(parse_repos("80 x https://x/ bogus\n", None).is_err());
+    }
+
+    #[test]
+    fn repos_subtree_flag_parses_and_resolves_parent_base() {
+        let (repos, _t) = parse_repos(
+            "100 slackware mirror official\n\
+             70 extras https://m/slackware64-current/extra subtree immutable\n",
+            Some("https://m/slackware64-current/"),
+        )
+        .unwrap();
+        let e = repos.iter().find(|r| r.name == "extras").unwrap();
+        assert!(e.subtree, "subtree flag must be parsed");
+        assert!(e.immutable, "subtree combines with immutable");
+
+        // Metadata still resolves against the repo URL (the subtree dir)...
+        assert_eq!(
+            e.join_url("PACKAGES.TXT"),
+            "https://m/slackware64-current/extra/PACKAGES.TXT"
+        );
+        // ...but the download base is the PARENT (distribution root)...
+        assert_eq!(e.download_base(), "https://m/slackware64-current");
+        // ...so a root-relative LOCATION does NOT double the shared segment.
+        assert_eq!(
+            e.join_download_url("./extra/sendmail/sendmail-8.18.2-x86_64-1.txz"),
+            "https://m/slackware64-current/extra/sendmail/sendmail-8.18.2-x86_64-1.txz"
+        );
+
+        // A normal (non-subtree) repo: download base == URL, join unchanged.
+        let off = repos.iter().find(|r| r.name == "slackware").unwrap();
+        assert!(!off.subtree);
+        assert_eq!(off.download_base(), off.url);
+        assert_eq!(
+            off.join_download_url("./slackware64/l/glibc-2.39-x86_64-1.txz"),
+            off.join_url("./slackware64/l/glibc-2.39-x86_64-1.txz")
+        );
     }
 
     #[test]

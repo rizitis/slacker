@@ -116,7 +116,9 @@ pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, Impo
         .map_err(|e| ImportError::Other(format!("mkdir {}: {e}", dir.display())))?;
     set_mode_700(&dir);
 
-    let url = repo_.join_url(GPG_KEY_FILE);
+    // GPG-KEY lives alongside the packages: at the repo URL for a normal repo,
+    // but at the distribution ROOT (the download base) for a `subtree` repo.
+    let url = repo_.join_download_url(GPG_KEY_FILE);
     // Cap the key download — a key is tiny; anything huge is hostile.
     let key = download::get_bytes_capped(&url, 1 << 20)
         .map_err(|e| ImportError::Other(format!("fetch {url}: {e}")))?;

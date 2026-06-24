@@ -132,14 +132,18 @@ enum Cmd {
     /// a regex, a `series/`, or `@repo regex` (quote rules with spaces).
     Frozen { names: Vec<String> },
     /// Add a binary repository to the `repos` file:
-    /// `add-repo PRIORITY NAME URL [official] [verify=...]`. URL must be
-    /// http:// or https:// and unique. Separate words, no quotes (quote only a
-    /// URL that contains shell-special characters).
+    /// `add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=...]`.
+    /// URL must be http:// or https:// and unique. Separate words, no quotes
+    /// (quote only a URL that contains shell-special characters). `immutable`
+    /// keeps every package attributed to the repo out of clean-system.
+    /// `subtree` marks a Slackware distribution subtree (extra/, patches/, ...)
+    /// whose packages download from the parent (root) URL.
     AddRepo {
         priority: String,
         name: String,
         url: String,
-        /// Optional flags: `official` and/or `verify=gpg,md5,...`.
+        /// Optional flags: `official`, `immutable`, `subtree`, and/or
+        /// `verify=gpg,md5,...`.
         flags: Vec<String>,
     },
     /// Remove a binary repository (by name) from the `repos` file.
@@ -2131,6 +2135,12 @@ fn cmd_list_repos(cfg: &Config) -> Result<Outcome, String> {
         if r.official {
             line.push_str(&ui::cyan("  (official)"));
         }
+        if r.immutable {
+            line.push_str(&ui::cyan("  (immutable)"));
+        }
+        if r.subtree {
+            line.push_str(&ui::cyan("  (subtree)"));
+        }
         if repo::is_hard_quarantined(&cfg.cache_dir, &r.name) {
             line.push_str(&ui::red("  [FROZEN]"));
         } else if repo::is_quarantined(&cfg.cache_dir, &r.name) {
@@ -2966,21 +2976,79 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
 fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    // Foreign = installed but in no configured repo. Two kinds are always kept:
-    // blacklisted packages (by name), and packages whose build tag is in
-    // IGNORE_TAGS (e.g. _SBo, cf, alien) — these come from sources slacker
-    // doesn't manage as binary repos, so they must never be treated as foreign.
-    let orphans: Vec<_> = db
-        .orphans(&installed)
-        .into_iter()
-        .filter(|p| !bl_installed(cfg, Some(&db), p) && !cfg.is_ignored_tag(p.build_tag()))
+
+    // Foreign = an installed package no longer part of the distro nor an
+    // explicitly-kept source. The decision mirrors how a package is ATTRIBUTED
+    // to a repo (the same logic that drives list-repos), so an `immutable` repo
+    // keeps exactly the packages slacker attributes to it:
+    //
+    //   * Tagged install (cf, alien, _SBo, ...): it came from a tagged source,
+    //     identified by its build tag. Kept iff that tag is in IGNORE_TAGS, OR
+    //     the repo that owns the tag is `immutable`. So `immutable extras` keeps
+    //     every package carrying extras' tag — but making `patches` immutable
+    //     does NOT keep a `foo` you installed from alienbob (its `alien` tag is
+    //     owned by alienbob, not patches), so that `foo` is still foreign.
+    //   * Tagless install (empty build tag — the Slackware/official convention):
+    //     slacker cannot tell which tagless repo it came from, so it is kept iff
+    //     its NAME is in the baseline (official + every `immutable` repo). This
+    //     is how a tagless `immutable` repo is kept whole, by name; and a package
+    //     that left both official and every immutable repo becomes foreign.
+    //
+    // Blacklisted packages are always kept. With no baseline repo configured the
+    // name set falls back to "any repo" so a third-party-only setup isn't told to
+    // remove everything.
+    let baseline: HashSet<&str> = cfg
+        .repos
+        .iter()
+        .filter(|r| r.official || r.immutable)
+        .map(|r| r.name.as_str())
+        .collect();
+    let immutable: HashSet<&str> =
+        cfg.repos.iter().filter(|r| r.immutable).map(|r| r.name.as_str()).collect();
+    let scope: Option<&HashSet<&str>> = if baseline.is_empty() { None } else { Some(&baseline) };
+
+    // Safety: if a baseline repo is configured but its metadata isn't loaded
+    // (never updated, or quarantined), packages it would keep could look foreign.
+    // Refuse rather than propose mass removal as root.
+    for name in &baseline {
+        if !db.has_repo_packages(name) {
+            return Err(format!(
+                "baseline repo '{name}' has no package data loaded — run `slacker update` first. \
+                 Refusing to continue so nothing is wrongly removed."
+            ));
+        }
+    }
+
+    let baseline_names = db.names_provided_by(scope);
+    let orphans: Vec<&pkg::PkgId> = installed
+        .iter()
+        .filter(|p| {
+            if bl_installed(cfg, Some(&db), p) {
+                return false; // blacklisted -> always kept
+            }
+            let tag = p.build_tag();
+            if !tag.is_empty() {
+                // Tagged: kept by IGNORE_TAGS, or if its owning repo is immutable.
+                let owned_by_immutable =
+                    db.repo_for_tag(tag).map_or(false, |r| immutable.contains(r));
+                !(cfg.is_ignored_tag(tag) || owned_by_immutable)
+            } else {
+                // Tagless: kept iff its name is in the baseline (official+immutable).
+                !baseline_names.contains(p.name.as_str())
+            }
+        })
         .collect();
     if orphans.is_empty() {
         println!("No foreign packages found.");
         return Ok(Outcome::Ok);
     }
 
-    println!("{}", ui::blue("The following installed packages belong to no configured repo:"));
+    let header = if scope.is_some() {
+        "The following installed packages are no longer part of the official distribution:"
+    } else {
+        "The following installed packages belong to no configured repo:"
+    };
+    println!("{}", ui::blue(header));
     println!();
     let width = orphans.len().to_string().len();
     for (i, p) in orphans.iter().enumerate() {
@@ -3877,8 +3945,9 @@ fn repos_text_with(current: &str, line: &str) -> String {
 /// Usage reminders shown on any add-* mistake (the "suggestion" half of the
 /// validation). Each field is a separate word — unlike `frozen`, no quoting is
 /// needed (quote only a URL that itself contains shell-special characters).
-const ADD_REPO_USAGE: &str = "usage: slacker add-repo PRIORITY NAME URL [official] [verify=gpg,md5]\n  \
+const ADD_REPO_USAGE: &str = "usage: slacker add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=gpg,md5]\n  \
      e.g.  slacker add-repo 60 alienbob https://slackware.nl/people/alien/sbrepos/current/x86_64\n  \
+     e.g.  slacker add-repo 70 extras https://slackware.uk/slackware/slackware64-current/extra subtree\n  \
      (pass each field as a separate word — no quotes)";
 const ADD_TAG_USAGE: &str = "usage: slacker add-tag PRIORITY NAME TAG\n  \
      e.g.  slacker add-tag 100 SBo _SBo\n  \
