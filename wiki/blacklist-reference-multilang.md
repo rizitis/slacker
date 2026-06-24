@@ -99,7 +99,26 @@ slacker frozen vlc                 # va bene senza virgolette
 slacker frozen kde/                # va bene senza virgolette
 slacker frozen "xlibre-*"          # OBBLIGATORIE: * è un glob della shell
 slacker frozen "@alienbob vlc"     # OBBLIGATORIE: contiene uno spazio
+slacker frozen "@alienbob vlc-*"   # OBBLIGATORIE: uno spazio (@repo) E un glob *
 ```
+
+Cosa fa davvero `"@alienbob vlc-*"`: `@alienbob` limita la regola al repo
+`alienbob`, e `vlc-*` è confrontato come **regex non ancorata** sull'id completo —
+in una regex `-*` significa "zero o più trattini", non "qualsiasi cosa". Quindi
+congela ogni pacchetto `alienbob` il cui id **contiene** `vlc` (es. `vlc`,
+`vlc-plugin-qt`), proprio come un semplice `vlc`; il `-*` non aggiunge nulla. Per
+congelare solo `vlc`, ancorala: `"@alienbob ^vlc-[0-9]"` (per "vlc seguito da
+qualsiasi cosa" la regex è `vlc-.*`, non `vlc-*`).
+
+### Congelare un pacchetto vs. mettere in quarantena un repo
+
+La blacklist congela singoli **pacchetti**. Agire su un intero **repository** è un
+meccanismo separato — la *quarantena*: `distrust-repo` mette in quarantena un repo
+tu stesso, `vet-repo` lo ri-controlla su richiesta, `trust-repo` toglie una
+quarantena che giudichi un falso positivo. slacker mette anche automaticamente in
+quarantena un repo che fallisce la verifica (irraggiungibile o che serve metadati
+malformati/ostili); un repo in quarantena non fornisce alcun pacchetto. Regola
+pratica: blacklist per i pacchetti, quarantena per i repository.
 
 ### Una o più regole
 
@@ -326,7 +345,27 @@ slacker frozen vlc                 # без кавычек нормально
 slacker frozen kde/                # без кавычек нормально
 slacker frozen "xlibre-*"          # ОБЯЗАТЕЛЬНО: * — это glob оболочки
 slacker frozen "@alienbob vlc"     # ОБЯЗАТЕЛЬНО: содержит пробел
+slacker frozen "@alienbob vlc-*"   # ОБЯЗАТЕЛЬНО: пробел (@repo) И glob *
 ```
+
+Что на самом деле делает `"@alienbob vlc-*"`: `@alienbob` ограничивает правило
+репозиторием `alienbob`, а `vlc-*` сопоставляется как **незаякоренное регулярное
+выражение** с полным id — в регулярном выражении `-*` означает «ноль или более
+дефисов», а не «что угодно». Поэтому оно замораживает любой пакет `alienbob`, чей
+id **содержит** `vlc` (напр. `vlc`, `vlc-plugin-qt`), ровно как простое `vlc`;
+`-*` ничего не добавляет. Чтобы заморозить только `vlc`, заякорите:
+`"@alienbob ^vlc-[0-9]"` (для «vlc, за которым что угодно» регекс — `vlc-.*`, а не
+`vlc-*`).
+
+### Заморозка пакета против карантина репозитория
+
+Blacklist замораживает отдельные **пакеты**. Воздействие на целый **репозиторий**
+— отдельный механизм, *карантин*: `distrust-repo` помещает репозиторий в карантин
+вручную, `vet-repo` перепроверяет его по запросу, `trust-repo` снимает карантин,
+который вы считаете ложным срабатыванием. slacker также автоматически помещает в
+карантин репозиторий, не прошедший проверку (недоступный или отдающий
+искажённые/враждебные метаданные); репозиторий в карантине не предоставляет
+пакетов. Правило: blacklist — для пакетов, карантин — для репозиториев.
 
 ### Одно или несколько правил
 
@@ -555,7 +594,26 @@ slacker frozen vlc                 # bien sin comillas
 slacker frozen kde/                # bien sin comillas
 slacker frozen "xlibre-*"          # OBLIGATORIAS: * es un glob de la shell
 slacker frozen "@alienbob vlc"     # OBLIGATORIAS: contiene un espacio
+slacker frozen "@alienbob vlc-*"   # OBLIGATORIAS: un espacio (@repo) Y un glob *
 ```
+
+Qué hace realmente `"@alienbob vlc-*"`: `@alienbob` limita la regla al repo
+`alienbob`, y `vlc-*` se compara como **regex sin anclar** contra el id completo —
+en una regex `-*` significa "cero o más guiones", no "cualquier cosa". Así que
+congela cualquier paquete `alienbob` cuyo id **contenga** `vlc` (p. ej. `vlc`,
+`vlc-plugin-qt`), igual que un simple `vlc`; el `-*` no añade nada. Para congelar
+solo `vlc`, ánclala: `"@alienbob ^vlc-[0-9]"` (para "vlc seguido de cualquier
+cosa" la regex es `vlc-.*`, no `vlc-*`).
+
+### Congelar un paquete vs. poner en cuarentena un repo
+
+La blacklist congela paquetes **individuales**. Actuar sobre un **repositorio**
+entero es un mecanismo aparte — la *cuarentena*: `distrust-repo` pone en cuarentena
+un repo tú mismo, `vet-repo` lo revisa de nuevo bajo demanda, `trust-repo` levanta
+una cuarentena que juzgues un falso positivo. slacker también pone en cuarentena
+automáticamente un repo que falla la verificación (inalcanzable o que sirve
+metadatos malformados/hostiles); un repo en cuarentena no provee ningún paquete.
+Regla práctica: blacklist para paquetes, cuarentena para repositorios.
 
 ### Una o varias reglas
 
@@ -768,7 +826,22 @@ slacker frozen vlc                 # 不加引号也可以
 slacker frozen kde/                # 不加引号也可以
 slacker frozen "xlibre-*"          # 必须加：* 是 shell 通配符
 slacker frozen "@alienbob vlc"     # 必须加：包含空格
+slacker frozen "@alienbob vlc-*"   # 必须加：空格（@repo）以及 * 通配符
 ```
+
+`"@alienbob vlc-*"` 实际做什么：`@alienbob` 把规则限定到 `alienbob` 仓库，而 `vlc-*`
+是按**未锚定的正则**匹配完整 id 的——在正则里 `-*` 表示“零个或多个连字符”，而非“任意
+内容”。因此它会冻结任何 id **含** `vlc` 的 `alienbob` 包（如 `vlc`、`vlc-plugin-qt`），
+与单写 `vlc` 一样；`-*` 没有增加任何效果。若只想冻结 `vlc`，请加锚点：
+`"@alienbob ^vlc-[0-9]"`（“vlc 后接任意内容”的正则是 `vlc-.*`，而不是 `vlc-*`）。
+
+### 冻结软件包 vs. 隔离仓库
+
+blacklist 冻结的是单个**软件包**。对整个**仓库**采取行动是另一套机制——*隔离*：
+`distrust-repo` 由你自己把某仓库放入隔离，`vet-repo` 按需重新检查它，`trust-repo`
+解除你判断为误报的隔离。slacker 也会自动隔离未通过审查的仓库（无法访问，或提供畸形/
+恶意元数据）；被隔离的仓库不提供任何软件包。经验法则：blacklist 用于软件包，隔离用于
+仓库。
 
 ### 一条或多条规则
 
@@ -984,7 +1057,26 @@ slacker frozen vlc                 # correct sans guillemets
 slacker frozen kde/                # correct sans guillemets
 slacker frozen "xlibre-*"          # OBLIGATOIRES : * est un glob du shell
 slacker frozen "@alienbob vlc"     # OBLIGATOIRES : contient une espace
+slacker frozen "@alienbob vlc-*"   # OBLIGATOIRES : une espace (@repo) ET un glob *
 ```
+
+Ce que fait réellement `"@alienbob vlc-*"` : `@alienbob` restreint la règle au dépôt
+`alienbob`, et `vlc-*` est comparé comme une **regex non ancrée** à l'id complet —
+dans une regex `-*` veut dire « zéro ou plusieurs tirets », pas « n'importe quoi ».
+Elle gèle donc tout paquet `alienbob` dont l'id **contient** `vlc` (p. ex. `vlc`,
+`vlc-plugin-qt`), exactement comme un simple `vlc` ; le `-*` n'ajoute rien. Pour ne
+geler que `vlc`, ancre-la : `"@alienbob ^vlc-[0-9]"` (pour « vlc suivi de n'importe
+quoi », la regex est `vlc-.*`, pas `vlc-*`).
+
+### Geler un paquet vs. mettre en quarantaine un dépôt
+
+La blacklist gèle des **paquets** individuels. Agir sur un **dépôt** entier est un
+mécanisme distinct — la *quarantaine* : `distrust-repo` met un dépôt en quarantaine
+toi-même, `vet-repo` le recontrôle à la demande, `trust-repo` lève une quarantaine
+que tu juges être un faux positif. slacker met aussi automatiquement en quarantaine
+un dépôt qui échoue au contrôle (injoignable ou servant des métadonnées
+malformées/hostiles) ; un dépôt en quarantaine ne fournit aucun paquet. Règle
+pratique : la blacklist pour les paquets, la quarantaine pour les dépôts.
 
 ### Une ou plusieurs règles
 

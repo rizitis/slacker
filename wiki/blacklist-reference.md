@@ -16,6 +16,22 @@ package is installed:
   from upgrades, and from `check-updates`. It is still shown by `search` and
   `info`, marked `[blacklisted]`.
 
+## Freezing a package vs. quarantining a repo
+
+The blacklist freezes/hides individual **packages**. Acting on a whole
+**repository** is a separate mechanism — *quarantine*:
+
+- slacker auto-quarantines a repo that fails vetting (unreachable, or serving
+  malformed/hostile metadata); a quarantined repo provides no packages at all.
+- `slacker distrust-repo NAME` — quarantine a repo yourself;
+- `slacker vet-repo NAME` — re-check it on demand (clears the quarantine if it
+  now passes);
+- `slacker trust-repo NAME` — lift a quarantine you judge a false positive.
+
+Rule of thumb: use the **blacklist** for individual packages, **quarantine** for
+whole repositories. (To keep a repo's packages but still let `clean-system` run,
+see the `immutable` flag below, not quarantine.)
+
 ## Keeping a package out of clean-system
 
 Freezing a package with the blacklist is **one of three** ways to keep it out of
@@ -85,7 +101,17 @@ slacker frozen vlc                 # fine unquoted
 slacker frozen kde/                # fine unquoted
 slacker frozen "xlibre-*"          # MUST quote: * is a shell glob
 slacker frozen "@alienbob vlc"     # MUST quote: contains a space
+slacker frozen "@alienbob vlc-*"   # MUST quote: a space (@repo) AND a * glob
 ```
+
+What `"@alienbob vlc-*"` actually does: the `@alienbob` part scopes the rule to
+the `alienbob` repo, and `vlc-*` is matched as an **unanchored regex** against the
+full package id — and in a regex `-*` means "zero or more hyphens", not "anything".
+So it freezes any installed `alienbob` package whose id **contains** `vlc` (e.g.
+`vlc`, `vlc-plugin-qt`), exactly like a bare `vlc` would; the `-*` adds nothing. To
+freeze only the `vlc` package, anchor it and use a character class: `"@alienbob
+^vlc-[0-9]"`. (To match "vlc followed by anything", the regex is `vlc-.*`, not
+`vlc-*`.)
 
 ### One rule per call or many
 

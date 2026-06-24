@@ -12,18 +12,19 @@ remove, ...) need root; queries (search, info, file-search, ...) do not.
 
 1. First-time setup
 2. Keeping metadata fresh
-3. Searching and inspecting
+3. Searching, inspecting, and listing repos
 4. Installing
 5. Upgrading
 6. Reinstalling and removing
 7. Whole repos and build tags (`@` selectors)
-8. Downloading without installing
-9. Freezing packages (blacklist)
-10. Templates
-11. Cleaning up
-12. Global flags and exit codes
-13. Common workflows
-14. Package verification
+8. Managing repositories (add, remove, tags, trust)
+9. Downloading without installing
+10. Freezing packages (blacklist)
+11. Templates
+12. Cleaning up
+13. Global flags and exit codes
+14. Common workflows
+15. Package verification
 
 ---
 
@@ -32,10 +33,6 @@ remove, ...) need root; queries (search, info, file-search, ...) do not.
 Configuration lives in `/etc/slacker/` (override with `--config-dir`). Copy the
 shipped templates and edit them:
 
-```
-mkdir -p /etc/slacker
-cp examples/etc-slacker/* /etc/slacker/
-```
 
 Pick exactly one mirror in `/etc/slacker/mirrors` (none is active by default;
 two or more active lines is an error):
@@ -50,12 +47,25 @@ keyword `mirror` for the official one) and must have distinct priorities;
 higher priority wins:
 
 ```
-# priority  name        url|mirror                                            [official]
+# priority  name        url|mirror                                            [flags]
 100         slackware   mirror                                                official
-90          extras      https://mirror.nl.leaseweb.net/slackware/slackware64-current/extra
+90          extras      https://mirror.nl.leaseweb.net/slackware/slackware64-current/extra   subtree
 80          conraid     https://slackers.it/repository/slackware64-current
 60          alienbob    https://slackware.nl/people/alien/sbrepos/current/x86_64
 ```
+
+Flags (any order) go after the URL: `official` (the tracked repo), `subtree` (a
+Slackware distribution subtree — see below), `immutable` (a repo whose packages
+`clean-system` never removes), and `verify=...` (a per-repo verification
+override).
+
+The four Slackware distribution subtrees — **`extra`, `patches`, `testing`,
+`pasture`** — **must always carry the `subtree` flag** (anywhere after the URL).
+Their `PACKAGES.TXT` lists package locations relative to the distribution root,
+so without `subtree` their packages fail to download (a doubled path segment);
+with it, packages and `GPG-KEY` are fetched from the parent (root) URL while the
+metadata still comes from the repo URL itself. This is not optional for these
+four repos.
 
 Optionally add tag-priority lines so source/local packages are never migrated
 or downgraded by `upgrade-all`:
@@ -65,12 +75,17 @@ or downgraded by `upgrade-all`:
 100         local       _rtz
 ```
 
-Import the repo GPG keys once, then refresh:
+Import the repo GPG keys once, then refresh and check the setup:
 
 ```
 slacker update gpg
 slacker update
+slacker status                  # confirms the setup is healthy and flags anything to fix
 ```
+
+`update gpg` pins each repo's key (trust on first use). For a `subtree` repo it
+pins the same Slackware key from the root, which is what lets per-package GPG
+verification succeed for `extra/`/`testing/`/`patches/` packages at install.
 
 ---
 
@@ -79,18 +94,21 @@ slacker update
 ```
 slacker update                  # refresh PACKAGES.TXT/CHECKSUMS, verify GPG
 slacker update gpg              # (re)import repo GPG keys, then refresh
-slacker check-updates           # exit 100 if the official ChangeLog changed
+slacker check-updates           # check every repo; exit 100 if any has updates pending
 slacker show-changelog          # view the cached ChangeLog (paged on a TTY)
+slacker show-changelog conraid  # a named repo's ChangeLog (fetched on demand)
 ```
 
 ---
 
-## 3. Searching and inspecting
+## 3. Searching, inspecting, and listing repos
 
 ```
-slacker search firefox          # match names and descriptions
+slacker search firefox          # find a package by its exact name (case-insensitive)
 slacker info bash               # per-repo candidates + installed version
 slacker file-search bin/bash    # which package ships this file (uses MANIFEST)
+slacker list-repos              # repos: priority, installed counts, verify, flags
+slacker status                  # health-check the whole setup; says what to fix next
 ```
 
 `info` shows which repo wins by priority. For example, if `ffmpeg` exists in
@@ -123,6 +141,18 @@ slacker install python
 
 Already-installed packages are refused by `install` (use `upgrade` or
 `reinstall` instead).
+
+**Dependencies are a third-party feature, not an official one.** Slackware's own
+repositories — `slackware` and the `extra`/`patches`/`testing`/`pasture`
+subtrees — neither ship nor expect dependency information: a complete install of
+**all** Slackware package sets is the official prerequisite, so every dependency
+is assumed already present, and slacker performs no dependency resolution for
+them (none is needed). Independent repos such as `alienbob` and `conraid` do ship
+per-package `.dep` files; slacker reads them **only for the repos that provide
+them**, pulling in any missing dependencies from that same repo. So an
+`install`/`upgrade` from the official tree resolves nothing, while one from a
+third-party repo with `.dep` files does. Turn it off anywhere with `--no-deps`
+(per run) or `RESOLVE_DEPS=no` (in `slacker.conf`).
 
 ---
 
@@ -204,7 +234,55 @@ slacker upgrade-all             # leaves the gnome packages untouched
 
 ---
 
-## 8. Downloading without installing
+## 8. Managing repositories (add, remove, tags, trust)
+
+You can edit `/etc/slacker/repos` by hand, or let slacker do it for you
+(validated, with a confirmation prompt):
+
+```
+slacker add-repo 70 extras https://.../slackware64-current/extra subtree
+slacker add-repo 80 conraid https://slackers.it/repository/slackware64-current
+slacker del-repo conraid
+slacker add-tag 100 SBo _SBo            # a build-tag priority line
+slacker del-tag _SBo
+```
+
+`add-repo` flags (any order): `official`, `immutable`, `subtree`, `verify=...`.
+A Slackware **subtree** (`extra/`, `patches/`, `testing/`, `pasture/`) must get
+`subtree` or its packages fail to download; `immutable` keeps a repo's packages
+out of `clean-system` (see §12).
+
+Inspect and health-check at any time:
+
+```
+slacker list-repos              # priority, installed counts, verify policy, flags
+slacker status                  # whole-setup health check + what to fix next
+```
+
+`list-repos` shows a table and marks `(official)`, `(immutable)`, `(subtree)`
+and any quarantine. `status` groups its findings (Setup / Installed / Online)
+with ✓/!/✗ markers and ends with a plain-language verdict and next steps.
+
+### Repository safety: quarantine and trust
+
+slacker vets repos and **quarantines** any that are unreachable or serve
+malformed/hostile metadata; a quarantined repo provides no packages until you
+act. New or as-yet-untrusted repos are light-vetted on every `update`;
+`add-repo` and `vet-repo` vet thoroughly.
+
+```
+slacker vet-repo conraid        # re-check on demand (quarantine on fail, clear on pass)
+slacker trust-repo conraid      # lift a quarantine you judge a false positive (override)
+slacker distrust-repo conraid   # freeze a repo yourself
+```
+
+GPG keys are pinned on first import (trust on first use): if a repo's key ever
+changes, slacker refuses it as a possible key-substitution attack rather than
+trusting the new key silently. `list-repos` and `status` show the state.
+
+---
+
+## 9. Downloading without installing
 
 Files are saved to `CACHE_DIR/packages/<repo>/` by default, the same place
 `install` looks, so a later install reuses them.
@@ -221,7 +299,7 @@ shared directory like `/tmp` is safe.
 
 ---
 
-## 9. Freezing packages (blacklist)
+## 10. Freezing packages (blacklist)
 
 Freeze a package so update, upgrade-all, reinstall, and clean-system leave it
 alone (it is added to `/etc/slacker/blacklist`):
@@ -229,14 +307,32 @@ alone (it is added to `/etc/slacker/blacklist`):
 ```
 slacker frozen pandoc-bin               # freeze one
 slacker frozen firefox chromium vlc     # freeze several
+slacker frozen "@alienbob vlc-*"        # scope to a repo + a pattern (quotes required)
 ```
+
+Quote any rule that has a space (an `@repo` rule) or a shell glob character
+(`*`, `?`, `[`, `]`, ...). `"@alienbob vlc-*"` scopes the rule to the `alienbob`
+repo, and `vlc-*` is an **unanchored regex** against the full package id — in a
+regex `-*` is "zero or more hyphens", not "anything", so it freezes any installed
+`alienbob` package whose id contains `vlc` (e.g. `vlc`, `vlc-plugin-qt`), just as a
+bare `vlc` would. To freeze only the `vlc` package, anchor it: `"@alienbob
+^vlc-[0-9]"`.
 
 Use the exact package name (not the full version-tag). To unfreeze, remove the
 line from `/etc/slacker/blacklist`.
 
+The blacklist freezes individual **packages**. To act on a whole **repository**
+there is a separate mechanism — *quarantine*: `distrust-repo` freezes a repo,
+`vet-repo` re-checks it, `trust-repo` lifts it (§8).
+
+Blacklisting is the per-package way to keep something out of `clean-system`. To
+protect a whole group at once, prefer `IGNORE_TAGS` (by build tag, e.g.
+`_SBo cf alien`) or marking a repo `immutable` (§8, §12) instead of freezing
+each package by hand.
+
 ---
 
-## 10. Templates
+## 11. Templates
 
 A template is a snapshot of installed package names that you can replay on
 another machine or after a reinstall.
@@ -253,10 +349,11 @@ Note the distinction: `remove-template` removes the *packages*;
 
 ---
 
-## 11. Cleaning up
+## 12. Cleaning up
 
 ```
-slacker clean-system            # list packages in no configured repo, choose what to remove
+slacker clean-system            # list packages no longer in the official baseline, choose what to remove
+slacker --dry-run clean-system  # preview first — always do this
 slacker clean-cache             # delete downloaded *.txz from the cache
 slacker clean-cache alienbob    # only that repo's cached files
 slacker --dry-run clean-cache   # show what would be freed
@@ -264,12 +361,28 @@ slacker new-config              # handle leftover *.new config files
 ```
 
 `clean-cache` never touches repo metadata or GPG keys (those live under
-`CACHE_DIR/repos`), so it is always safe to run. `clean-system` never lists
-blacklisted packages or packages whose build tag is in `IGNORE_TAGS`.
+`CACHE_DIR/repos`), so it is always safe to run.
+
+`clean-system` is slackpkg-style: it removes packages that are **no longer part
+of the official baseline** — the official repo's `PACKAGES.TXT` plus any repo
+marked `immutable`. So a package the distribution itself dropped is removed even
+if a third-party repo still ships the name. A package is kept (never listed)
+when any of three things is true:
+
+- it matches a **blacklist** rule (`slacker frozen NAME`);
+- its **build tag** is in `IGNORE_TAGS` (`slacker.conf`), e.g. `_SBo cf alien`;
+- it is attributed to an **`immutable`** repo (the repo that owns its build tag,
+  or for a tagless package any immutable repo that provides its name).
+
+So before your first `clean-system`, set `IGNORE_TAGS` for your SBo/local/source
+tags and/or mark `extra/`/`testing/`/`patches/` repos `immutable` — otherwise
+those packages will be listed as foreign. As a safety guard `clean-system`
+refuses to run if a baseline repo has no metadata loaded (run `update` first),
+and `--dry-run` shows exactly what it would remove without touching anything.
 
 ---
 
-## 12. Global flags and exit codes
+## 13. Global flags and exit codes
 
 Read-only commands (`search`, `info`, `file-search`, `check-updates`,
 `show-changelog`) run as any user. Everything that changes the system, cache, or
@@ -309,14 +422,15 @@ slacker check-updates ; [ $? -eq 100 ] && slacker -y upgrade-all
 
 ---
 
-## 13. Common workflows
+## 14. Common workflows
 
 Routine system update:
 
 ```
 slacker update
 slacker upgrade-all
-slacker clean-system
+slacker --dry-run clean-system   # review first (it removes anything off the baseline)
+slacker clean-system             # then run it once IGNORE_TAGS/immutable are set (see §12)
 ```
 
 First sync after editing repos, with key import:
@@ -353,7 +467,7 @@ slacker clean-cache
 
 ---
 
-## 14. Package verification
+## 15. Package verification
 
 slacker verifies packages before installing them. The policy is set globally
 with `VERIFY` in `slacker.conf` and can be overridden per repo with a `verify=`
@@ -371,6 +485,20 @@ provides one (a bad signature always fails; a missing one is skipped), and at
 least one integrity checksum (md5 or sha) must be present and match. If neither
 md5 nor sha is available, installation stops - the repo's checksum file is
 missing or broken.
+
+Slackware ships a per-package `.txz.asc` next to each package, so under `all`
+slacker GPG-verifies the package itself and prints, e.g.,
+`verified: gpg (signer) + md5`. For this you must have pinned the repo's key
+with `slacker update gpg`; until then you get `integrity only: md5` (the package
+is still md5-checked against the GPG-signed `CHECKSUMS.md5`, just not
+authenticated per package). For a `subtree` repo the key is fetched from the
+root, where Slackware keeps the one key that signs the whole tree — so
+`extra/`/`testing/`/`patches/` pin the same fingerprint as the official repo.
+
+**Key pinning (trust on first use):** the first import pins the repo's
+fingerprint; if it ever changes, slacker refuses the repo as a possible
+key-substitution attack rather than trusting the new key silently. See §8 for
+the quarantine/trust commands.
 
 Require specific methods (stops if one is missing, telling you how to relax it):
 
