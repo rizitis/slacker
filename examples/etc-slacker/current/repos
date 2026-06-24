@@ -8,15 +8,16 @@
 #
 #
 # The OFFICIAL line's url is the keyword 'mirror': slacker fills it in from the
-# active line in the 'mirrors' file. Change your mirror in '/etc/slecker/mirrors'; change ONLY the
+# active line in the 'mirrors' file. Change your mirror in '/etc/slacker/mirrors'; change ONLY the
 # official repo's priority/placement here.
 #
 # priority  name        url       [official]
 100         slackware   mirror    official
+#90         extras      mirror/extra subtree
+#90         testin      mirror/testing subtree
 
 ### --- slackware64-current repos (uncoment and edit priority number as for your needs) ---
-#90         extras      https://slackware.uk/slackware/slackware64-current/extra subtree
-#90         testin      https://slackware.uk/slackware/slackware64-current/testing subtree
+
 #60         alienbob    https://slackware.nl/people/alien/sbrepos/current/x86_64
 #80         conraid     https://slackers.it/repository/slackware64-current
 #50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/current/x86_64

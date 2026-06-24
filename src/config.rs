@@ -541,7 +541,9 @@ fn parse_mirrors(text: &str) -> Result<Option<String>, String> {
 ///
 /// A URL of the literal keyword `mirror` is replaced by the active mirror from
 /// the `mirrors` file, so the official repo's URL lives there while its
-/// priority/name/placement live here.
+/// priority/name/placement live here. The `mirror/<subpath>` form appends the
+/// subpath to the active mirror (e.g. `mirror/extra` -> <active-mirror>/extra),
+/// letting a distribution subtree follow the same mirror as the official repo.
 /// Fully validate a candidate `repos` file body the way `Config::load_dir`
 /// would: it parses the lines (format, priority, verify flags, distinct binary
 /// priorities, unique tags, `mirror` resolution from the dir's `mirrors` file)
@@ -590,10 +592,11 @@ fn parse_repos(
             format!("repos:{}: priority '{prio}' is not an integer", lineno + 1)
         })?;
 
-        // A line whose third field is a URL (or the 'mirror' keyword) is a
-        // binary repo. Otherwise the third field is a build tag, and the line
-        // assigns a priority to packages carrying that tag (e.g. `100 SBo _SBo`).
-        let is_repo = third == "mirror" || third.contains("://");
+        // A line whose third field is a URL, the `mirror` keyword, or a
+        // `mirror/<subpath>` form is a binary repo. Otherwise the third field is
+        // a build tag, and the line assigns a priority to packages carrying that
+        // tag (e.g. `100 SBo _SBo`).
+        let is_repo = third == "mirror" || third.starts_with("mirror/") || third.contains("://");
         if !is_repo {
             if let Some(extra) = fields.next() {
                 return Err(format!(
@@ -609,16 +612,20 @@ fn parse_repos(
             continue;
         }
 
-        // Resolve the `mirror` keyword from the mirrors catalogue.
-        let url = if third == "mirror" {
-            match active_mirror {
-                Some(m) => m.to_string(),
-                None => {
-                    return Err(format!(
-                        "repos:{}: '{name}' uses 'mirror' but no mirror is uncommented in 'mirrors'",
-                        lineno + 1
-                    ))
-                }
+        // Resolve the `mirror` keyword from the mirrors catalogue. A bare
+        // `mirror` yields the active mirror URL; `mirror/<subpath>` appends the
+        // subpath to it (e.g. `mirror/extra` -> <active-mirror>/extra), so a
+        // distribution subtree follows the same mirror as the official repo.
+        let url = if third == "mirror" || third.starts_with("mirror/") {
+            let m = active_mirror.ok_or_else(|| {
+                format!(
+                    "repos:{}: '{name}' uses 'mirror' but no mirror is uncommented in 'mirrors'",
+                    lineno + 1
+                )
+            })?;
+            match third.strip_prefix("mirror/") {
+                Some(sub) => format!("{}/{}", m.trim_end_matches('/'), sub.trim_matches('/')),
+                None => m.to_string(),
             }
         } else {
             third.to_string()
@@ -744,6 +751,27 @@ mod tests {
         assert_eq!(r[0].url, "https://chosen/slackware64-current");
         assert!(r[0].official);
         assert_eq!(r[1].url, "https://ab/");
+    }
+
+    #[test]
+    fn repos_mirror_subpath_resolves_and_keeps_flags() {
+        // `mirror/<subpath>` is a repo line (not a tag line) and appends the
+        // subpath to the active mirror; trailing flags such as `subtree` parse.
+        let (r, _tags) = parse_repos(
+            "100 slackware mirror official\n\
+             90 extras mirror/extra subtree immutable\n",
+            Some("https://m/slackware64-current"),
+        )
+        .unwrap();
+        assert_eq!(r[0].url, "https://m/slackware64-current");
+        assert_eq!(r[1].url, "https://m/slackware64-current/extra");
+        assert!(r[1].subtree);
+        assert!(r[1].immutable);
+    }
+
+    #[test]
+    fn repos_mirror_subpath_without_active_mirror_errors() {
+        assert!(parse_repos("90 extras mirror/extra subtree\n", None).is_err());
     }
 
     #[test]

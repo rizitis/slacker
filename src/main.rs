@@ -2023,39 +2023,67 @@ fn verify_label(p: &config::VerifyPolicy) -> String {
     }
 }
 
-/// Attribute each installed package to a configured repo by its build tag: an
-/// empty tag is official; a third-party tag (cf, alien, ...) maps to the repo
-/// whose packages carry it (looked up in the DB). Returns (per-repo counts,
-/// untracked-by-source-tag counts). With no DB, both maps are empty.
+/// Attribute each installed package to a source by its build tag (pure core).
+/// An empty tag is the official repo; a tag the `resolve_repo` closure maps to a
+/// binary repo goes there; a tag matching a declared tag-priority rule (e.g.
+/// `_SBo`) maps to that rule's name; any other tag is itself the source. An
+/// installed package is never "untracked" — its build tag is the user's own
+/// choice and a legitimate source. Returns (per-repo, per-tag-rule-by-name,
+/// per-other-tag).
+fn attribute_tags(
+    official_repo: Option<&str>,
+    tag_priorities: &[config::TagPriority],
+    resolve_repo: impl Fn(&str) -> Option<String>,
+    installed: &[pkg::PkgId],
+) -> (
+    HashMap<String, usize>,
+    HashMap<String, usize>,
+    HashMap<String, usize>,
+) {
+    let mut per_repo: HashMap<String, usize> = HashMap::new();
+    let mut per_rule: HashMap<String, usize> = HashMap::new();
+    let mut per_tag: HashMap<String, usize> = HashMap::new();
+    for p in installed {
+        let tag = p.build_tag();
+        let repo = if tag.is_empty() {
+            official_repo.map(|s| s.to_string())
+        } else {
+            resolve_repo(tag)
+        };
+        if let Some(r) = repo {
+            *per_repo.entry(r).or_default() += 1;
+        } else if tag.is_empty() {
+            // Empty tag but no official repo configured: a real edge.
+            *per_tag.entry("(no official repo)".to_string()).or_default() += 1;
+        } else if let Some(tp) = tag_priorities.iter().find(|tp| tp.tag == tag) {
+            *per_rule.entry(tp.name.clone()).or_default() += 1;
+        } else {
+            *per_tag.entry(tag.to_string()).or_default() += 1;
+        }
+    }
+    (per_repo, per_rule, per_tag)
+}
+
+/// Attribute installed packages using the available-package DB to resolve which
+/// repo serves a build tag. With no DB, all maps are empty.
 fn installed_attribution(
     cfg: &Config,
     db: Option<&PkgDb>,
     installed: &[pkg::PkgId],
-) -> (HashMap<String, usize>, HashMap<String, usize>) {
-    let mut per_repo: HashMap<String, usize> = HashMap::new();
-    let mut untracked: HashMap<String, usize> = HashMap::new();
-    if let Some(db) = db {
-        for p in installed {
-            let tag = p.build_tag();
-            let repo = if tag.is_empty() {
-                cfg.official_repo_name()
-            } else {
-                db.repo_for_tag(tag)
-            };
-            match repo {
-                Some(r) => *per_repo.entry(r.to_string()).or_default() += 1,
-                None => {
-                    let label = if tag.is_empty() {
-                        "(no official repo)".to_string()
-                    } else {
-                        tag.to_string()
-                    };
-                    *untracked.entry(label).or_default() += 1;
-                }
-            }
-        }
+) -> (
+    HashMap<String, usize>,
+    HashMap<String, usize>,
+    HashMap<String, usize>,
+) {
+    match db {
+        Some(db) => attribute_tags(
+            cfg.official_repo_name(),
+            &cfg.tag_priorities,
+            |t| db.repo_for_tag(t).map(|s| s.to_string()),
+            installed,
+        ),
+        None => (HashMap::new(), HashMap::new(), HashMap::new()),
     }
-    (per_repo, untracked)
 }
 
 /// `list-repos`: show every configured repository with its priority, effective
@@ -2065,7 +2093,7 @@ fn installed_attribution(
 fn cmd_list_repos(cfg: &Config) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let (db, missing) = PkgDb::load_available(cfg);
-    let (per_repo, untracked) = installed_attribution(cfg, Some(&db), &installed);
+    let (per_repo, per_rule, per_other) = installed_attribution(cfg, Some(&db), &installed);
 
     let repos = cfg.repos_by_priority();
     // Only a repo whose metadata is missing shows `?`; every other repo gets its
@@ -2152,24 +2180,44 @@ fn cmd_list_repos(cfg: &Config) -> Result<Outcome, String> {
     if !cfg.tag_priorities.is_empty() {
         println!();
         println!("{}", ui::blue("Build-tag priorities:"));
+        let rule_inst = |t: &config::TagPriority| per_rule.get(&t.name).copied().unwrap_or(0);
         let wtn = cfg.tag_priorities.iter().map(|t| t.name.len()).chain(once(4)).max().unwrap();
+        let wtt = cfg.tag_priorities.iter().map(|t| t.tag.len()).chain(once(3)).max().unwrap();
+        let wti = cfg
+            .tag_priorities
+            .iter()
+            .map(|t| rule_inst(t).to_string().len())
+            .chain(once(4))
+            .max()
+            .unwrap();
         println!(
-            "  {}{}{}{}{}",
+            "  {}{}{}{}{}{}{}",
             ui::blue(&format!("{:>4}", "Pri")),
             sep,
             ui::blue(&format!("{:<wtn$}", "Name")),
             sep,
-            ui::blue("Tag"),
+            ui::blue(&format!("{:<wtt$}", "Tag")),
+            sep,
+            ui::blue(&format!("{:>wti$}", "Inst")),
         );
         for t in &cfg.tag_priorities {
-            println!(
-                "  {}{}{}{}{}",
+            let inst = rule_inst(t);
+            let mut line = format!(
+                "  {}{}{}{}{}{}{}",
                 ui::dim(&format!("{:>4}", t.priority)),
                 sep,
                 ui::white(&format!("{:<wtn$}", t.name)),
                 sep,
-                ui::cyan(&t.tag),
+                ui::cyan(&format!("{:<wtt$}", t.tag)),
+                sep,
+                ui::cyan(&format!("{:>wti$}", inst)),
             );
+            // A declared rule that matches no installed package is worth a quiet
+            // heads-up (often a typo in the tag), but it is not an error.
+            if inst == 0 {
+                line.push_str(&ui::yellow("  (declared, no installed package)"));
+            }
+            println!("{line}");
         }
     }
 
@@ -2179,16 +2227,16 @@ fn cmd_list_repos(cfg: &Config) -> Result<Outcome, String> {
         ui::blue("Total installed packages:"),
         ui::white(&installed.len().to_string())
     );
-    if !untracked.is_empty() {
-        let total_untracked: usize = untracked.values().sum();
-        let mut items: Vec<(&String, &usize)> = untracked.iter().collect();
+    if !per_other.is_empty() {
+        let total_other: usize = per_other.values().sum();
+        let mut items: Vec<(&String, &usize)> = per_other.iter().collect();
         items.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
         let breakdown =
             items.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(", ");
         println!(
             "{} {} {}",
-            ui::blue("From untracked sources (no configured repo):"),
-            ui::white(&total_untracked.to_string()),
+            ui::blue("Installed under other build tags:"),
+            ui::white(&total_other.to_string()),
             ui::dim(&format!("[{breakdown}]")),
         );
     }
@@ -2432,7 +2480,7 @@ fn cmd_status(cfg: &Config) -> Result<Outcome, String> {
 
     // ---------- Installed ----------
     println!("\n{}", ui::blue("Installed"));
-    let (per_repo, untracked) = installed_attribution(cfg, Some(&db), &installed);
+    let (per_repo, per_rule, per_other) = installed_attribution(cfg, Some(&db), &installed);
     srow(&ok, "Packages", &ui::white(&installed.len().to_string()));
     let mut parts: Vec<String> = repos
         .iter()
@@ -2446,9 +2494,18 @@ fn cmd_status(cfg: &Config) -> Result<Outcome, String> {
             }
         })
         .collect();
-    let untr: usize = untracked.values().sum();
-    if untr > 0 {
-        parts.push(format!("untracked {untr}"));
+    // Declared tag-priority rules (SBo, local, ...) are named sources too.
+    let mut seen_rule = std::collections::HashSet::new();
+    for tp in &cfg.tag_priorities {
+        if seen_rule.insert(tp.name.as_str()) {
+            parts.push(format!("{} {}", tp.name, per_rule.get(&tp.name).copied().unwrap_or(0)));
+        }
+    }
+    // Any remaining build tags are legitimate sources, shown by their tag.
+    let mut others: Vec<(&String, &usize)> = per_other.iter().collect();
+    others.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    for (t, c) in others {
+        parts.push(format!("{t} {c}"));
     }
     srow(&info, "By source", &ui::dim(&parts.join(", ")));
     if !missing_meta.is_empty() {
@@ -4337,5 +4394,55 @@ mod selection_tests {
         assert_eq!(parse_selection("1 3-5", 6), [1,3,4,5].into_iter().collect()); // list + range
         assert!(parse_selection("", 5).is_empty());
         assert!(parse_selection("xyz", 5).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::attribute_tags;
+    use crate::config::TagPriority;
+    use crate::pkg::PkgId;
+
+    fn ids(names: &[&str]) -> Vec<PkgId> {
+        names.iter().map(|n| PkgId::parse(n).unwrap()).collect()
+    }
+    fn rule(name: &str, tag: &str) -> TagPriority {
+        TagPriority { name: name.into(), tag: tag.into(), priority: 100 }
+    }
+
+    #[test]
+    fn every_installed_package_has_a_source_never_untracked() {
+        let installed = ids(&[
+            "aaa-1.0-x86_64-1",          // empty tag   -> official repo
+            "bbb-2.0-x86_64-1",          // empty tag   -> official repo
+            "vim-9.1-x86_64-1_SBo",      // declared    -> rule "SBo"
+            "mc-4.8-x86_64-1_SBo",       // declared    -> rule "SBo"
+            "asio-1.36.0-x86_64-1cf",    // repo-served -> "conraid"
+            "slacker-0.3-x86_64-1_FRG",  // other tag   -> "_FRG"
+            "myradio-1.0-x86_64-1_wsr",  // other tag   -> "_wsr"
+        ]);
+        let rules = vec![rule("SBo", "_SBo"), rule("local", "_YOURTAG")];
+        let (per_repo, per_rule, per_other) = attribute_tags(
+            Some("slackware"),
+            &rules,
+            |t| (t == "cf").then(|| "conraid".to_string()),
+            &installed,
+        );
+
+        assert_eq!(per_repo.get("slackware"), Some(&2));
+        assert_eq!(per_repo.get("conraid"), Some(&1));
+        assert_eq!(per_rule.get("SBo"), Some(&2));
+        // A declared rule with no matching package is simply absent (count 0),
+        // not an error and not "untracked".
+        assert_eq!(per_rule.get("local"), None);
+        assert_eq!(per_other.get("_FRG"), Some(&1));
+        assert_eq!(per_other.get("_wsr"), Some(&1));
+
+        // Nothing is dropped: every installed package is attributed exactly once.
+        let total: usize =
+            per_repo.values().chain(per_rule.values()).chain(per_other.values()).sum();
+        assert_eq!(total, installed.len());
+        // There is no "untracked" bucket; the only "other" keys are real tags.
+        assert!(!per_other.keys().any(|k| k.contains("untracked")));
     }
 }
