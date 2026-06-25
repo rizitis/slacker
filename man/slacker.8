@@ -333,10 +333,29 @@ and a quarantine marker when a repo is frozen.
 .TP
 .B status
 Health\-check the whole setup and report whether slacker is correctly
-configured and what to do next: active mirror, repos and priorities,
-verification policy, imported/pinned GPG keys, metadata freshness, blacklist,
-the sources of installed packages, and \(em when online \(em reachability and
-pending updates.
+configured and what to do next: active mirror and whether it is up to date with
+the upstream master, repos and priorities, verification policy, imported/pinned
+GPG keys, metadata freshness, blacklist, the sources of installed packages, and
+\(em when online \(em reachability and pending updates. When your mirror is more
+than 48 hours behind upstream it says so and points you at
+.BR find-mirror .
+.TP
+.B find-mirror
+Probe the official Slackware mirror list and suggest the fastest, up\-to\-date
+mirror for your location. Each https mirror's
+.I slackware64\-current/PACKAGES.TXT
+is fetched with one timed range request \(em which measures real HTTP latency and
+reads the mirror's own timestamp at the same time \(em so mirrors more than 48
+hours behind the upstream master are dropped as stale, and the reachable, fresh
+ones are ranked by speed. The fastest is printed as the line to make active in
+your
+.I mirrors
+file; slacker never changes your mirror for you. Like
+.BR status ,
+this runs before any mirror is configured, so it can be used for the very first
+setup.
+.B \-current
+only.
 .SS Managing repositories
 .TP
 .B add-repo \fIPRIORITY NAME URL\fR [\fIflags\fR]

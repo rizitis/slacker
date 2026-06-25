@@ -7,6 +7,7 @@ mod download;
 mod gpg;
 mod history;
 mod manifest;
+mod mirrors;
 mod newconfig;
 mod pkg;
 mod pkgdb;
@@ -162,6 +163,10 @@ enum Cmd {
         #[arg(long)]
         upgraded: bool,
     },
+    /// Find the fastest up-to-date Slackware mirror for your location: probes the
+    /// official mirror list over HTTP and ranks reachable, fresh mirrors by speed,
+    /// then suggests one. Does not change your configuration. (-current only.)
+    FindMirror,
     /// Snapshot installed packages into a template.
     GenerateTemplate { name: String },
     /// Install all packages listed in a template.
@@ -232,6 +237,13 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
     if matches!(cli.command, Cmd::Status) {
         return cmd_status(&cli.config_dir);
     }
+    // find-mirror helps you pick your FIRST mirror, so it must run before a mirror
+    // is configured. Like status, it is dispatched before the strict load below; it
+    // reads the config only opportunistically (for the "(yours)" marker) and never
+    // requires a valid one.
+    if matches!(cli.command, Cmd::FindMirror) {
+        return cmd_find_mirror(&cli.config_dir);
+    }
     let cfg = Config::load_dir(&cli.config_dir)?;
     let privileged = requires_privilege(&cli.command);
     if privileged {
@@ -267,6 +279,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::NewConfig => cmd_new_config(cli),
         Cmd::CheckUpdates => cmd_check_updates(&cfg),
         Cmd::ShowChangelog { repo } => cmd_show_changelog(&cfg, repo.as_deref()),
+        Cmd::FindMirror => unreachable!("find-mirror is dispatched before config load"),
         Cmd::History { name, last, since, installed, removed, upgraded } => {
             cmd_history(&cfg, name.as_deref(), *last, since.as_deref(), *installed, *removed, *upgraded)
         }
@@ -351,7 +364,8 @@ fn requires_privilege(cmd: &Cmd) -> bool {
         | Cmd::FileSearch { .. }
         | Cmd::CheckUpdates
         | Cmd::ShowChangelog { .. }
-        | Cmd::History { .. } => false,
+        | Cmd::History { .. }
+        | Cmd::FindMirror => false,
         // everything else writes to a root-owned location
         _ => true,
     }
@@ -419,6 +433,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::CheckUpdates => "check-updates",
         Cmd::ShowChangelog { .. } => "show-changelog",
         Cmd::History { .. } => "history",
+        Cmd::FindMirror => "find-mirror",
         Cmd::GenerateTemplate { .. } => "generate-template",
         Cmd::InstallTemplate { .. } => "install-template",
         Cmd::RemoveTemplate { .. } => "remove-template",
@@ -3073,11 +3088,11 @@ fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
 /// mirror, so plain http is acceptable here — no package data is ever trusted
 /// from it, only a timestamp is read. -current only; stable updates live under
 /// patches/ and would need a configurable URL (deferred while -current-only).
-const UPSTREAM_CURRENT_PACKAGES: &str =
+pub(crate) const UPSTREAM_CURRENT_PACKAGES: &str =
     "http://ftp.osuosl.org/pub/slackware/slackware64-current/PACKAGES.TXT";
 
 /// A mirror lagging upstream by more than this is reported as stale.
-const FRESHNESS_MAX_LAG_SECS: i64 = 48 * 3600;
+pub(crate) const FRESHNESS_MAX_LAG_SECS: i64 = 48 * 3600;
 
 /// How long to wait on each freshness probe before giving up (fail-open).
 const FRESHNESS_TIMEOUT_SECS: u64 = 8;
@@ -3086,7 +3101,7 @@ const FRESHNESS_TIMEOUT_SECS: u64 = 8;
 /// The line is always `PACKAGES.TXT;  Wed Jun 24 22:11:34 UTC 2026` — a
 /// `date -u` stamp (`%a %b %e %H:%M:%S UTC %Y`). Any deviation returns None so
 /// the caller fails open instead of guessing.
-fn parse_packages_date(line: &str) -> Option<i64> {
+pub(crate) fn parse_packages_date(line: &str) -> Option<i64> {
     let ts = line.split_once(';')?.1.trim(); // "Wed Jun 24 22:11:34 UTC 2026"
     let mut f = ts.split_whitespace();
     let _weekday = f.next()?;
@@ -3126,7 +3141,7 @@ fn month_num(m: &str) -> Option<i64> {
 }
 
 /// True when `upstream` leads `mirror` by more than the staleness threshold.
-fn mirror_is_stale(upstream_epoch: i64, mirror_epoch: i64) -> bool {
+pub(crate) fn mirror_is_stale(upstream_epoch: i64, mirror_epoch: i64) -> bool {
     upstream_epoch - mirror_epoch > FRESHNESS_MAX_LAG_SECS
 }
 
@@ -3145,6 +3160,122 @@ fn humanize_lag(secs: i64) -> String {
     } else {
         format!("{}m", (secs % 3600) / 60)
     }
+}
+
+/// Hostname of a URL, for matching the user's current mirror among candidates.
+fn host_of(url: &str) -> Option<String> {
+    let after = url.split("://").nth(1)?;
+    Some(after.split('/').next()?.to_string())
+}
+
+fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, String> {
+    // -current only, exactly like the freshness check: the upstream reference and
+    // the slackware64-current/ path are -current-specific.
+    if system::version_codename().as_deref() != Some("current") {
+        return Err("find-mirror works only on Slackware -current.".into());
+    }
+    // Config is optional here — find-mirror is meant to run before you have set a
+    // mirror. If it loads, it is used only to mark your current mirror in the list.
+    let cfg = Config::load_dir(config_dir).ok();
+    println!("{}", ui::blue("Finding the fastest up-to-date Slackware mirror"));
+
+    let candidates = mirrors::fetch_https_mirrors()?;
+    if candidates.is_empty() {
+        return Err("no https mirrors found in the mirror list — its format may have changed".into());
+    }
+    println!("  {}", ui::dim(&format!("probing {} https mirrors in parallel ...", candidates.len())));
+
+    // Upstream reference for freshness; fail-open — if osuosl is unreachable we
+    // still rank by speed, just without the freshness filter. Keep the raw line
+    // too, so we can show upstream's own timestamp as proof of the check.
+    let upstream_line = download::first_line(
+        UPSTREAM_CURRENT_PACKAGES,
+        std::time::Duration::from_secs(FRESHNESS_TIMEOUT_SECS),
+    )
+    .ok();
+    let upstream = upstream_line.as_deref().and_then(parse_packages_date);
+
+    let probed = mirrors::probe_all(&candidates);
+    let reachable = probed.len();
+    let ranked = mirrors::rank(probed, upstream, mirrors::TOP_N);
+    if ranked.is_empty() {
+        return Err(format!(
+            "probed {} mirror(s) but none returned a usable PACKAGES.TXT",
+            candidates.len()
+        ));
+    }
+
+    // Where does the user's own official mirror sit, if it shows up?
+    let current_host = cfg
+        .as_ref()
+        .and_then(|c| c.repos.iter().find(|r| r.official))
+        .and_then(|r| host_of(&r.url));
+
+    println!();
+    if upstream.is_some() {
+        let date = upstream_line
+            .as_deref()
+            .and_then(|l| l.split_once(';'))
+            .map(|(_, d)| d.trim())
+            .unwrap_or("?");
+        println!(
+            "  {} {}",
+            ui::green("\u{2713}"),
+            ui::dim(&format!("freshness validated against upstream osuosl ({date})"))
+        );
+    } else {
+        println!(
+            "  {}",
+            ui::yellow("upstream unreachable — freshness unchecked, ranked by speed only")
+        );
+    }
+    println!(
+        "  {} {}",
+        ui::blue(&format!("Top {} mirrors:", ranked.len())),
+        ui::dim(&format!("({} of {} reachable)", reachable, candidates.len()))
+    );
+
+    for (i, m) in ranked.iter().enumerate() {
+        let fresh = match upstream {
+            Some(up) => {
+                let lag = up - m.pkg_epoch;
+                if lag <= 0 {
+                    "in sync".to_string()
+                } else {
+                    format!("{} behind", humanize_lag(lag))
+                }
+            }
+            None => "?".to_string(),
+        };
+        let yours = if host_of(&m.base_url).as_deref() == current_host.as_deref() {
+            ui::green(" (yours)")
+        } else {
+            String::new()
+        };
+        println!(
+            "  {} {} {} {} {}{}",
+            ui::cyan(&format!("{:>2}.", i + 1)),
+            ui::white(&format!("{:<3}", m.country)),
+            ui::green(&format!("{:>7}", format!("{}ms", m.latency_ms))),
+            ui::dim(&format!("{:<13}", fresh)),
+            ui::cyan(&m.base_url),
+            yours,
+        );
+    }
+
+    // Suggestion — printed only, never written: slacker does not switch mirrors
+    // for you. The line is the one the `mirrors` file expects (the -current root).
+    let best = &ranked[0];
+    let suggested = format!("{}/slackware64-current/", best.base_url.trim_end_matches('/'));
+    println!();
+    println!(
+        "{}",
+        ui::green(&format!("Fastest: {} ({}ms)", best.base_url, best.latency_ms))
+    );
+    println!("  {}", ui::dim("to use it, make this the single active line in your `mirrors` file:"));
+    println!("    {}", ui::white(&suggested));
+    println!("  {}", ui::dim("(slacker will not change your mirror automatically)"));
+    Ok(Outcome::Ok)
 }
 
 fn status_full(cfg: &Config) -> Result<Outcome, String> {
@@ -3196,7 +3327,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
                     &warn,
                     "Freshness",
                     &ui::yellow(&format!(
-                        "your mirror is {} behind upstream — switch it",
+                        "your mirror is {} behind upstream — run `slacker find-mirror`",
                         humanize_lag(up - mine)
                     )),
                 ),
