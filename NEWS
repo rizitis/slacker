@@ -1,3 +1,5 @@
+Version Beta 0.7.2
+=====
 New: add cmf: slacker find-mirror - it find a VALID and fast mirror according to your location.
 New: add Freshness in status command that check if your mirror is in sync with upstream (osuosl.org)
 New: add cmd: slacker unfrozen <pkg-*>
