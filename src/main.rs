@@ -109,7 +109,11 @@ enum Cmd {
     /// installed (use `install NAME` for those). Default: official repo(s) only;
     /// name repos to use those instead.
     InstallNew { repos: Vec<String> },
-    /// Remove installed packages that exist in no configured repo.
+    /// Remove installed packages no longer in the official baseline — the
+    /// official repo plus any `immutable` repo. slackpkg-style: a package the
+    /// distribution dropped is removed even if a third-party repo still ships
+    /// the name. Kept by the blacklist, an `IGNORE_TAGS` build tag, or an
+    /// immutable repo.
     CleanSystem,
     /// Delete downloaded package files from the cache. Repo metadata and GPG
     /// keys are never touched. Optionally limit to named repos.
