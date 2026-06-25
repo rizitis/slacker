@@ -128,6 +128,9 @@ pub struct Config {
     pub config_dir: PathBuf,
     /// Global default verification policy (VERIFY in slacker.conf).
     pub verify: VerifyPolicy,
+    /// Number of package downloads to run concurrently (MAX_PARALLEL in
+    /// slacker.conf). Default 4; 1 disables parallelism. Clamped to 1..=16.
+    pub max_parallel: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -220,6 +223,11 @@ impl Config {
             None => VerifyPolicy::All,
         };
 
+        // MAX_PARALLEL: how many package downloads run concurrently (default 4).
+        // 1 disables parallelism (serial). Clamped to 1..=16 so a stray large
+        // value can't hammer a mirror; a non-numeric value falls back to 4.
+        let max_parallel = parse_max_parallel(conf.get("MAX_PARALLEL").map(String::as_str));
+
         // ARCH is normally auto-detected from the installed system, the way
         // slackpkg does. It is only set in slacker.conf to force a specific
         // architecture (e.g. cross/ARM setups).
@@ -249,6 +257,7 @@ impl Config {
             tag_priorities,
             config_dir: dir.to_path_buf(),
             verify,
+            max_parallel,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -712,6 +721,16 @@ fn parse_repos(
     Ok((out, tags))
 }
 
+/// Parse a `MAX_PARALLEL` value into a concurrent-download count. A positive
+/// integer is clamped to 1..=16 (1 = serial); anything absent or non-numeric
+/// falls back to the default of 4. Kept pure so it can be unit-tested.
+fn parse_max_parallel(raw: Option<&str>) -> usize {
+    match raw.map(|s| s.trim().parse::<usize>()) {
+        Some(Ok(n)) => n.clamp(1, 16),
+        _ => 4,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,6 +740,17 @@ mod tests {
         let m = parse_keyvals("# c\nARCH = x86_64  # inline\nCACHE_DIR=\"/var/cache/slacker\"\n\n");
         assert_eq!(m.get("ARCH").unwrap(), "x86_64");
         assert_eq!(m.get("CACHE_DIR").unwrap(), "/var/cache/slacker");
+    }
+
+    #[test]
+    fn max_parallel_parse_and_clamp() {
+        assert_eq!(parse_max_parallel(None), 4); // absent -> default
+        assert_eq!(parse_max_parallel(Some("8")), 8); // normal
+        assert_eq!(parse_max_parallel(Some("  6 ")), 6); // trimmed
+        assert_eq!(parse_max_parallel(Some("0")), 1); // floor (serial)
+        assert_eq!(parse_max_parallel(Some("999")), 16); // ceiling
+        assert_eq!(parse_max_parallel(Some("abc")), 4); // garbage -> default
+        assert_eq!(parse_max_parallel(Some("")), 4); // empty -> default
     }
 
     #[test]

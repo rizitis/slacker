@@ -1,4 +1,4 @@
-.TH SLACKER 8 "June 2026" "slacker 0.7.1" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.7.2" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -167,6 +167,31 @@ to save elsewhere, e.g.
 or the current directory. Selecting a whole repo or tag (e.g.
 .IR @alienbob )
 asks for confirmation when more than ten packages would be downloaded.
+.TP
+.BI revert-pkg " NAME"
+Roll an official package back to a previous \-current version (rollback). Lists
+that package's earlier versions recorded under
+.IR ADM_DIR/removed_packages/ ,
+lets you choose one (with
+.B \-\-yes
+the most recent previous version is taken), then fetches that exact build from
+the cumulative archive
+.RB ( CUMULATIVE_URL ),
+verifies it against the pinned official Slackware GPG key, and downgrades to it
+with
+.IR "upgradepkg \-\-reinstall" .
+Official packages only \(em the cumulative archive does not carry third\-party
+repositories \(em and Slackware \-current only: it reads VERSION_CODENAME from 
+/etc/os\-release and refuses (fail\-closed) on anything but current, because the 
+cumulative archive holds \-current packages that would break a stable release. After a
+successful revert it offers to
+.B frozen
+the package so a later
+.B upgrade-all
+will not pull it forward again. Requires
+.B REVERT
+enabled in
+.IR slacker.conf .
 .SS Bulk operations
 .TP
 .B upgrade-all
@@ -259,6 +284,7 @@ to delete only the template file use
 .TP
 .BI delete-template " NAME"
 Delete a template file. Installed packages are not touched.
+.SS Blacklist
 .TP
 .BI frozen " RULE..."
 Add one or more rules to the blacklist (see
@@ -280,6 +306,20 @@ anything is written,
 prints what each rule will freeze and asks for confirmation;
 .B \-\-yes
 skips the prompts.
+.TP
+.BI unfrozen " RULE..."
+Remove one or more rules from the blacklist \(em the counterpart to
+.BR frozen .
+Each argument must match an existing rule
+.IR exactly ,
+as a literal string: special characters such as
+.IR .* ", " *
+or
+.I /
+are compared verbatim, never interpreted as a pattern, so a partial name can
+never match a longer rule and the wrong line is never removed. Run with no
+argument to list the current rules. Comment lines, blank lines, and any rule you
+did not name are left untouched; a rule that is not found is reported.
 .SS Repositories
 .TP
 .B list-repos
@@ -439,6 +479,28 @@ that
 .B clean-system
 must not treat as foreign \(em for packages from sources not managed as binary
 repositories.
+.B MAX_PARALLEL
+(default
+.IR 4 ,
+clamped to 1\(en16; 1 = serial)
+sets how many packages are downloaded concurrently during
+.BR install ", " upgrade ", " upgrade-all " and " download .
+A download or verification that fails is skipped and reported rather than
+aborting the rest; a package that fails its GPG or checksum check is never
+installed.
+.B REVERT
+(default
+.IR on )
+enables the
+.B revert-pkg
+command, and
+.B CUMULATIVE_URL
+(default
+.IR https://slackware.uk/cumulative/slackware64-current )
+is the cumulative \-current archive it fetches superseded official packages from
+\(em a revert\-only source, never consulted by
+.BR update ", " upgrade ", " install " or " check-updates ,
+so its historical packages never enter the priority model.
 .PP
 The
 .I repos
@@ -720,6 +782,14 @@ See what changed recently, or for one package:
 .nf
 slacker history --last 20
 slacker history emacs
+.fi
+.RE
+.PP
+Roll a package back to a previous \-current version:
+.PP
+.RS
+.nf
+slacker revert-pkg emacs
 .fi
 .RE
 .SH SEE ALSO

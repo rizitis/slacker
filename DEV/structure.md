@@ -15,21 +15,21 @@ no extra Rust deps.
 ```
 slacker/
 ├── Cargo.toml                      <- build manifest (deps: clap, ureq, native-tls, md-5, regex; Apache-2.0)
-├── README.md
 ├── slacker.8                       <- man page (section 8)
 ├── examples/etc-slacker/           <- config templates for /etc/slacker/
-│   ├── slacker.conf                <- globals (ARCH auto-detect, ADM_DIR, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY)
+│   ├── slacker.conf                <- globals (ARCH auto-detect, ADM_DIR, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY, MAX_PARALLEL, REVERT, CUMULATIVE_URL)
 │   ├── mirrors                     <- catalogue of official mirrors - uncomment ONE (none by default)
 │   ├── repos                       <- binary repos + tag-priority lines
 │   └── blacklist                   <- blacklist rules: [@repo] REGEX | [@repo] series/
-└── src/                            <- 14 modules
-    ├── main.rs        CLI + commands (31 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, quarantine, history)
+└── src/                            <- 15 modules
+    ├── main.rs        CLI + commands (33 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, quarantine, history)
     ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
     ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch, quarantine/trust markers
+    ├── revert.rs      revert-pkg rollback helpers: previous official versions from removed_packages (strip -upgraded- suffix), cumulative PACKAGES.TXT location parse + .txz URL build
     ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, baseline names (clean-system), blacklist source lookups
-    ├── download.rs    https/http (ureq+native-tls) + file:// + md5 + sha256 (sha256sum)
-    ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path
+    ├── download.rs    https/http (ureq+native-tls) + file:// + md5 + sha256 (sha256sum); parallel batch downloads (std::thread::scope, MAX_PARALLEL, best-effort)
+    ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path + version_codename (os-release, for revert-pkg's -current guard)
     ├── history.rs     package-change timeline reconstructed from the pkgtools admin dirs (ADM_DIR: packages/ + removed_packages/), local-time calibration, upgrade/reinstall inference
     ├── manifest.rs    file-search (decompressed MANIFEST)
     ├── changelog.rs   check-updates / show-changelog (pager when on a TTY)
@@ -48,7 +48,12 @@ slacker/
   `/var/cache/slacker`). PKG_DB_DIR defaults to `ADM_DIR/packages`; set it
   explicitly only to override that (kept for back-compat). RESOLVE_DEPS (default
   yes), VERIFY (default all), IGNORE_TAGS (build tags that `clean-system` treats
-  as non-foreign, e.g. `_SBo cf alien`).
+  as non-foreign, e.g. `_SBo cf alien`). MAX_PARALLEL (default 4, clamped
+  1-16; concurrent package downloads, best-effort). REVERT (default on; enables
+  `revert-pkg`) and CUMULATIVE_URL (default
+  `https://slackware.uk/cumulative/slackware64-current`; the revert-only -current
+  archive `revert-pkg` fetches old official packages from, never consulted by
+  update/upgrade/install/check-updates).
 - **mirrors** - slackpkg-style catalogue; uncomment exactly ONE (none by
   default; 2+ -> error). Holds the official mirror URL (current/15.0 × 64/32,
   http/https/file://).
@@ -79,8 +84,8 @@ slacker/
   **frozen** (never installed/upgraded/reinstalled/removed, and never listed by
   `clean-system`); an uninstalled match is **hidden** from `install-new`,
   upgrades and `check-updates`, but still shown by `search`/`info` marked
-  `[blacklisted]`. The `frozen` command validates and appends rules to this
-  file.
+  `[blacklisted]`. The `frozen` and `unfrozen` commands add and remove rules in
+  this file for you (`unfrozen` matches literally, never as a regex).
 
 ### Build-tag priority model
 
@@ -109,15 +114,15 @@ An unknown `@repo`/`@tag` gives a helpful error with a "did you mean" suggestion
 more than one package, install/upgrade/reinstall/remove show a numbered list
 (Enter = all, numbers/ranges like `1 3 5` or `2-4`, `n` = cancel).
 
-### Actions (31; slackpkg parity + extras)
+### Actions (33; slackpkg parity + extras)
 
 ```
-update [gpg]    search        file-search   info        list-repos
+update [gpg]    search        file-search   info         list-repos
 status          install       upgrade       reinstall    remove
-download        clean-cache   upgrade-all   install-new  clean-system
-frozen          new-config    check-updates show-changelog  history
-add-repo        del-repo      add-tag       del-tag
-vet-repo        trust-repo    distrust-repo
+download        revert-pkg    clean-cache   upgrade-all  install-new
+clean-system    frozen        unfrozen      new-config   check-updates
+show-changelog  history       add-repo      del-repo     add-tag
+del-tag         vet-repo      trust-repo    distrust-repo
 generate-template  install-template  remove-template  delete-template
 ```
 - `list-repos` / `status` - inspect repos (priority, verify, flags, installed
@@ -157,6 +162,19 @@ generate-template  install-template  remove-template  delete-template
   warns about a likely typo (unknown `@repo`, or a regex with a space — package
   ids never contain spaces / a forgotten `@`), shows what each rule freezes, and
   asks for confirmation before writing (`--yes` skips the prompts).
+- `unfrozen RULE...` - remove one or more blacklist rules (the counterpart to
+  `frozen`). Each argument must match an existing rule **exactly**, as a literal
+  string (regex metacharacters are compared verbatim, never interpreted), so a
+  partial name never matches a longer rule and the wrong line is never removed;
+  with no argument it lists the current rules. Reuses `config::strip_comment` so
+  canonicalisation matches the parser exactly.
+- `revert-pkg NAME` - roll an official package back to a previous -current
+  version. Lists earlier builds from removed_packages, fetches the chosen one
+  from the cumulative archive (CUMULATIVE_URL), GPG-verifies it against the
+  pinned Slackware key, downgrades with `upgradepkg --reinstall`, then offers to
+  freeze it. Official + -current only (fail-closed guards: REVERT on, os-release
+  VERSION_CODENAME=current, -current archive URL). Revert-only source - never
+  enters the priority model.
 - `show-changelog [REPO]` - print a ChangeLog: the official repo by default, or a
   named repo (fetched on demand if not cached).
 - `search` matches an **exact** package name (case-insensitive); use `info` or
@@ -212,7 +230,7 @@ reinstall, upgrade-all, install-new, install-template.
 ### Build_and_Tests
 
 > NO root needed for build & tests (only the mutating actions need root).
-> 70 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
+> 113 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
 
 ```
 cargo build --release

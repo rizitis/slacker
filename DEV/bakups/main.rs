@@ -1037,18 +1037,279 @@ fn package_dest(cfg: &Config, repo: &str, filename: &str) -> Result<std::path::P
     Ok(dest)
 }
 
-/// Download, verify and install/upgrade/reinstall every item in a plan.
-fn execute_plan(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
-    for it in plan {
-        let r = cfg.repo_by_name(&it.pkg.repo).ok_or("internal repo lookup failed")?;
-        let dest = package_dest(cfg, &it.pkg.repo, &it.pkg.filename)?;
-        fetch_and_verify(cfg, r, &it.pkg, &dest)?;
-        match it.action {
-            InstallAction::Install => system::install(&dest)?,
-            InstallAction::Upgrade => system::upgrade_only(&dest)?,
-            InstallAction::Reinstall => system::reinstall(&dest)?,
+/// One unit of download work: a package, the repo it comes from, and the
+/// on-disk path it must land at. The repo/package references borrow from the
+/// caller's config/plan (which outlive the parallel scope), so package metadata
+/// is never cloned just to hand it to a worker.
+struct DlItem<'a> {
+    repo: &'a config::Repo,
+    pkg: &'a repo::AvailPkg,
+    dest: std::path::PathBuf,
+}
+
+/// Result of fetching+verifying one item, tagged with its index in the input
+/// list so outcomes can be reordered after concurrent (out-of-order) completion.
+struct DlOutcome {
+    idx: usize,
+    name: String,
+    /// Ok = verified and on disk (the checks that ran); Err = a reason it was
+    /// not made ready. A failed item is never installed.
+    result: Result<Vec<String>, String>,
+}
+
+/// Compact trailing marker for a successful download line, mirroring the honesty
+/// of the verbose path: nothing for a GPG-authenticated package, an "integrity
+/// only" note when just md5/sha matched, and "verify off" when disabled.
+fn verify_suffix(checks: &[String]) -> &'static str {
+    if checks.is_empty() {
+        "(verify off) "
+    } else if checks.iter().any(|c| c.starts_with("gpg")) {
+        ""
+    } else {
+        "(integrity only) "
+    }
+}
+
+/// Split fetch outcomes into a ready-flag per input index and a list of
+/// (name, reason) download/verify failures. Pure, so it is unit-tested without
+/// threads or a network.
+fn summarize_outcomes(outcomes: &[DlOutcome], total: usize) -> (Vec<bool>, Vec<(String, String)>) {
+    let mut ready = vec![false; total];
+    let mut failed = Vec::new();
+    for o in outcomes {
+        match &o.result {
+            Ok(_) if o.idx < total => ready[o.idx] = true,
+            Ok(_) => {}
+            Err(e) => failed.push((o.name.clone(), e.clone())),
         }
     }
+    (ready, failed)
+}
+
+/// Download + verify every item concurrently, bounded by `max_parallel`, writing
+/// each package to its OWN destination (no shared files, so no races). Prints a
+/// live ✓/✗ counter as items complete and returns one outcome per item, ordered
+/// to match `items`. Network phase only — nothing is installed here.
+fn parallel_fetch(cfg: &Config, items: &[DlItem], max_parallel: usize) -> Vec<DlOutcome> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+
+    let total = items.len();
+    if total == 0 {
+        return Vec::new();
+    }
+    let workers = max_parallel.clamp(1, total);
+    let next = AtomicUsize::new(0);
+
+    let mut outcomes: Vec<DlOutcome> = std::thread::scope(|s| {
+        let (tx, rx) = mpsc::channel::<DlOutcome>();
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let next = &next;
+            let items = &items;
+            s.spawn(move || loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= total {
+                    break;
+                }
+                let it = &items[i];
+                let result = fetch_and_verify(cfg, it.repo, it.pkg, &it.dest, true);
+                let _ = tx.send(DlOutcome {
+                    idx: i,
+                    name: it.pkg.id.name.clone(),
+                    result,
+                });
+            });
+        }
+        drop(tx); // receive loop ends once every worker has finished and dropped its sender
+
+        let mut got: Vec<DlOutcome> = Vec::with_capacity(total);
+        let mut done = 0usize;
+        while let Ok(o) = rx.recv() {
+            done += 1;
+            match &o.result {
+                Ok(checks) => println!(
+                    "  {} {} {}[{done}/{total}]",
+                    ui::green("✓"),
+                    o.name,
+                    verify_suffix(checks)
+                ),
+                Err(e) => println!(
+                    "  {} {} [{done}/{total}]  {}",
+                    ui::red("✗"),
+                    o.name,
+                    e.lines().next().unwrap_or("download failed")
+                ),
+            }
+            got.push(o);
+        }
+        got
+    });
+
+    outcomes.sort_by_key(|o| o.idx);
+
+    // Verification summary for the batch. The per-item ✓ lines stay terse, so
+    // make the overall authentication level explicit here: how many packages
+    // were GPG-authenticated vs only integrity-checked (md5/sha, no signature)
+    // vs not verified at all. Failures are reported separately by the caller.
+    let mut gpg = 0usize;
+    let mut integrity = 0usize;
+    let mut off = 0usize;
+    for o in &outcomes {
+        match &o.result {
+            Ok(checks) if checks.iter().any(|c| c.starts_with("gpg")) => gpg += 1,
+            Ok(checks) if checks.is_empty() => off += 1,
+            Ok(_) => integrity += 1,
+            Err(_) => {}
+        }
+    }
+    let verified = gpg + integrity + off;
+    if verified > 0 {
+        if integrity == 0 && off == 0 {
+            println!(
+                "  {}",
+                ui::green(&format!(
+                    "all {verified} package(s) GPG-verified (signature + checksum)"
+                ))
+            );
+        } else {
+            let mut parts: Vec<String> = Vec::new();
+            if gpg > 0 {
+                parts.push(format!("{gpg} GPG-verified"));
+            }
+            if integrity > 0 {
+                parts.push(format!("{integrity} integrity-only (no GPG)"));
+            }
+            if off > 0 {
+                parts.push(format!("{off} unverified"));
+            }
+            println!(
+                "  {}",
+                ui::yellow(&format!("{verified} package(s): {}", parts.join(", ")))
+            );
+        }
+    }
+
+    outcomes
+}
+
+/// End-of-run report for a batch: stays quiet when everything succeeded (the
+/// per-item lines already told the story), otherwise lists what was skipped and
+/// why. Download/verify failures leave any installed version untouched; install
+/// failures are reported as-is. Never aborts — purely informational.
+fn report_batch_failures(
+    total: usize,
+    installed: usize,
+    dl_failed: &[(String, String)],
+    install_failed: &[(String, String)],
+) {
+    if dl_failed.is_empty() && install_failed.is_empty() {
+        return;
+    }
+    let bad = dl_failed.len() + install_failed.len();
+    println!();
+    println!(
+        "{}",
+        ui::yellow(&format!(
+            "{installed} of {total} package(s) completed; {bad} had problems:"
+        ))
+    );
+    for (name, reason) in dl_failed {
+        let r = reason.lines().next().unwrap_or("download/verify failed");
+        // A GPG failure is a refusal (possible tampering); make it stand out.
+        if r.to_ascii_lowercase().contains("gpg") || r.to_ascii_lowercase().contains("signature") {
+            println!("  {} {}  GPG check failed — refused: {r}", ui::red("✗"), name);
+        } else {
+            println!("  {} {}  download/verify failed: {r}", ui::red("✗"), name);
+        }
+        println!(
+            "      {}",
+            ui::dim("(installed version, if any, was left unchanged)")
+        );
+    }
+    for (name, reason) in install_failed {
+        let r = reason.lines().next().unwrap_or("install failed");
+        println!("  {} {}  install failed: {r}", ui::red("✗"), name);
+    }
+    println!();
+    println!(
+        "  {}",
+        ui::dim("Re-run the same command to retry these; packages already done are skipped.")
+    );
+}
+
+/// Download, verify and install/upgrade/reinstall every item in a plan.
+///
+/// A single item keeps the original verbose, serial path (nothing to parallelise
+/// and nothing to skip past). For several items the work splits into two phases:
+/// first every package is downloaded and verified concurrently, then the verified
+/// ones are installed serially through the unchanged pkgtools path. The flow is
+/// best-effort — a package that fails to download/verify is skipped (its installed
+/// version left intact) and reported at the end, rather than aborting the whole
+/// batch. A package that fails GPG/md5 verification is never installed.
+fn execute_plan(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
+    if plan.is_empty() {
+        return Ok(());
+    }
+
+    // Resolve repo + safe destination for every item first. A repo-lookup miss
+    // or an unsafe (path-traversal) filename is a hard error, not a transient
+    // download failure, so it bails the whole command.
+    let mut items: Vec<DlItem> = Vec::with_capacity(plan.len());
+    for it in plan {
+        let r = cfg
+            .repo_by_name(&it.pkg.repo)
+            .ok_or("internal repo lookup failed")?;
+        let dest = package_dest(cfg, &it.pkg.repo, &it.pkg.filename)?;
+        items.push(DlItem {
+            repo: r,
+            pkg: &it.pkg,
+            dest,
+        });
+    }
+
+    // Single item: original verbose, serial behaviour (abort-on-error is moot
+    // with nothing else to continue to).
+    if items.len() == 1 {
+        let it = &items[0];
+        fetch_and_verify(cfg, it.repo, it.pkg, &it.dest, false)?;
+        match plan[0].action {
+            InstallAction::Install => system::install(&it.dest)?,
+            InstallAction::Upgrade => system::upgrade_only(&it.dest)?,
+            InstallAction::Reinstall => system::reinstall(&it.dest)?,
+        }
+        return Ok(());
+    }
+
+    // PHASE 1 — download + verify everything in parallel.
+    let workers = cfg.max_parallel.min(items.len());
+    println!(
+        "Downloading {} package(s) ({workers} parallel)...",
+        items.len()
+    );
+    let outcomes = parallel_fetch(cfg, &items, cfg.max_parallel);
+    let (ready, dl_failed) = summarize_outcomes(&outcomes, items.len());
+
+    // PHASE 2 — install the verified packages serially (unchanged pkgtools path).
+    // Best-effort: an install error on one does not stop the rest.
+    let mut install_failed: Vec<(String, String)> = Vec::new();
+    let mut installed = 0usize;
+    for (i, it) in items.iter().enumerate() {
+        if !ready[i] {
+            continue;
+        }
+        let res = match plan[i].action {
+            InstallAction::Install => system::install(&it.dest),
+            InstallAction::Upgrade => system::upgrade_only(&it.dest),
+            InstallAction::Reinstall => system::reinstall(&it.dest),
+        };
+        match res {
+            Ok(()) => installed += 1,
+            Err(e) => install_failed.push((it.pkg.id.name.clone(), e)),
+        }
+    }
+
+    report_batch_failures(plan.len(), installed, &dl_failed, &install_failed);
     Ok(())
 }
 
@@ -1078,7 +1339,8 @@ fn fetch_and_verify(
     repo: &config::Repo,
     p: &repo::AvailPkg,
     dest: &std::path::Path,
-) -> Result<(), String> {
+    quiet: bool,
+) -> Result<Vec<String>, String> {
     let policy = repo.verify_policy(&cfg.verify);
 
     // Guard against a symlink planted at the destination (e.g. in a shared
@@ -1102,7 +1364,9 @@ fn fetch_and_verify(
     };
     if need {
         let url = p.url(repo);
-        println!("  fetching {url}");
+        if !quiet {
+            println!("  fetching {url}");
+        }
         download::download_to(&url, dest)?;
     }
 
@@ -1219,24 +1483,26 @@ fn fetch_and_verify(
         }
     }
 
-    if checks.is_empty() {
-        println!("  {}", ui::dim("(verification is disabled for this repo)"));
-    } else if checks.iter().any(|c| c.starts_with("gpg")) {
-        println!("  {}", ui::green(&format!("verified: {}", checks.join(" + "))));
-    } else {
-        // md5/sha prove the bytes match the repo's OWN checksum file, which —
-        // without a GPG signature on that file — a malicious or MITM'd repo
-        // controls too. Be honest: this is integrity, not authenticity.
-        println!(
-            "  {}",
-            ui::yellow(&format!(
-                "integrity only: {} — NOT cryptographically authenticated (no GPG signature; \
-                 enable gpg for this repo)",
-                checks.join(" + ")
-            ))
-        );
+    if !quiet {
+        if checks.is_empty() {
+            println!("  {}", ui::dim("(verification is disabled for this repo)"));
+        } else if checks.iter().any(|c| c.starts_with("gpg")) {
+            println!("  {}", ui::green(&format!("verified: {}", checks.join(" + "))));
+        } else {
+            // md5/sha prove the bytes match the repo's OWN checksum file, which —
+            // without a GPG signature on that file — a malicious or MITM'd repo
+            // controls too. Be honest: this is integrity, not authenticity.
+            println!(
+                "  {}",
+                ui::yellow(&format!(
+                    "integrity only: {} — NOT cryptographically authenticated (no GPG signature; \
+                     enable gpg for this repo)",
+                    checks.join(" + ")
+                ))
+            );
+        }
     }
-    Ok(())
+    Ok(checks)
 }
 
 /// Edit distance (Levenshtein) for "did you mean" suggestions.
@@ -3537,16 +3803,7 @@ fn cmd_download(
         None => cfg.cache_dir.join("packages").display().to_string(),
     };
 
-    // Selecting a whole repo/tag can be hundreds of packages; confirm first.
-    const BULK: usize = 10;
-    if matched.len() > BULK && !cli.yes && !cli.dry_run {
-        println!("{}", ui::blue(&format!("This will download {} packages into {dest_label}.", matched.len())));
-        if !confirm("Proceed with download?", false) {
-            return Ok(Outcome::Ok);
-        }
-    } else {
-        println!("{}", ui::blue(&format!("Downloading {} package(s) into {dest_label}.", matched.len())));
-    }
+    // dry-run: list everything that matches, change nothing.
     if cli.dry_run {
         for p in &matched {
             println!(
@@ -3560,6 +3817,25 @@ fn cmd_download(
         return Ok(Outcome::Ok);
     }
 
+    // Present the matched packages and let the user choose which to fetch — the
+    // same numbered-selection UI as install/upgrade/reinstall. A single match,
+    // or `-y`, takes everything without a prompt.
+    let matched = select_packages(matched, "download", cli.yes, cli.dry_run);
+    if matched.is_empty() {
+        println!("Nothing selected.");
+        return Ok(Outcome::Ok);
+    }
+    println!(
+        "{}",
+        ui::blue(&format!(
+            "Downloading {} package(s) into {dest_label}.",
+            matched.len()
+        ))
+    );
+
+    // Build the work list (repo + safe destination per package). An unsafe
+    // filename is a path-traversal red flag — a hard error, not a skip.
+    let mut items: Vec<DlItem> = Vec::with_capacity(matched.len());
     for p in &matched {
         let r = cfg.repo_by_name(&p.repo).ok_or("internal repo lookup failed")?;
         if !pkg::is_safe_filename(&p.filename) {
@@ -3573,8 +3849,32 @@ fn cmd_download(
             Some(d) => d.join(&p.filename),
             None => system::cached_pkg_path(&cfg.cache_dir, &p.repo, &p.filename),
         };
-        fetch_and_verify(cfg, r, p, &dest)?;
-        println!("{} {}", ui::green("downloaded:"), ui::dim(&dest.display().to_string()));
+        items.push(DlItem { repo: r, pkg: p, dest });
+    }
+
+    // Single package: keep the original verbose, serial output.
+    if items.len() == 1 {
+        let it = &items[0];
+        fetch_and_verify(cfg, it.repo, it.pkg, &it.dest, false)?;
+        println!(
+            "{} {}",
+            ui::green("downloaded:"),
+            ui::dim(&it.dest.display().to_string())
+        );
+        return Ok(Outcome::Ok);
+    }
+
+    // Several packages: download + verify in parallel, best-effort. A package
+    // that fails is skipped and reported; the rest still land on disk.
+    let outcomes = parallel_fetch(cfg, &items, cfg.max_parallel);
+    let (ready, dl_failed) = summarize_outcomes(&outcomes, items.len());
+    let ok = ready.iter().filter(|&&b| b).count();
+    report_batch_failures(items.len(), ok, &dl_failed, &[]);
+    if dl_failed.is_empty() {
+        println!(
+            "{}",
+            ui::green(&format!("Downloaded {ok} package(s) into {dest_label}."))
+        );
     }
     Ok(Outcome::Ok)
 }
@@ -5186,6 +5486,56 @@ fn cmd_distrust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, Str
         ))
     );
     Ok(Outcome::Ok)
+}
+
+#[cfg(test)]
+mod parallel_download_tests {
+    use super::{summarize_outcomes, verify_suffix, DlOutcome};
+
+    fn ok(idx: usize, name: &str, checks: &[&str]) -> DlOutcome {
+        DlOutcome {
+            idx,
+            name: name.into(),
+            result: Ok(checks.iter().map(|s| s.to_string()).collect()),
+        }
+    }
+    fn err(idx: usize, name: &str, reason: &str) -> DlOutcome {
+        DlOutcome {
+            idx,
+            name: name.into(),
+            result: Err(reason.into()),
+        }
+    }
+
+    #[test]
+    fn verify_suffix_reflects_strength() {
+        assert_eq!(verify_suffix(&["gpg (Someone)".into(), "md5".into()]), "");
+        assert_eq!(verify_suffix(&["md5".into()]), "(integrity only) ");
+        assert_eq!(verify_suffix(&[]), "(verify off) ");
+    }
+
+    #[test]
+    fn summarize_marks_ready_and_collects_failures() {
+        let outcomes = vec![
+            ok(0, "alpha", &["gpg (X)", "md5"]),
+            err(1, "bravo", "md5 mismatch for bravo"),
+            ok(2, "charlie", &["md5"]),
+        ];
+        let (ready, failed) = summarize_outcomes(&outcomes, 3);
+        assert_eq!(ready, vec![true, false, true]);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].0, "bravo");
+        assert!(failed[0].1.contains("mismatch"));
+    }
+
+    #[test]
+    fn summarize_ignores_out_of_range_index() {
+        // a stray out-of-range Ok index must neither panic nor set anything
+        let outcomes = vec![ok(5, "ghost", &["md5"])];
+        let (ready, failed) = summarize_outcomes(&outcomes, 2);
+        assert_eq!(ready, vec![false, false]);
+        assert!(failed.is_empty());
+    }
 }
 
 #[cfg(test)]

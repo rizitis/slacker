@@ -131,6 +131,16 @@ pub struct Config {
     /// Number of package downloads to run concurrently (MAX_PARALLEL in
     /// slacker.conf). Default 4; 1 disables parallelism. Clamped to 1..=16.
     pub max_parallel: usize,
+    /// Master switch for the `revert-pkg` command (REVERT in slacker.conf,
+    /// default on). When off, the command refuses outright, before touching
+    /// removed-packages, the network, or anything else.
+    pub revert_enabled: bool,
+    /// Base URL of the cumulative archive that `revert-pkg` uses to fetch
+    /// superseded -current packages (CUMULATIVE_URL in slacker.conf). This is a
+    /// revert-only source: it is NEVER consulted by update/upgrade/install/
+    /// check-updates, so its historical (older) packages cannot leak into the
+    /// normal priority model.
+    pub cumulative_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -228,6 +238,14 @@ impl Config {
         // value can't hammer a mirror; a non-numeric value falls back to 4.
         let max_parallel = parse_max_parallel(conf.get("MAX_PARALLEL").map(String::as_str));
 
+        // REVERT: master switch for the revert-pkg command (default on). Off
+        // makes the command refuse outright, before touching anything.
+        let revert_enabled = parse_revert_enabled(conf.get("REVERT").map(String::as_str));
+
+        // CUMULATIVE_URL: where revert-pkg looks for superseded -current
+        // packages. Revert-only source; never used by update/upgrade/install.
+        let cumulative_url = parse_cumulative_url(conf.get("CUMULATIVE_URL").map(String::as_str));
+
         // ARCH is normally auto-detected from the installed system, the way
         // slackpkg does. It is only set in slacker.conf to force a specific
         // architecture (e.g. cross/ARM setups).
@@ -258,6 +276,8 @@ impl Config {
             config_dir: dir.to_path_buf(),
             verify,
             max_parallel,
+            revert_enabled,
+            cumulative_url,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -413,7 +433,10 @@ fn installed_pkg_arch(pkg_db_dir: &Path, name: &str) -> Option<String> {
 }
 
 /// Strip a trailing `# comment` and surrounding whitespace from a line.
-fn strip_comment(line: &str) -> &str {
+/// Strip a `#` comment and surrounding whitespace from a line, yielding the
+/// canonical rule/value text. Shared so callers that need to match a config
+/// line exactly (e.g. removing a blacklist rule) canonicalise it identically.
+pub fn strip_comment(line: &str) -> &str {
     let line = match line.find('#') {
         Some(i) => &line[..i],
         None => line,
@@ -731,6 +754,25 @@ fn parse_max_parallel(raw: Option<&str>) -> usize {
     }
 }
 
+/// Parse a `REVERT` on/off value. Default is on; only an explicit
+/// off/no/false/0 disables the revert-pkg command. Pure, for unit testing.
+fn parse_revert_enabled(raw: Option<&str>) -> bool {
+    match raw.map(|s| s.trim().to_ascii_lowercase()) {
+        Some(v) if v == "off" || v == "no" || v == "false" || v == "0" => false,
+        _ => true,
+    }
+}
+
+/// Parse a `CUMULATIVE_URL` value: a non-empty URL with any trailing slash
+/// trimmed, falling back to the default Slackware-UK cumulative archive for
+/// -current. Pure, for unit testing.
+fn parse_cumulative_url(raw: Option<&str>) -> String {
+    raw.map(|s| s.trim().trim_end_matches('/'))
+        .filter(|s| !s.is_empty())
+        .unwrap_or("https://slackware.uk/cumulative/slackware64-current")
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,6 +793,39 @@ mod tests {
         assert_eq!(parse_max_parallel(Some("999")), 16); // ceiling
         assert_eq!(parse_max_parallel(Some("abc")), 4); // garbage -> default
         assert_eq!(parse_max_parallel(Some("")), 4); // empty -> default
+    }
+
+    #[test]
+    fn revert_toggle_defaults_on() {
+        assert!(parse_revert_enabled(None)); // absent -> on
+        assert!(parse_revert_enabled(Some("on")));
+        assert!(parse_revert_enabled(Some("yes")));
+        assert!(parse_revert_enabled(Some("anything"))); // only explicit off disables
+        assert!(!parse_revert_enabled(Some("off")));
+        assert!(!parse_revert_enabled(Some(" OFF "))); // trimmed + case-insensitive
+        assert!(!parse_revert_enabled(Some("no")));
+        assert!(!parse_revert_enabled(Some("false")));
+        assert!(!parse_revert_enabled(Some("0")));
+    }
+
+    #[test]
+    fn cumulative_url_default_and_override() {
+        assert_eq!(
+            parse_cumulative_url(None),
+            "https://slackware.uk/cumulative/slackware64-current"
+        );
+        assert_eq!(
+            parse_cumulative_url(Some("")),
+            "https://slackware.uk/cumulative/slackware64-current"
+        ); // empty -> default
+        assert_eq!(
+            parse_cumulative_url(Some("https://my.mirror/cumulative/slackware64-current/")),
+            "https://my.mirror/cumulative/slackware64-current"
+        ); // trailing slash trimmed
+        assert_eq!(
+            parse_cumulative_url(Some("  https://x/y  ")),
+            "https://x/y"
+        ); // trimmed
     }
 
     #[test]

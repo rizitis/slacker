@@ -49,23 +49,6 @@ pub fn install(pkg_file: &Path) -> Result<(), String> {
     run("installpkg", &[&pkg_file.to_string_lossy()])
 }
 
-/// Read `VERSION_CODENAME` from `/etc/os-release` (e.g. `current` on a -current
-/// system). Returns None if the file is missing or the key is absent/empty;
-/// callers treat that as "not -current" and refuse, i.e. fail-closed. The value
-/// may be quoted or bare, so surrounding quotes are stripped.
-pub fn version_codename() -> Option<String> {
-    let text = std::fs::read_to_string("/etc/os-release").ok()?;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("VERSION_CODENAME=") {
-            let v = rest.trim().trim_matches('"').trim().to_string();
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-    }
-    None
-}
-
 /// Remove an installed package by name (or tag): `removepkg`.
 pub fn remove_package(name: &str) -> Result<(), String> {
     if name.starts_with('-') || name.contains('/') {

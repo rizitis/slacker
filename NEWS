@@ -1,5 +1,8 @@
+New: add cmd: slacker unfrozen <pkg-*>
+New: add cmd: slacker revert-pkg <pkg_name> (only for slackware-current) using slackware.uk/cumulative as repo hardcoded
 Update: add parallel downloads
 Update: cross-repo dep-diff on also: note (install + install-new), read-only, gated on deps-on.
+Update: wiki pages
 ---
 
 Version Beta 0.7.1

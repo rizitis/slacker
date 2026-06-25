@@ -11,6 +11,7 @@ mod newconfig;
 mod pkg;
 mod pkgdb;
 mod repo;
+mod revert;
 mod system;
 mod template;
 mod ui;
@@ -97,6 +98,14 @@ enum Cmd {
     Reinstall { patterns: Vec<String> },
     /// Remove installed packages.
     Remove { patterns: Vec<String> },
+    /// Revert an official package to a previous -current version (rollback).
+    ///
+    /// Lists the package's earlier versions recorded in the system's
+    /// removed-packages, lets you pick one, then fetches that exact build from
+    /// the cumulative -current archive (GPG-verified against the pinned Slackware
+    /// key) and downgrades to it with `upgradepkg --reinstall`. Official packages
+    /// only (the archive does not carry third-party repos), and only on -current.
+    RevertPkg { name: String },
     /// Download package files without installing. Saved to the cache by
     /// default, or to a directory given with -o/--output.
     Download {
@@ -164,6 +173,11 @@ enum Cmd {
     /// Add one or more blacklist rules ("freeze"). Each argument is one rule:
     /// a regex, a `series/`, or `@repo regex` (quote rules with spaces).
     Frozen { names: Vec<String> },
+    /// Remove one or more blacklist rules ("unfreeze"). Each argument must match
+    /// an existing rule EXACTLY, as a literal string — special characters like
+    /// `.*`, `*`, `-` or `/` are compared verbatim, never as a pattern. Run with
+    /// no argument to list the current rules. Quote rules with spaces.
+    Unfrozen { names: Vec<String> },
     /// Add a binary repository to the `repos` file:
     /// `add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=...]`.
     /// URL must be http:// or https:// and unique. Separate words, no quotes
@@ -244,6 +258,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::Upgrade { patterns } => cmd_upgrade(cli, &cfg, patterns),
         Cmd::Reinstall { patterns } => cmd_reinstall(cli, &cfg, patterns),
         Cmd::Remove { patterns } => cmd_remove(cli, &cfg, patterns),
+        Cmd::RevertPkg { name } => cmd_revert_pkg(cli, &cfg, name),
         Cmd::Download { patterns, output } => cmd_download(cli, &cfg, patterns, output.as_deref()),
         Cmd::UpgradeAll => cmd_upgrade_all(cli, &cfg),
         Cmd::InstallNew { repos } => cmd_install_new(cli, &cfg, repos),
@@ -260,6 +275,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::RemoveTemplate { name } => cmd_remove_template(cli, &cfg, name),
         Cmd::DeleteTemplate { name } => cmd_delete_template(cli, &cfg, name),
         Cmd::Frozen { names } => cmd_frozen(&cli, &cfg, names),
+        Cmd::Unfrozen { names } => cmd_unfrozen(&cli, &cfg, names),
         Cmd::AddRepo { priority, name, url, flags } => {
             cmd_add_repo(cli, &cfg, priority, name, url, flags)
         }
@@ -393,6 +409,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::Upgrade { .. } => "upgrade",
         Cmd::Reinstall { .. } => "reinstall",
         Cmd::Remove { .. } => "remove",
+        Cmd::RevertPkg { .. } => "revert-pkg",
         Cmd::Download { .. } => "download",
         Cmd::UpgradeAll => "upgrade-all",
         Cmd::InstallNew { .. } => "install-new",
@@ -407,6 +424,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::RemoveTemplate { .. } => "remove-template",
         Cmd::DeleteTemplate { .. } => "delete-template",
         Cmd::Frozen { .. } => "frozen",
+        Cmd::Unfrozen { .. } => "unfrozen",
         Cmd::AddRepo { .. } => "add-repo",
         Cmd::DelRepo { .. } => "del-repo",
         Cmd::AddTag { .. } => "add-tag",
@@ -3777,6 +3795,203 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
     Ok(Outcome::Ok)
 }
 
+/// Download a cumulative-archive package and its detached `.asc`, then require a
+/// GOOD GPG signature from the pinned official Slackware key before returning.
+/// md5 is intentionally not used here: the cumulative CHECKSUMS does not list
+/// superseded versions, so the per-package GPG signature alone authenticates. A
+/// missing, bad, or unpinned-key signature is fatal — nothing is installed.
+fn revert_fetch_and_gpg_verify(
+    cfg: &Config,
+    official: &config::Repo,
+    txz_url: &str,
+    dest: &std::path::Path,
+) -> Result<(), String> {
+    if let Ok(meta) = std::fs::symlink_metadata(dest) {
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to write through symlink {}; remove it first",
+                dest.display()
+            ));
+        }
+    }
+    println!("  {}", ui::dim(&format!("fetching {txz_url}")));
+    download::download_to(txz_url, dest)?;
+
+    let asc_url = format!("{txz_url}.asc");
+    let mut asc = dest.as_os_str().to_os_string();
+    asc.push(".asc");
+    let asc = std::path::PathBuf::from(asc);
+    download::download_to(&asc_url, &asc)
+        .map_err(|e| format!("fetch signature {asc_url}: {e}"))?;
+
+    match gpg::verify_detached(official, &cfg.cache_dir, dest, &asc)? {
+        gpg::Verify::Good(signer) => {
+            println!("  {}", ui::green(&format!("verified: gpg ({signer})")));
+            Ok(())
+        }
+        gpg::Verify::Tampered(m) => Err(format!("{m} — refusing to install")),
+        gpg::Verify::NoSignature => Err(format!(
+            "no GPG signature for {} in the cumulative archive — refusing \
+             (revert requires a valid Slackware signature)",
+            dest.display()
+        )),
+        gpg::Verify::Unverifiable(m) => Err(format!("{m} — refusing to install")),
+    }
+}
+
+/// Roll an official package back to a previous -current version (rollback). See
+/// the `RevertPkg` command doc for the user-facing description. Guards: the
+/// feature switch, a -current-only check (fail-closed), and a -current archive
+/// URL. Then: list previous official versions from removed-packages, pick one,
+/// locate it in the cumulative archive, GPG-verify, downgrade, offer to freeze.
+fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String> {
+    // GUARD 1 — feature switch.
+    if !cfg.revert_enabled {
+        return Err("revert-pkg is disabled (set REVERT=on in slacker.conf to enable it)".into());
+    }
+    // GUARD 2 — -current only (fail-closed if the codename is missing/unknown).
+    match system::version_codename().as_deref() {
+        Some("current") => {}
+        other => {
+            return Err(format!(
+                "revert-pkg works only on Slackware -current (VERSION_CODENAME=current).\n\
+                 This system reports VERSION_CODENAME={}. Refusing: the cumulative archive holds \
+                 -current packages, and mixing them into a stable release would break it.",
+                other.unwrap_or("<unset>")
+            ));
+        }
+    }
+    // GUARD 3 — the configured archive must itself be a -current tree.
+    if !cfg.cumulative_url.contains("-current") {
+        return Err(format!(
+            "CUMULATIVE_URL does not point at a -current archive: {}\n\
+             Refusing, to avoid mixing a stable archive into a -current system.",
+            cfg.cumulative_url
+        ));
+    }
+
+    // Read removed-packages records, most-recently-removed first.
+    let dir = cfg.adm_dir.join("removed_packages");
+    let rd = std::fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    let mut recs: Vec<(std::time::SystemTime, String)> = Vec::new();
+    for ent in rd.flatten() {
+        let fname = ent.file_name().to_string_lossy().into_owned();
+        let mtime = ent
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        recs.push((mtime, fname));
+    }
+    recs.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+    let names: Vec<&str> = recs.iter().map(|(_, n)| n.as_str()).collect();
+
+    let candidates = revert::previous_official_versions(&names, name, 10);
+    if candidates.is_empty() {
+        println!(
+            "No previous official versions of '{name}' found in {}.",
+            dir.display()
+        );
+        println!(
+            "  {}",
+            ui::dim(
+                "(revert covers official Slackware packages this system has upgraded; \
+                 third-party packages are not in the cumulative archive)"
+            )
+        );
+        return Ok(Outcome::NothingFound);
+    }
+
+    // Choose the target version: with -y the most recent previous, else interactive.
+    println!(
+        "{}",
+        ui::blue(&format!(
+            "Previous official versions of '{name}' available to revert to:"
+        ))
+    );
+    for (i, id) in candidates.iter().enumerate() {
+        println!(
+            "  {}) {}",
+            ui::dim(&format!("{:>3}", i + 1)),
+            ui::white(&id.tag())
+        );
+    }
+    let target = if cli.yes {
+        println!(
+            "  {}",
+            ui::dim("(-y: selecting the most recent previous version)")
+        );
+        &candidates[0]
+    } else {
+        print!(
+            "{} ",
+            ui::blue("Enter a number to revert to (or 'n' to cancel):")
+        );
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return Ok(Outcome::Ok);
+        }
+        let t = line.trim();
+        if t.is_empty() || t.eq_ignore_ascii_case("n") {
+            println!("Cancelled.");
+            return Ok(Outcome::Ok);
+        }
+        match t.parse::<usize>() {
+            Ok(n) if (1..=candidates.len()).contains(&n) => &candidates[n - 1],
+            _ => return Err(format!("invalid selection {t:?}")),
+        }
+    };
+
+    // Locate it in the cumulative archive (series from the archive's PACKAGES.TXT).
+    let pkgs_url = format!("{}/PACKAGES.TXT", cfg.cumulative_url.trim_end_matches('/'));
+    println!("  {}", ui::dim(&format!("fetching {pkgs_url}")));
+    let bytes =
+        download::get_bytes(&pkgs_url).map_err(|e| format!("fetch cumulative PACKAGES.TXT: {e}"))?;
+    let txt = String::from_utf8_lossy(&bytes);
+    let locations = revert::parse_locations(&txt);
+    let url =
+        revert::cumulative_url_for(&cfg.cumulative_url, &locations, target).ok_or_else(|| {
+            format!(
+                "could not locate '{}' in the cumulative archive (not in its PACKAGES.TXT — it may \
+                 have left -current, or live under extra/ or patches/, which revert does not cover)",
+                target.name
+            )
+        })?;
+
+    if cli.dry_run {
+        println!("{} {}", ui::green("would revert to"), ui::white(&target.tag()));
+        println!("  {} {url}", ui::dim("from"));
+        println!("(dry-run: nothing downloaded or installed)");
+        return Ok(Outcome::Ok);
+    }
+
+    // Download + GPG-verify against the pinned official Slackware key.
+    let official = cfg.repos.iter().find(|r| r.official).ok_or(
+        "no official repo is configured — needed to verify the cumulative package's Slackware signature",
+    )?;
+    let dest = package_dest(cfg, &official.name, &format!("{}.txz", target.tag()))?;
+    revert_fetch_and_gpg_verify(cfg, official, &url, &dest)?;
+
+    // Downgrade.
+    println!("{} {}", ui::blue("Reverting to"), ui::white(&target.tag()));
+    system::reinstall(&dest)?;
+
+    // Offer to freeze so a later upgrade-all won't pull it forward again.
+    println!();
+    if confirm(
+        &format!("Freeze '{name}' now so upgrade-all won't upgrade it again?"),
+        cli.yes,
+    ) {
+        cmd_frozen(cli, cfg, &[name.to_string()])?;
+    } else {
+        println!(
+            "  {}",
+            ui::dim("Not frozen — a later upgrade-all may pull this package forward again.")
+        );
+    }
+    Ok(Outcome::Ok)
+}
+
 fn cmd_download(
     cli: &Cli,
     cfg: &Config,
@@ -5097,6 +5312,96 @@ fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
     Ok(Outcome::Ok)
 }
 
+/// Remove blacklist rules from the file text by EXACT canonical match.
+///
+/// Each file line is canonicalised with the same `strip_comment` the parser
+/// uses, then compared to the requested rules by literal string equality — a
+/// rule is NEVER interpreted as a regex, so metacharacters (`.*`, `*`, `-`,
+/// `[]`, `/`) are matched verbatim and a partial name can never match a longer
+/// rule. Comment and blank lines, and any rule not requested, are preserved
+/// exactly. Returns (new_text, removed_rules, not_found_rules). Pure: no I/O.
+fn blacklist_remove(text: &str, wanted: &[&str]) -> (String, Vec<String>, Vec<String>) {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut removed: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let rule = config::strip_comment(line);
+        if !rule.is_empty() && wanted.contains(&rule) {
+            removed.push(rule.to_string());
+        } else {
+            kept.push(line); // comments, blanks and untouched rules kept verbatim
+        }
+    }
+    let mut not_found: Vec<String> = Vec::new();
+    for w in wanted {
+        if !removed.iter().any(|r| r.as_str() == *w) {
+            not_found.push((*w).to_string());
+        }
+    }
+    let mut body = kept.join("\n");
+    if !body.is_empty() {
+        body.push('\n');
+    }
+    (body, removed, not_found)
+}
+
+/// Remove ("unfreeze") one or more blacklist rules. The counterpart to `frozen`.
+/// With no argument it lists the current rules so the exact text to remove is
+/// visible. Matching is by exact literal rule text (see `blacklist_remove`).
+fn cmd_unfrozen(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
+    let path = cfg.config_dir.join("blacklist");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+
+    // No argument: show the current rules (exact text) and stop.
+    if names.is_empty() {
+        let rules: Vec<&str> = text
+            .lines()
+            .map(config::strip_comment)
+            .filter(|r| !r.is_empty())
+            .collect();
+        if rules.is_empty() {
+            println!("The blacklist has no rules.");
+            return Ok(Outcome::Ok);
+        }
+        println!("{}", ui::blue("Current blacklist rules:"));
+        for r in &rules {
+            println!("  {}", ui::white(r));
+        }
+        return Err(
+            "unfrozen: give one or more rules to remove, EXACTLY as shown above \
+             (quote rules with spaces or shell-special characters)"
+                .into(),
+        );
+    }
+
+    // Canonicalise the requested rules the same way a file line is canonicalised,
+    // then remove by exact literal match.
+    let wanted: Vec<&str> = names.iter().map(|s| config::strip_comment(s)).collect();
+    let (new_text, removed, not_found) = blacklist_remove(&text, &wanted);
+
+    if removed.is_empty() {
+        return Err(format!(
+            "no matching rule in {}: {}\n\
+             (rules must match exactly — run `slacker unfrozen` with no argument to see them)",
+            path.display(),
+            not_found.join(", ")
+        ));
+    }
+
+    std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
+    println!(
+        "Unfrozen (removed from blacklist): {}",
+        removed.join(", ")
+    );
+    if !not_found.is_empty() {
+        println!(
+            "  {}",
+            ui::dim(&format!("not found (unchanged): {}", not_found.join(", ")))
+        );
+    }
+    Ok(Outcome::Ok)
+}
+
 // ---- repos-file editors (add-repo / del-repo / add-tag / del-tag) ----------
 
 /// What a `repos` line declares, for matching during removal. Mirrors the
@@ -5535,6 +5840,65 @@ mod parallel_download_tests {
         let (ready, failed) = summarize_outcomes(&outcomes, 2);
         assert_eq!(ready, vec![false, false]);
         assert!(failed.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod unfreeze_tests {
+    use super::blacklist_remove;
+
+    #[test]
+    fn removes_exact_rule_only_no_glob() {
+        // 'fcitx5*' must remove only that line, never the longer 'fcitx5-qt'.
+        let text = "# header\nsbopkg\nfcitx5*\nfcitx5-qt\nemacs\n";
+        let (out, removed, nf) = blacklist_remove(text, &["fcitx5*"]);
+        assert_eq!(removed, vec!["fcitx5*"]);
+        assert!(nf.is_empty());
+        assert_eq!(out, "# header\nsbopkg\nfcitx5-qt\nemacs\n");
+    }
+
+    #[test]
+    fn regex_metachars_are_literal() {
+        let text = "xf86-.*-202.*\nvlc\n";
+        let (out, removed, _) = blacklist_remove(text, &["xf86-.*-202.*"]);
+        assert_eq!(removed, vec!["xf86-.*-202.*"]);
+        assert_eq!(out, "vlc\n");
+    }
+
+    #[test]
+    fn partial_name_does_not_match() {
+        // 'fcitx5' must NOT match the rule 'fcitx5*' — exact only.
+        let text = "fcitx5*\n";
+        let (out, removed, nf) = blacklist_remove(text, &["fcitx5"]);
+        assert!(removed.is_empty());
+        assert_eq!(nf, vec!["fcitx5"]);
+        assert_eq!(out, "fcitx5*\n"); // unchanged
+    }
+
+    #[test]
+    fn preserves_comments_and_reports_not_found() {
+        // 'emacs # note' canonicalises to 'emacs' and matches; 'ghost' does not.
+        let text = "# keep me\nemacs  # inline note\nsbopkg\n";
+        let (out, removed, nf) = blacklist_remove(text, &["emacs", "ghost"]);
+        assert_eq!(removed, vec!["emacs"]);
+        assert_eq!(nf, vec!["ghost"]);
+        assert_eq!(out, "# keep me\nsbopkg\n");
+    }
+
+    #[test]
+    fn repo_scoped_rule_does_not_touch_bare_rule() {
+        let text = "@alienbob vlc\nvlc\n";
+        let (out, removed, _) = blacklist_remove(text, &["@alienbob vlc"]);
+        assert_eq!(removed, vec!["@alienbob vlc"]);
+        assert_eq!(out, "vlc\n");
+    }
+
+    #[test]
+    fn removing_last_rule_leaves_header_intact() {
+        let text = "# blacklist\nemacs\n";
+        let (out, removed, _) = blacklist_remove(text, &["emacs"]);
+        assert_eq!(removed, vec!["emacs"]);
+        assert_eq!(out, "# blacklist\n");
     }
 }
 
