@@ -1,3 +1,7 @@
+Update: add parallel downloads
+Update: cross-repo dep-diff on also: note (install + install-new), read-only, gated on deps-on.
+---
+
 Version Beta 0.7.1
 =====
 Update: man pages
