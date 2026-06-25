@@ -117,42 +117,6 @@ pub fn get_bytes_capped(url: &str, cap: u64) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-/// Read just the FIRST LINE of a remote or local text file, transferring as
-/// few bytes as possible. Sends an HTTP `Range` request for the leading bytes;
-/// if the server ignores it and returns the whole body, only a small bounded
-/// prefix is read and the stream is dropped, so the cost is tiny either way.
-/// `status` uses this to compare a mirror's PACKAGES.TXT timestamp against
-/// upstream without pulling the multi-megabyte file.
-pub fn first_line(url: &str, timeout: Duration) -> Result<String, String> {
-    const PEEK: u64 = 256;
-    if let Some(path) = file_url_to_path(url) {
-        // Local mirror (clone / NFS / install media): read only the prefix.
-        let f = std::fs::File::open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
-        let mut buf = Vec::new();
-        f.take(PEEK).read_to_end(&mut buf).map_err(|e| e.to_string())?;
-        return first_nonempty_line(&buf);
-    }
-    let agent = build_agent(timeout)?;
-    let resp = agent
-        .get(url)
-        .set("Range", "bytes=0-127")
-        .set("Accept-Encoding", "identity")
-        .call()
-        .map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    resp.into_reader().take(PEEK).read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    first_nonempty_line(&buf)
-}
-
-/// First non-blank line of a byte buffer, trimmed. Errors if there is none.
-fn first_nonempty_line(buf: &[u8]) -> Result<String, String> {
-    let text = String::from_utf8_lossy(buf);
-    match text.lines().map(str::trim).find(|l| !l.is_empty()) {
-        Some(l) => Ok(l.to_string()),
-        None => Err("response had no readable first line".into()),
-    }
-}
-
 /// Download a (potentially large) package to `dest`.
 pub fn download_to(url: &str, dest: &Path) -> Result<(), String> {
     if let Some(parent) = dest.parent() {

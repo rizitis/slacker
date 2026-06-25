@@ -3068,6 +3068,85 @@ fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
     status_full(&cfg)
 }
 
+/// Upstream -current mirror that every other mirror syncs from. Used only to
+/// compare the PACKAGES.TXT header timestamp against the user's chosen official
+/// mirror, so plain http is acceptable here — no package data is ever trusted
+/// from it, only a timestamp is read. -current only; stable updates live under
+/// patches/ and would need a configurable URL (deferred while -current-only).
+const UPSTREAM_CURRENT_PACKAGES: &str =
+    "http://ftp.osuosl.org/pub/slackware/slackware64-current/PACKAGES.TXT";
+
+/// A mirror lagging upstream by more than this is reported as stale.
+const FRESHNESS_MAX_LAG_SECS: i64 = 48 * 3600;
+
+/// How long to wait on each freshness probe before giving up (fail-open).
+const FRESHNESS_TIMEOUT_SECS: u64 = 8;
+
+/// Parse the timestamp from a PACKAGES.TXT header line into epoch seconds.
+/// The line is always `PACKAGES.TXT;  Wed Jun 24 22:11:34 UTC 2026` — a
+/// `date -u` stamp (`%a %b %e %H:%M:%S UTC %Y`). Any deviation returns None so
+/// the caller fails open instead of guessing.
+fn parse_packages_date(line: &str) -> Option<i64> {
+    let ts = line.split_once(';')?.1.trim(); // "Wed Jun 24 22:11:34 UTC 2026"
+    let mut f = ts.split_whitespace();
+    let _weekday = f.next()?;
+    let mon = month_num(f.next()?)?;
+    let day: i64 = f.next()?.parse().ok()?;
+    let hms = f.next()?;
+    if f.next()? != "UTC" {
+        return None;
+    }
+    let year: i64 = f.next()?.parse().ok()?;
+    let mut hp = hms.split(':');
+    let h: i64 = hp.next()?.parse().ok()?;
+    let mi: i64 = hp.next()?.parse().ok()?;
+    let s: i64 = hp.next()?.parse().ok()?;
+    if hp.next().is_some() {
+        return None; // trailing junk after seconds
+    }
+    Some(crate::history::to_naive_epoch((year, mon, day, h, mi, s)))
+}
+
+fn month_num(m: &str) -> Option<i64> {
+    Some(match m {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    })
+}
+
+/// True when `upstream` leads `mirror` by more than the staleness threshold.
+fn mirror_is_stale(upstream_epoch: i64, mirror_epoch: i64) -> bool {
+    upstream_epoch - mirror_epoch > FRESHNESS_MAX_LAG_SECS
+}
+
+/// Render a lag in seconds as a compact "Nd Mh" / "Nh" / "Nm" string.
+fn humanize_lag(secs: i64) -> String {
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    if days >= 1 {
+        if hours > 0 {
+            format!("{days}d {hours}h")
+        } else {
+            format!("{days}d")
+        }
+    } else if hours >= 1 {
+        format!("{hours}h")
+    } else {
+        format!("{}m", (secs % 3600) / 60)
+    }
+}
+
 fn status_full(cfg: &Config) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let (db, missing_meta) = PkgDb::load_available(cfg);
@@ -3094,6 +3173,43 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     match cfg.repos.iter().find(|r| r.official) {
         Some(r) => srow(&ok, "Mirror", &ui::dim(&r.url)),
         None => srow(&info, "Mirror", &ui::dim("no official repo configured (third-party only)")),
+    }
+
+    // Mirror freshness vs upstream. Every other row reads local state; this is
+    // the one that touches the network. It is scoped to an official mirror on
+    // -current (the only case with a known upstream), uses a short timeout, and
+    // FAILS OPEN: an unreachable or unparseable mirror never yields a false
+    // "stale" verdict and never blocks — the official repo keeps working either
+    // way. Stable would compare patches/PACKAGES.TXT against a configurable URL
+    // and is deferred while slacker is -current-only.
+    if let Some(off) = cfg.repos.iter().find(|r| r.official) {
+        if system::version_codename().as_deref() == Some("current") {
+            let t = std::time::Duration::from_secs(FRESHNESS_TIMEOUT_SECS);
+            let up = download::first_line(UPSTREAM_CURRENT_PACKAGES, t)
+                .ok()
+                .and_then(|l| parse_packages_date(&l));
+            let mine = download::first_line(&off.join_url(repo::PACKAGES_TXT), t)
+                .ok()
+                .and_then(|l| parse_packages_date(&l));
+            match (up, mine) {
+                (Some(up), Some(mine)) if mirror_is_stale(up, mine) => srow(
+                    &warn,
+                    "Freshness",
+                    &ui::yellow(&format!(
+                        "your mirror is {} behind upstream — switch it",
+                        humanize_lag(up - mine)
+                    )),
+                ),
+                (Some(_), Some(_)) => {
+                    srow(&ok, "Freshness", &ui::dim("mirror is in sync with upstream"))
+                }
+                _ => srow(
+                    &info,
+                    "Freshness",
+                    &ui::dim("could not check (upstream or mirror unreachable)"),
+                ),
+            }
+        }
     }
 
     srow(&ok, "Repos", &ui::dim(&format!("{} configured, priorities distinct", repos.len())));
@@ -6253,5 +6369,60 @@ mod collect_tests {
         let (a3, r3) = dep_delta(&chosen, &[]);
         assert!(a3.is_empty());
         assert_eq!(r3, vec!["ffmpeg".to_string(), "qt5".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::*;
+
+    #[test]
+    fn parses_canonical_header() {
+        let line = "PACKAGES.TXT;  Wed Jun 24 22:11:34 UTC 2026";
+        assert_eq!(
+            parse_packages_date(line),
+            Some(crate::history::to_naive_epoch((2026, 6, 24, 22, 11, 34)))
+        );
+    }
+
+    #[test]
+    fn parses_space_padded_day() {
+        // date's %e left-pads a single-digit day with a space -> double space.
+        let line = "PACKAGES.TXT;  Tue Jun  4 09:05:06 UTC 2026";
+        assert_eq!(
+            parse_packages_date(line),
+            Some(crate::history::to_naive_epoch((2026, 6, 4, 9, 5, 6)))
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_lines() {
+        assert!(parse_packages_date("").is_none());
+        assert!(parse_packages_date("no semicolon at all").is_none());
+        // wrong timezone
+        assert!(parse_packages_date("PACKAGES.TXT;  Wed Jun 24 22:11:34 PST 2026").is_none());
+        // unknown month
+        assert!(parse_packages_date("PACKAGES.TXT;  Wed Xxx 24 22:11:34 UTC 2026").is_none());
+        // missing seconds
+        assert!(parse_packages_date("PACKAGES.TXT;  Wed Jun 24 22:11 UTC 2026").is_none());
+        // non-numeric day
+        assert!(parse_packages_date("PACKAGES.TXT;  Wed Jun XX 22:11:34 UTC 2026").is_none());
+    }
+
+    #[test]
+    fn staleness_threshold_is_48h() {
+        let base = crate::history::to_naive_epoch((2026, 6, 24, 0, 0, 0));
+        assert!(!mirror_is_stale(base + 48 * 3600, base)); // exactly 48h -> fresh
+        assert!(mirror_is_stale(base + 48 * 3600 + 1, base)); // 48h + 1s -> stale
+        assert!(!mirror_is_stale(base, base)); // identical -> fresh
+        assert!(!mirror_is_stale(base, base + 10_000)); // mirror ahead -> fresh
+    }
+
+    #[test]
+    fn humanize_lag_is_readable() {
+        assert_eq!(humanize_lag(9 * 86400), "9d");
+        assert_eq!(humanize_lag(3 * 86400 + 5 * 3600), "3d 5h");
+        assert_eq!(humanize_lag(5 * 3600), "5h");
+        assert_eq!(humanize_lag(40 * 60), "40m");
     }
 }

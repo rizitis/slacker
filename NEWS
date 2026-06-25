@@ -1,3 +1,4 @@
+New: add Freshness in status command that check if your mirror is in sync with upstream (osuosl.org)
 New: add cmd: slacker unfrozen <pkg-*>
 New: add cmd: slacker revert-pkg <pkg_name> (only for slackware-current) using slackware.uk/cumulative as repo hardcoded
 Update: add parallel downloads
