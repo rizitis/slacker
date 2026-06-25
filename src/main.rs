@@ -462,6 +462,7 @@ enum KeepChoice {
     Keep,
     Replace,
     KeepAll,
+    Quit,
 }
 
 /// Ask what to do when a dependency is installed but differs from the version
@@ -520,7 +521,7 @@ fn resolve_protected_deps(
     tag_prios: &[crate::config::TagPriority],
     protected: &[ProtectedDep],
     assume_yes: bool,
-) -> Vec<repo::AvailPkg> {
+) -> Result<Vec<repo::AvailPkg>, String> {
     let inst_src = |p: &ProtectedDep| {
         let tag = p.installed.build_tag();
         let src = if tag.is_empty() { "official" } else { tag };
@@ -559,7 +560,7 @@ fn resolve_protected_deps(
 
     if assume_yes {
         println!("{}", ui::blue("(--yes: keeping the installed versions)"));
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // Per-dependency choice; the default is to keep the installed version.
@@ -573,9 +574,12 @@ fn resolve_protected_deps(
             KeepChoice::Keep => {}
             KeepChoice::Replace => replace.push(p.offered.clone()),
             KeepChoice::KeepAll => keep_all = true,
+            // Mirror the conflict prompt's a[b]ort: stop the whole operation,
+            // change nothing more.
+            KeepChoice::Quit => return Err("aborted by user".into()),
         }
     }
-    replace
+    Ok(replace)
 }
 
 /// Per-dependency prompt for a priority-protected dependency. Default = keep.
@@ -584,7 +588,8 @@ fn ask_protected_dep(p: &ProtectedDep, inst_src: &str, off_src: &str) -> KeepCho
     println!("    {}", ui::blue(&format!("[k]eep      keep the installed {inst_src} (default)")));
     println!("    {}", ui::blue(&format!("[r]eplace   install {off_src} instead")));
     println!("    {}", ui::blue("keep-[a]ll  keep this and every remaining one"));
-    print!("  {} ", ui::blue("Choice [k/r/a]:"));
+    println!("    {}", ui::blue("[q]uit      cancel the whole operation, change nothing"));
+    print!("  {} ", ui::blue("Choice [k/r/a/q]:"));
     std::io::stdout().flush().ok();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
@@ -593,6 +598,7 @@ fn ask_protected_dep(p: &ProtectedDep, inst_src: &str, off_src: &str) -> KeepCho
     match line.trim() {
         "r" | "R" => KeepChoice::Replace,
         "a" | "A" => KeepChoice::KeepAll,
+        "q" | "Q" => KeepChoice::Quit,
         _ => KeepChoice::Keep,
     }
 }
@@ -628,7 +634,7 @@ fn expand_with_deps(
     // any with the version offered by the repo that pulled them in. Anything the
     // user keeps (the default) just stays installed.
     if !protected.is_empty() {
-        let replace = resolve_protected_deps(db, &cfg.tag_priorities, &protected, assume_yes);
+        let replace = resolve_protected_deps(db, &cfg.tag_priorities, &protected, assume_yes)?;
         for o in replace {
             add_with_deps(
                 cfg, db, installed, o, InstallAction::Upgrade, None, resolve, assume_yes,

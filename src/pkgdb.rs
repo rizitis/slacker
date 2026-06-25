@@ -130,6 +130,29 @@ impl PkgDb {
         v
     }
 
+    /// Does `term` name a real Slackware *series* (a, ap, l, kde, ... or an
+    /// SBo-style category) rather than just a package whose name equals some
+    /// repo's per-package directory? A genuine series groups *several* distinct
+    /// package names; a per-package directory (e.g. a repo shipping `ffmpeg`
+    /// under `ffmpeg/`, giving it `series == "ffmpeg"`) groups exactly one name
+    /// and must NOT shadow a name or `repo:name` query for that package. So a
+    /// term counts as a series only if at least two *distinct* package names
+    /// share it. Stops at the second distinct name.
+    fn is_real_series(&self, term: &str) -> bool {
+        let mut first: Option<&str> = None;
+        for p in &self.all {
+            if p.series != term {
+                continue;
+            }
+            match first {
+                None => first = Some(p.id.name.as_str()),
+                Some(n) if n != p.id.name => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Expand a slackpkg-style PATTERN into winning packages.
     ///
     /// A pattern matches: an exact `repo:name` pin, an exact series name
@@ -166,7 +189,7 @@ impl PkgDb {
         }
 
         let (pinned, term) = split_pin(pattern);
-        let is_series = self.all.iter().any(|p| p.series == term);
+        let is_series = self.is_real_series(term);
 
         let mut winners: HashMap<&str, &AvailPkg> = HashMap::new();
         for p in &self.all {
@@ -175,9 +198,13 @@ impl PkgDb {
                     continue;
                 }
             }
-            // If the term names a Slackware series (a, ap, kde, y, ...), match
-            // exactly that series — not every package whose name happens to
-            // contain the letter(s). Otherwise match an exact name or substring.
+            // If the term names a real Slackware series (a, ap, kde, y, ...) —
+            // a directory that groups several package names — match that series
+            // exactly, not every package whose name happens to contain the
+            // letter(s). A per-package directory (one name == the dir, e.g. a
+            // repo shipping `ffmpeg` under `ffmpeg/`) is NOT a series, so the
+            // term falls through to an exact-name/substring match. See
+            // `is_real_series`.
             let hit = if is_series {
                 p.series == term
             } else {
@@ -645,5 +672,92 @@ mod upgrade_tests {
         assert!(db.names_provided_by(None).contains("foo"));
         // repo_for_tag maps the alien tag to alienbob (drives the tagged branch).
         assert_eq!(db.repo_for_tag("alien"), Some("alienbob"));
+    }
+}
+
+#[cfg(test)]
+mod series_match_tests {
+    use super::*;
+    use crate::pkg::PkgId;
+    use crate::repo::AvailPkg;
+
+    fn av(nv: &str, repo: &str, series: &str) -> AvailPkg {
+        AvailPkg {
+            id: PkgId::parse(nv).unwrap(),
+            filename: format!("{nv}.txz"),
+            location: format!("./{series}"),
+            series: series.into(),
+            size_k: None,
+            size_uncompressed_k: None,
+            summary: String::new(),
+            description: String::new(),
+            md5: None,
+            sha: None,
+            repo: repo.into(),
+        }
+    }
+
+    fn db(pkgs: Vec<AvailPkg>, prios: &[(&str, i32)]) -> PkgDb {
+        let mut priority = HashMap::new();
+        for (n, p) in prios {
+            priority.insert(n.to_string(), *p);
+        }
+        PkgDb { all: pkgs, priority, official_priority: None }
+    }
+
+    // Official slackware ships ffmpeg in the *real* series `l` (many distinct
+    // names); alienbob ships ffmpeg alone under `ffmpeg/`, so its series is the
+    // package name itself. That per-package directory must NOT turn the term
+    // "ffmpeg" into a series query and shadow name/`repo:name` matching.
+    fn fx() -> PkgDb {
+        db(
+            vec![
+                av("ffmpeg-8.1.2-x86_64-1", "slackware", "l"),
+                av("zlib-1.3-x86_64-1", "slackware", "l"),
+                av("glibc-2.39-x86_64-1", "slackware", "l"),
+                av("ffmpeg-7.1.3-x86_64-2alien", "alienbob", "ffmpeg"),
+            ],
+            &[("slackware", 100), ("alienbob", 10)],
+        )
+    }
+
+    #[test]
+    fn is_real_series_needs_two_distinct_names() {
+        let db = fx();
+        assert!(db.is_real_series("l")); // 3 distinct names share it
+        assert!(!db.is_real_series("ffmpeg")); // one name == per-package dir
+        assert!(!db.is_real_series("nope")); // unknown series
+    }
+
+    #[test]
+    fn per_name_dir_does_not_shadow_pin() {
+        // Was the bug: `slackware:ffmpeg` returned nothing because "ffmpeg" was
+        // mis-read as a series (alienbob's per-name dir) and slackware's ffmpeg
+        // lives in series `l`, not `ffmpeg`.
+        let db = fx();
+        let out = db.match_pattern("slackware:ffmpeg");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id.name, "ffmpeg");
+        assert_eq!(out[0].repo, "slackware");
+    }
+
+    #[test]
+    fn per_name_dir_does_not_shadow_bare_name() {
+        let db = fx();
+        let out = db.match_pattern("ffmpeg");
+        assert_eq!(out.len(), 1); // one winner per name
+        assert_eq!(out[0].id.name, "ffmpeg");
+        assert_eq!(out[0].repo, "slackware"); // 100 beats alienbob 10
+    }
+
+    #[test]
+    fn real_series_still_matches_by_series() {
+        let db = fx();
+        let mut names: Vec<&str> =
+            db.match_pattern("l").iter().map(|p| p.id.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["ffmpeg", "glibc", "zlib"]);
+        // series `l` is slackware's; alienbob's ffmpeg (series "ffmpeg") excluded
+        assert!(db.match_pattern("l").iter().all(|p| p.repo == "slackware"));
     }
 }
