@@ -1159,21 +1159,60 @@ fn collect<'a>(
     for pat in patterns {
         validate_selector(db, pat)?;
     }
-    let mut seen = HashSet::new();
-    let mut pkgs = Vec::new();
+    // When more than one pattern yields the same package name, pick a single
+    // winner by an explicit precedence (see `collect_prefers`): an explicit
+    // `repo:name` pin beats a non-pinned candidate; otherwise the higher-priority
+    // repo wins; a true tie keeps the first one seen. First-appearance order of
+    // names is preserved for stable output. For a SINGLE pattern this changes
+    // nothing — `match_pattern` already returns one priority-correct candidate
+    // per name, so no name is seen twice and nothing is ever replaced.
+    let mut order: Vec<String> = Vec::new();
+    let mut chosen: HashMap<String, (&'a repo::AvailPkg, bool)> = HashMap::new();
     let mut misses = Vec::new();
     for pat in patterns {
+        // A pin is `repo:name` (never `@repo`): the deliberate override of source
+        // priority, so it must win over a non-pinned candidate of the same name.
+        let is_pin = !pat.starts_with('@') && pat.split_once(':').is_some();
         let matched = db.match_pattern(pat);
         if matched.is_empty() {
             misses.push(pat.clone());
         }
         for p in matched {
-            if seen.insert(p.id.name.clone()) {
-                pkgs.push(p);
+            let replace = match chosen.get(&p.id.name) {
+                None => {
+                    order.push(p.id.name.clone());
+                    true
+                }
+                Some(&(cur, cur_pin)) => collect_prefers(
+                    is_pin,
+                    db.repo_priority(&p.repo),
+                    cur_pin,
+                    db.repo_priority(&cur.repo),
+                ),
+            };
+            if replace {
+                chosen.insert(p.id.name.clone(), (p, is_pin));
             }
         }
     }
+    let pkgs = order.iter().map(|n| chosen[n].0).collect();
     Ok((pkgs, misses))
+}
+
+/// Should a newly-seen candidate replace the current winner for the same name,
+/// when two patterns in one `collect` both match it? Precedence, highest first:
+///   1. an explicit `repo:name` pin beats a non-pinned candidate (a pin is the
+///      deliberate override of source priority);
+///   2. otherwise the candidate from the higher-priority repo wins;
+///   3. a true tie (same pin-ness and priority — e.g. two pins of the same name)
+///      keeps the first one seen, respecting the order the user listed them.
+fn collect_prefers(new_pin: bool, new_prio: i32, cur_pin: bool, cur_prio: i32) -> bool {
+    match (new_pin, cur_pin) {
+        (true, false) => true,                 // a pin beats a non-pin
+        (false, true) => false,                // a non-pin never displaces a pin
+        (true, true) => false,                 // two pins: keep the first listed
+        (false, false) => new_prio > cur_prio, // both non-pinned: higher priority
+    }
 }
 
 /// Resolve upgrade/reinstall PATTERNs into available candidates, restricted to
@@ -4660,5 +4699,126 @@ mod attribution_tests {
         assert_eq!(total, installed.len());
         // There is no "untracked" bucket; the only "other" keys are real tags.
         assert!(!per_other.keys().any(|k| k.contains("untracked")));
+    }
+}
+
+#[cfg(test)]
+mod collect_tests {
+    use super::*;
+
+    fn av(nv: &str, repo_: &str) -> repo::AvailPkg {
+        repo::AvailPkg {
+            id: pkg::PkgId::parse(nv).unwrap(),
+            filename: format!("{nv}.txz"),
+            location: "./x/".into(),
+            series: "x".into(),
+            size_k: None,
+            size_uncompressed_k: None,
+            summary: String::new(),
+            description: String::new(),
+            md5: None,
+            sha: None,
+            repo: repo_.into(),
+        }
+    }
+
+    // slackware (priority 100) and alienbob (60) both provide `vlc`; each also
+    // has a package only it ships. Shared fixture for the integration tests.
+    fn fixture() -> PkgDb {
+        PkgDb::for_test(
+            vec![
+                av("vlc-3.0.20-x86_64-1", "slackware"),
+                av("vlc-3.0.21-x86_64-1alien", "alienbob"),
+                av("aaa-1.0-x86_64-1", "slackware"),
+                av("bbb-1.0-x86_64-1alien", "alienbob"),
+            ],
+            &[("slackware", 100), ("alienbob", 60)],
+            Some(100),
+        )
+    }
+
+    fn repo_of(pkgs: &[&repo::AvailPkg], name: &str) -> Option<String> {
+        pkgs.iter().find(|p| p.id.name == name).map(|p| p.repo.clone())
+    }
+
+    fn pats(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn prefers_precedence_is_pin_then_priority_then_first() {
+        // 1) a pin beats a non-pin, regardless of priority either way
+        assert!(collect_prefers(true, 10, false, 100)); // low-prio pin beats high-prio non-pin
+        assert!(!collect_prefers(false, 100, true, 10)); // high-prio non-pin can't displace a pin
+        // 2) both non-pinned: higher priority wins
+        assert!(collect_prefers(false, 100, false, 80));
+        assert!(!collect_prefers(false, 80, false, 100));
+        // 3) ties keep the incumbent (first seen)
+        assert!(!collect_prefers(false, 100, false, 100)); // equal priority, non-pins
+        assert!(!collect_prefers(true, 60, true, 100)); // two pins: first listed stays...
+        assert!(!collect_prefers(true, 100, true, 60)); // ...whatever their priorities
+    }
+
+    #[test]
+    fn single_pattern_is_unchanged() {
+        let d = fixture();
+        let (got, miss) = collect(&d, &pats(&["@slackware"])).unwrap();
+        assert!(miss.is_empty());
+        let mut names: Vec<&str> = got.iter().map(|p| p.id.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["aaa", "vlc"]); // one entry per name
+        assert_eq!(repo_of(&got, "vlc").unwrap(), "slackware");
+    }
+
+    #[test]
+    fn two_repos_higher_priority_wins_either_order() {
+        let d = fixture();
+        // alienbob listed first, but slackware (100) must win vlc over alienbob (60)
+        let (a, _) = collect(&d, &pats(&["@alienbob", "@slackware"])).unwrap();
+        assert_eq!(repo_of(&a, "vlc").unwrap(), "slackware");
+        // reversed order: priority, not listing order, decides
+        let (b, _) = collect(&d, &pats(&["@slackware", "@alienbob"])).unwrap();
+        assert_eq!(repo_of(&b, "vlc").unwrap(), "slackware");
+        // each repo's unique package is still present
+        assert!(repo_of(&a, "aaa").is_some() && repo_of(&a, "bbb").is_some());
+    }
+
+    #[test]
+    fn pin_beats_higher_priority_repo_either_order() {
+        let d = fixture();
+        // pin to alienbob wins vlc even though @slackware (100) is higher priority
+        let (a, _) = collect(&d, &pats(&["alienbob:vlc", "@slackware"])).unwrap();
+        assert_eq!(repo_of(&a, "vlc").unwrap(), "alienbob");
+        // reversed: the pin still wins regardless of listing order
+        let (b, _) = collect(&d, &pats(&["@slackware", "alienbob:vlc"])).unwrap();
+        assert_eq!(repo_of(&b, "vlc").unwrap(), "alienbob");
+    }
+
+    #[test]
+    fn two_pins_same_name_keep_first_listed() {
+        let d = fixture();
+        let (a, _) = collect(&d, &pats(&["slackware:vlc", "alienbob:vlc"])).unwrap();
+        assert_eq!(repo_of(&a, "vlc").unwrap(), "slackware"); // first listed
+        let (b, _) = collect(&d, &pats(&["alienbob:vlc", "slackware:vlc"])).unwrap();
+        assert_eq!(repo_of(&b, "vlc").unwrap(), "alienbob"); // first listed
+    }
+
+    #[test]
+    fn different_name_pins_both_kept() {
+        let d = fixture();
+        let (got, miss) = collect(&d, &pats(&["alienbob:bbb", "slackware:aaa"])).unwrap();
+        assert!(miss.is_empty());
+        assert_eq!(repo_of(&got, "bbb").unwrap(), "alienbob");
+        assert_eq!(repo_of(&got, "aaa").unwrap(), "slackware");
+    }
+
+    #[test]
+    fn misses_reported_for_non_matching_patterns() {
+        let d = fixture();
+        // a bare name that matches nothing, and a pin to a non-existent repo
+        let (got, miss) = collect(&d, &pats(&["nonexistent", "zzz:vlc"])).unwrap();
+        assert!(got.is_empty());
+        assert!(miss.contains(&"nonexistent".to_string()));
+        assert!(miss.contains(&"zzz:vlc".to_string()));
     }
 }

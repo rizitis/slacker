@@ -395,6 +395,24 @@ fn split_pin(query: &str) -> (Option<&str>, &str) {
 }
 
 #[cfg(test)]
+impl PkgDb {
+    /// Build a PkgDb from explicit parts, for cross-module tests (e.g. `collect`
+    /// in main, which lives outside this module and so cannot use the struct
+    /// fields directly). Test-only — compiled out of the release binary.
+    pub(crate) fn for_test(
+        all: Vec<AvailPkg>,
+        prios: &[(&str, i32)],
+        official: Option<i32>,
+    ) -> PkgDb {
+        let mut priority = HashMap::new();
+        for (n, p) in prios {
+            priority.insert(n.to_string(), *p);
+        }
+        PkgDb { all, priority, official_priority: official }
+    }
+}
+
+#[cfg(test)]
 mod upgrade_tests {
     use super::*;
     use crate::config::TagPriority;
