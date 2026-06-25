@@ -1,3 +1,5 @@
+NOTE: slacker source AND slacker wiki are beta... and unstable.
+
 
 ![slacker](./slacker1.png)
 
