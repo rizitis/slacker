@@ -9,59 +9,59 @@
    Compiling stable_deref_trait v1.2.1
    Compiling find-msvc-tools v0.1.9
    Compiling shlex v2.0.1
-   Compiling writeable v0.6.3
    Compiling litemap v0.8.2
-   Compiling pkg-config v0.3.33
+   Compiling writeable v0.6.3
    Compiling vcpkg v0.2.15
-   Compiling version_check v0.9.5
-   Compiling utf8_iter v1.0.4
+   Compiling pkg-config v0.3.33
    Compiling icu_normalizer_data v2.2.0
+   Compiling version_check v0.9.5
    Compiling icu_properties_data v2.2.0
+   Compiling utf8_iter v1.0.4
    Compiling libc v0.2.186
    Compiling cfg-if v1.0.4
    Compiling typenum v1.20.1
    Compiling smallvec v1.15.2
-   Compiling utf8parse v0.2.2
-   Compiling openssl v0.10.81
    Compiling crc32fast v1.5.0
    Compiling foreign-types-shared v0.1.1
-   Compiling anstyle-parse v1.0.0
-   Compiling bitflags v2.13.0
+   Compiling utf8parse v0.2.2
+   Compiling openssl v0.10.81
    Compiling foreign-types v0.3.2
-   Compiling colorchoice v1.0.5
-   Compiling memchr v2.8.2
-   Compiling adler2 v2.0.1
-   Compiling cc v1.2.65
+   Compiling anstyle-parse v1.0.0
    Compiling simd-adler32 v0.3.9
    Compiling percent-encoding v2.3.2
    Compiling native-tls v0.2.18
+   Compiling adler2 v2.0.1
+   Compiling cc v1.2.65
    Compiling anstyle v1.0.14
-   Compiling anstyle-query v1.1.5
+   Compiling memchr v2.8.2
    Compiling is_terminal_polyfill v1.70.2
+   Compiling bitflags v2.13.0
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
    Compiling strsim v0.11.1
-   Compiling clap_lex v1.1.0
-   Compiling log v0.4.33
    Compiling regex-syntax v0.8.11
-   Compiling heck v0.5.0
    Compiling openssl-probe v0.2.1
    Compiling form_urlencoded v1.2.2
+   Compiling heck v0.5.0
+   Compiling log v0.4.33
    Compiling miniz_oxide v0.8.9
+   Compiling clap_lex v1.1.0
+   Compiling anstream v1.0.0
+   Compiling base64 v0.22.1
    Compiling generic-array v0.14.7
    Compiling once_cell v1.21.4
-   Compiling base64 v0.22.1
-   Compiling anstream v1.0.0
    Compiling clap_builder v4.6.0
-   Compiling aho-corasick v1.1.4
-   Compiling syn v2.0.118
    Compiling flate2 v1.1.9
+   Compiling syn v2.0.118
+   Compiling aho-corasick v1.1.4
    Compiling openssl-sys v0.9.117
    Compiling block-buffer v0.10.4
    Compiling crypto-common v0.1.7
    Compiling digest v0.10.7
    Compiling md-5 v0.10.6
    Compiling regex-automata v0.4.14
-   Compiling regex v1.12.4
    Compiling synstructure v0.13.2
+   Compiling regex v1.12.4
    Compiling zerofrom-derive v0.1.7
    Compiling yoke-derive v0.8.2
    Compiling zerovec-derive v0.11.3
@@ -85,88 +85,88 @@
    Compiling url v2.5.8
    Compiling ureq v2.12.1
    Compiling slacker v0.7.0 (/tmp/FORGE)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.39s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.11s
    Compiling openssl-sys v0.9.117
    Compiling openssl v0.10.81
    Compiling native-tls v0.2.18
    Compiling ureq v2.12.1
    Compiling slacker v0.7.0 (/tmp/FORGE)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.50s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.42s
    Compiling slacker v0.7.0 (/tmp/FORGE)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.95s
      Running unittests src/main.rs (target/debug/deps/slacker-18caacf813de938f)
 
 running 72 tests
 test config::tests::mirrors_none_active ... ok
 test config::tests::blacklist_lines ... ok
-test config::tests::mirrors_one_active ... ok
-test config::tests::repos_bad_input ... ok
 test config::tests::keyvals_and_comments ... ok
+test config::tests::mirrors_two_active_is_error ... ok
+test config::tests::mirrors_one_active ... ok
+test config::tests::arch_detected_from_aaa_base ... ok
+test attribution_tests::every_installed_package_has_a_source_never_untracked ... ok
+test config::tests::repos_bad_input ... ok
+test config::tests::repos_duplicate_priority_is_error ... ok
 test config::tests::repos_mirror_keyword_resolves ... ok
 test config::tests::repos_immutable_flag_parses ... ok
-test attribution_tests::every_installed_package_has_a_source_never_untracked ... ok
-test config::tests::repos_duplicate_priority_is_error ... ok
-test config::tests::mirrors_two_active_is_error ... ok
-test config::tests::repos_columns_and_official ... ok
 test config::tests::repos_mirror_subpath_resolves_and_keeps_flags ... ok
 test config::tests::repos_mirror_keyword_without_active_errors ... ok
-test config::tests::arch_detected_from_aaa_base ... ok
-test config::tests::repos_mirror_subpath_without_active_mirror_errors ... ok
-test config::tests::verify_policy_parsing ... ok
+test config::tests::repos_columns_and_official ... ok
 test config::tests::repos_subtree_flag_parses_and_resolves_parent_base ... ok
 test config::tests::verify_policy_wants_requires ... ok
-test download::tests::file_url_parsing ... ok
+test config::tests::verify_policy_parsing ... ok
+test config::tests::repos_mirror_subpath_without_active_mirror_errors ... ok
 test download::tests::tls_handshake_works ... ignored
+test download::tests::file_url_parsing ... ok
 test history::tests::civil_roundtrip_known_dates ... ok
+test download::tests::file_url_fetch_roundtrip ... ok
 test history::tests::format_is_local_via_calibration ... ok
 test history::tests::parse_upgraded_suffix_works ... ok
-test history::tests::lost_successor_infers_target_version ... ok
 test history::tests::downtube_full_life_is_reconstructed ... ok
-test history::tests::rebuilt_same_version_chain_pairs_correctly ... ok
+test history::tests::lost_successor_infers_target_version ... ok
 test manifest::tests::finds_file_and_package ... ok
-test download::tests::file_url_fetch_roundtrip ... ok
+test history::tests::rebuilt_same_version_chain_pairs_correctly ... ok
 test manifest::tests::symlink_target_stripped ... ok
-test pkg::tests::dashed_name ... ok
 test pkg::tests::rejects_garbage ... ok
 test download::tests::md5_of_known_content ... ok
 test pkg::tests::build_tag_strips_number_both_styles ... ok
-test pkg::tests::bare_tag_without_ext ... ok
+test pkg::tests::dashed_name ... ok
 test pkg::tests::revision_detection ... ok
+test pkg::tests::bare_tag_without_ext ... ok
 test pkg::tests::safe_filename_accepts_normal_packages ... ok
-test pkg::tests::safe_filename_rejects_traversal_and_tricks ... ok
-test pkg::tests::safe_location_rejects_dotdot ... ok
-test pkg::tests::simple_name ... ok
-test pkgdb::upgrade_tests::at_tag_selects_by_build_tag ... ok
-test pkgdb::upgrade_tests::bare_word_is_not_a_repo ... ok
 test pkgdb::upgrade_tests::genuine_self_upgrade_within_same_repo ... ok
-test pkgdb::upgrade_tests::at_repo_selects_whole_repo ... ok
-test pkgdb::upgrade_tests::higher_priority_same_version_is_proposed ... ok
 test pkgdb::upgrade_tests::names_provided_by_scopes_to_baseline ... ok
-test pkgdb::upgrade_tests::no_downgrade_from_lower_repo ... ok
-test pkgdb::upgrade_tests::newly_added_matches_by_name_not_filename ... ok
-test newconfig::tests::finds_new_files_recursively ... ok
 test pkgdb::upgrade_tests::official_upgrade_proposed ... ok
-test pkgdb::upgrade_tests::sbo_is_not_migrated_to_lower_repo ... ok
-test repo::arch_tests::accepts_native_noarch_fw_x86 ... ok
-test pkgdb::upgrade_tests::series_pattern_matches_only_series ... ok
-test pkgdb::upgrade_tests::substring_pattern_still_works ... ok
+test pkgdb::upgrade_tests::no_downgrade_from_lower_repo ... ok
 test repo::arch_tests::rejects_genuine_32bit_binaries_on_64 ... ok
 test repo::dep_tests::parses_names_and_skips_noise ... ok
-test repo::tests::parses_blocks_with_series ... ok
-test repo::tests::parses_checksums_ok ... ok
+test newconfig::tests::finds_new_files_recursively ... ok
+test pkg::tests::simple_name ... ok
 test repo::tests::series_extraction ... ok
-test selection_tests::edit_distance_basics ... ok
+test repo::tests::parses_blocks_with_series ... ok
+test pkg::tests::safe_filename_rejects_traversal_and_tricks ... ok
+test pkg::tests::safe_location_rejects_dotdot ... ok
+test selection_tests::closest_suggests_within_two ... ok
 test selection_tests::privilege_classification ... ok
 test repo::lossy_tests::reads_non_utf8_without_failing ... ok
-test selection_tests::closest_suggests_within_two ... ok
-test system::tests::missing_db_is_empty_not_error ... ok
+test selection_tests::edit_distance_basics ... ok
+test pkgdb::upgrade_tests::at_repo_selects_whole_repo ... ok
 test selection_tests::parse_selection_works ... ok
+test system::tests::missing_db_is_empty_not_error ... ok
 test ui::tests::helpers_map_to_the_right_code ... ok
-test ui::tests::paint_gate_is_pure ... ok
+test pkgdb::upgrade_tests::at_tag_selects_by_build_tag ... ok
 test system::tests::reads_fake_installed_db ... ok
 test template::tests::delete_removes_file_only ... ok
-test template::tests::name_suffix_is_normalized ... ok
+test ui::tests::paint_gate_is_pure ... ok
 test template::tests::generate_then_load_with_include ... ok
+test pkgdb::upgrade_tests::higher_priority_same_version_is_proposed ... ok
+test template::tests::name_suffix_is_normalized ... ok
+test pkgdb::upgrade_tests::substring_pattern_still_works ... ok
+test repo::arch_tests::accepts_native_noarch_fw_x86 ... ok
+test repo::tests::parses_checksums_ok ... ok
+test pkgdb::upgrade_tests::newly_added_matches_by_name_not_filename ... ok
+test pkgdb::upgrade_tests::sbo_is_not_migrated_to_lower_repo ... ok
+test pkgdb::upgrade_tests::bare_word_is_not_a_repo ... ok
+test pkgdb::upgrade_tests::series_pattern_matches_only_series ... ok
 test config::tests::blacklist_rules ... ok
 test repo::tests::official_arch_subdir_picks_arch_dir ... ok
 

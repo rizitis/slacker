@@ -2965,10 +2965,25 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
         println!("Everything is up to date.");
         return Ok(Outcome::Ok);
     }
-    let self_upgrade = ups.iter().any(|u| u.installed.name == "slacker");
+    // Let the user deselect upgrades before anything is resolved or applied.
+    // This is the same select-before-resolve step install/upgrade/reinstall use:
+    // dependencies are then computed only for what is kept, so the dep resolver
+    // is never re-run on a trimmed plan. Skipped under --yes/--dry-run or a
+    // single upgrade (select_packages returns the input unchanged there).
+    let chosen = select_packages(
+        ups.iter().map(|u| u.available).collect(),
+        "upgrade",
+        cli.yes,
+        cli.dry_run,
+    );
+    if chosen.is_empty() {
+        println!("Nothing selected.");
+        return Ok(Outcome::Ok);
+    }
+    let self_upgrade = chosen.iter().any(|a| a.id.name == "slacker");
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots: Vec<_> =
-        ups.iter().map(|u| (u.available.clone(), InstallAction::Upgrade)).collect();
+        chosen.iter().map(|&a| (a.clone(), InstallAction::Upgrade)).collect();
 
     // Resolve dependencies up front, so the complete plan — including any new
     // packages pulled in as dependencies — is shown *before* we ask to proceed.
@@ -3022,35 +3037,56 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
         return Err("install-new: no official repo configured; name a repo explicitly".into());
     }
 
-    // Build map repo -> package *names* newly present since the last update. A
-    // new build/version of an existing package is not "new" here (its name was
-    // already present) — that is an upgrade, handled by upgrade-all.
-    let mut new_by_repo: HashMap<String, HashSet<String>> = HashMap::new();
-    for r in selected {
-        if let Some(prev) = repo::previous_names(r, &cfg.cache_dir) {
-            let cur = repo::load_repo(r, &cfg.cache_dir, &cfg.arch)?;
-            let added: HashSet<String> = cur
-                .iter()
-                .map(|p| p.id.name.clone())
-                .filter(|n| !prev.contains(n))
-                .collect();
-            if !added.is_empty() {
-                new_by_repo.insert(r.name.clone(), added);
+    // install-new offers every package the selected repos provide that is NOT
+    // already installed and NOT frozen — the same "fill what's missing" logic as
+    // `install @<repo>` (collect -> match_pattern, then drop installed/frozen).
+    // Compared against the live installed set, it catches both genuinely-new
+    // distribution packages AND anything the user removed, robustly across any
+    // number of updates.
+    //
+    // NOTE: this replaced the earlier "names added since the last update"
+    // behaviour, which diffed PACKAGES.TXT.prev. That baseline is overwritten on
+    // every `update` (so additions were lost after a second update) and never
+    // caught packages the user had removed. The old prev-diff machinery
+    // (repo::previous_names + PkgDb::newly_added, and the PACKAGES.TXT.prev that
+    // `update_repo` still keeps) is intentionally LEFT IN PLACE, unused, in case
+    // it is needed again later or elsewhere — see the notes at those functions.
+    //
+    // Scope is official-only by default (immutable/third-party repos are not
+    // pulled in unless named); the blacklist filter keeps frozen packages out.
+    let at: Vec<String> = selected.iter().map(|r| format!("@{}", r.name)).collect();
+    let (matched, _misses) = collect(&db, &at)?;
+    let mut frozen = Vec::new();
+    let todo: Vec<_> = matched
+        .into_iter()
+        .filter(|p| {
+            if bl_frozen(cfg, &db, &installed, p) {
+                frozen.push(p.id.name.clone());
+                return false;
             }
-        }
-    }
-    let news = db.newly_added(&new_by_repo, &installed);
-    let todo: Vec<_> = news.into_iter().filter(|p| !bl_avail(cfg, p)).collect();
+            !system::is_installed(&installed, &p.id.name)
+        })
+        .collect();
     if todo.is_empty() {
+        if !frozen.is_empty() {
+            show_plan(&[], &frozen, &[]);
+        }
         println!("No new packages to install.");
         return Ok(Outcome::NothingFound);
+    }
+    // Let the user deselect before resolving deps (same select-before-resolve
+    // step the other install paths use; skipped under --yes/--dry-run/single).
+    let todo = select_packages(todo, "install", cli.yes, cli.dry_run);
+    if todo.is_empty() {
+        println!("Nothing selected.");
+        return Ok(Outcome::Ok);
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
     // Resolve dependencies up front so any extra packages pulled in are shown
     // before we ask to proceed (dry-run keeps installed versions, no prompts).
     let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
-    print_plan(&plan);
+    show_plan(&plan, &frozen, &[]);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);

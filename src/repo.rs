@@ -289,6 +289,12 @@ pub fn load_repo(repo: &Repo, cache_root: &Path, arch: &str) -> Result<Vec<Avail
 /// did not exist before — rather than a new build or version of a package that
 /// already existed (which only changes the filename and is an upgrade, not a
 /// new package). Names are recovered by parsing each `PACKAGE NAME` filename.
+// NOTE: as of the install-new behaviour change, `install-new` no longer diffs
+// against PACKAGES.TXT.prev — it now offers every official package that is not
+// installed (catching removed packages too), so this helper is currently unused.
+// It is kept on purpose: PACKAGES.TXT/.prev is core to slacker and this name-diff
+// may be wanted again (e.g. a "what did the last update add" report) or elsewhere.
+#[allow(dead_code)]
 pub fn previous_names(
     repo: &Repo,
     cache_root: &Path,

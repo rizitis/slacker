@@ -323,6 +323,13 @@ impl PkgDb {
     /// are not installed. `new_by_repo` maps repo name -> package *names* that
     /// appeared since the previous snapshot (a new build/version of an existing
     /// name is an upgrade, not a new package, so we key on name, not filename).
+    ///
+    /// NOTE: `install-new` no longer uses this — it now offers every official
+    /// package that is not installed (so it also catches removed ones), instead
+    /// of only names added since the last update. Kept on purpose (still covered
+    /// by its unit test) in case the "added since last update" notion is wanted
+    /// again later or elsewhere.
+    #[allow(dead_code)]
     pub fn newly_added<'a>(
         &'a self,
         new_by_repo: &HashMap<String, HashSet<String>>,
