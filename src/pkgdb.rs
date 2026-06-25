@@ -265,13 +265,31 @@ impl PkgDb {
         if let Some(tp) = tag_prios.iter().find(|t| t.tag == tag) {
             return tp.priority;
         }
-        let from_repo = self
+        // Prefer the repo that ships THIS package (same name *and* build tag):
+        // that is where the installed copy actually came from. A build tag is a
+        // vendor marker, but a single package can leak into another repo — e.g.
+        // Slackware's official extra/ ships alienbob's `slackpkg+` (`...alien`),
+        // so the bare tag `alien` is shared by extras (90) and alienbob (10). A
+        // tag-only `.max()` would then treat *every* alien package as 90; keying
+        // on name+tag pins each one to its real source (flatpak -> alienbob 10).
+        let from_pkg = self
+            .all
+            .iter()
+            .filter(|p| p.id.build_tag() == tag && p.id.name == inst.name)
+            .map(|p| self.repo_priority(&p.repo))
+            .max();
+        if let Some(p) = from_pkg {
+            return p;
+        }
+        // The exact package is no longer offered anywhere; fall back to the
+        // highest-priority repo that still ships *something* with this tag.
+        let from_tag = self
             .all
             .iter()
             .filter(|p| p.id.build_tag() == tag)
             .map(|p| self.repo_priority(&p.repo))
             .max();
-        if let Some(p) = from_repo {
+        if let Some(p) = from_tag {
             return p;
         }
         if tag.is_empty() {
@@ -672,6 +690,69 @@ mod upgrade_tests {
         assert!(db.names_provided_by(None).contains("foo"));
         // repo_for_tag maps the alien tag to alienbob (drives the tagged branch).
         assert_eq!(db.repo_for_tag("alien"), Some("alienbob"));
+    }
+
+    // Regression: a vendor build tag shared by two repos. Slackware's official
+    // extra/ ships alienbob's `slackpkg+` (`2alien`) at extras' priority (90),
+    // while alienbob (10) ships its own alien-tagged packages. installed_priority
+    // must pin each installed package to the repo that ships *it*, not take the
+    // max repo priority over the whole `alien` tag.
+    fn shared_tag_db() -> PkgDb {
+        db(
+            vec![
+                avail("flatpak-1.18.0-x86_64-1alien", "alienbob"), // alien @10
+                avail("flatpak-1.18.0-x86_64-2cf", "conraid"),     // cf    @80
+                avail("slackpkg+-1.8.2-noarch-2alien", "extras"),  // alien @90 (official extra/)
+                avail("bash-5.2.37-x86_64-1", "slackware"),        // empty tag, official @100
+            ],
+            &[("slackware", 100), ("extras", 90), ("conraid", 80), ("alienbob", 10)],
+            Some(100),
+        )
+    }
+
+    #[test]
+    fn installed_priority_pins_alien_pkg_to_its_real_repo() {
+        let db = shared_tag_db();
+        // flatpak installed from alienbob -> 10, NOT extras' 90.
+        let flatpak = PkgId::parse("flatpak-1.18.0-x86_64-1alien").unwrap();
+        assert_eq!(db.installed_priority(&flatpak, &[]), 10);
+        // slackpkg+ installed from extras -> 90 (it really lives there).
+        let spp = PkgId::parse("slackpkg+-1.8.2-noarch-2alien").unwrap();
+        assert_eq!(db.installed_priority(&spp, &[]), 90);
+    }
+
+    #[test]
+    fn conraid_80_now_outranks_installed_alienbob_10() {
+        // The point of the fix: alienbob (10) must lose to conraid (80).
+        let db = shared_tag_db();
+        let flatpak = PkgId::parse("flatpak-1.18.0-x86_64-1alien").unwrap();
+        let conraid_cand = avail("flatpak-1.18.0-x86_64-2cf", "conraid");
+        assert!(db.upgrade_respects_priority(&flatpak, &conraid_cand, &[]));
+        assert!(!db.installed_outranks(&flatpak, &conraid_cand, &[]));
+    }
+
+    #[test]
+    fn installed_priority_official_empty_tag_keeps_official() {
+        let db = shared_tag_db();
+        let bash = PkgId::parse("bash-5.2.37-x86_64-1").unwrap();
+        assert_eq!(db.installed_priority(&bash, &[]), 100);
+    }
+
+    #[test]
+    fn installed_priority_falls_back_to_tag_when_pkg_gone() {
+        // No repo ships "gone"; fall back to the highest-priority repo that still
+        // ships *something* with the tag -> alien exists in extras(90)+alienbob(10).
+        let db = shared_tag_db();
+        let removed = PkgId::parse("gone-1.0-x86_64-9alien").unwrap();
+        assert_eq!(db.installed_priority(&removed, &[]), 90);
+    }
+
+    #[test]
+    fn installed_priority_user_tag_wins() {
+        let db = shared_tag_db();
+        let sbo = [tag("SBo", "_SBo", 101)];
+        let p = PkgId::parse("anything-1.0-x86_64-1_SBo").unwrap();
+        assert_eq!(db.installed_priority(&p, &sbo), 101);
     }
 }
 

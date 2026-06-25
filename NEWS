@@ -1,3 +1,18 @@
+Version Beta 0.7.1
+=====
+Update: man pages
+Update: slacker status, complete set of health checks added.(Unix integrity-audit)
+Fix: Search label fix (the "B") when a package is installed, search shows the actual installed source (via build tag), not the priority-winner.
+Update: Search hint (also: repo) the search (a winner/name) now shows that it exists elsewhere.
+Update: Alternatives note (show_plan_alternatives) after plan, before Proceed: shows other repos that give the same name (chosen winner + also...). In install and install-new.
+Update: add [q]uit to protected-deps prompt (KeepChoice::Quit)
+Bug fix: installed_priority (pkgdb.rs from_pkg
+Bug fix: Series detection (pkgdb.rs is_real_series
+Fix: Pin-aware priority fix in collect() (the shared install/download/install-new path)
+Update: Package selection ([y/N/s] / ("Enter numbers") in the auto-computed sets (upgrade-all, install-new, clean-system, remove-template)
+Update: install-new - rewritten
+---
+
 Version Beta.3 0.7.0
 =====
 Major Release Updates.

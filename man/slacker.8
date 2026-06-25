@@ -36,6 +36,11 @@ off globally with
 .B RESOLVE_DEPS=no
 or per run with
 .BR \-\-no\-deps " (see " DEPENDENCIES ")."
+.PP
+For the full guide \(em configuration, the priority model, security and worked
+examples \(em see the project wiki at
+.UR https://forge.slackware.nl/rizitis/slacker/wiki
+.UE .
 .SH OPTIONS
 .TP
 .BI \-\-config\-dir " DIR"
@@ -168,21 +173,26 @@ asks for confirmation when more than ten packages would be downloaded.
 Upgrade every installed package that has a newer revision available.
 .TP
 .B install-new
-Install packages whose name is newly added since the last update \(em a package
-that did not exist before, not merely a new build or version of one that already
-existed (that is an upgrade). By default only the official repo(s); name one or
-more repositories to use those instead.
+Install every package the selected repositories provide that is not already
+installed \(em the \(lqfill what's missing\(rq counterpart to
+.BR "install @" repo .
+By default only the official repo(s); name one or more repositories to use those
+instead.
 .IP
-It does \fInot\fR re\-propose a package you removed or never installed \(em those
-already exist in the tree and are not \(lqnew\(rq; use
-.B slacker install \fINAME\fR
-(or
-.BR "install @" repo )
-for those. Example: after an
+Because it compares against the live set of installed packages, it offers both
+packages newly added to the distribution and packages you had removed \(em
+anything the repo ships that you do not currently have \(em and it stays correct
+across any number of
 .B update
-that introduces a brand\-new \fIlibfoo\fR to the distribution,
-.B install-new
-offers \fIlibfoo\fR, but it never offers \fIemacs\fR just because you removed it.
+runs. A newer build or version of an installed package is an upgrade, not new, so
+it is left to
+.BR upgrade-all .
+.IP
+Like the other install paths it honours source and tag priority (each package is
+taken from its highest\-priority source, and a dependency is never pulled from a
+repository of lower priority than the one already installed) and the
+.B blacklist
+\(em frozen packages are skipped and listed as frozen.
 .TP
 .B clean-system
 List installed packages that are no longer part of the official distribution
@@ -718,6 +728,10 @@ slacker history emacs
 .BR upgradepkg (8),
 .BR removepkg (8),
 .BR pkgtool (8)
+.PP
+Full documentation, guides and examples are maintained in the project wiki:
+.UR https://forge.slackware.nl/rizitis/slacker/wiki
+.UE
 .SH AUTHORS
 Ioannis Anagnostakis (rizitis)
 .SH LICENSE

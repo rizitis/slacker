@@ -81,10 +81,13 @@ enum Cmd {
     /// List configured repositories with priority, verify policy and how many
     /// installed packages came from each.
     ListRepos,
-    /// Health-check the whole setup: mirror, repos, priorities, verification,
-    /// GPG keys, metadata freshness, blacklist, installed-package sources, and
-    /// (if online) reachability and pending updates. Reports whether slacker is
-    /// correctly set up and what to do next.
+    /// Health-check the whole setup and report what to do next — the setup doctor.
+    ///
+    /// Runs even when the configuration is broken, since diagnosing that is its
+    /// job. Checks the environment (pkgtools and helper tools on PATH, config-file
+    /// syntax), then mirror, repos, priorities, verification, GPG keys, metadata
+    /// freshness, blacklist, the package admin dir, installed-package sources,
+    /// pending `.new` configs, and (if online) reachability and updates.
     Status,
     /// Install new packages (refuses already-installed ones).
     Install { patterns: Vec<String> },
@@ -104,9 +107,12 @@ enum Cmd {
     },
     /// Upgrade every installed package that has a newer revision.
     UpgradeAll,
-    /// Install packages whose name is newly added to a repo since the last
-    /// update (new to the distribution) — NOT packages you removed or never
-    /// installed (use `install NAME` for those). Default: official repo(s) only;
+    /// Install every package the selected repos provide that isn't already
+    /// installed — the "fill what's missing" counterpart to `install @repo`:
+    /// catches packages new to the distribution and ones you removed, correct
+    /// across any number of updates. Honours source/tag priority and the blacklist
+    /// (frozen packages are skipped); a newer build/version of an installed package
+    /// is an upgrade (use `upgrade-all`), not new. Default: official repo(s) only;
     /// name repos to use those instead.
     InstallNew { repos: Vec<String> },
     /// Remove installed packages no longer in the official baseline — the
@@ -206,6 +212,12 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<Outcome, String> {
+    // `status` must work even when the configuration is broken — diagnosing
+    // exactly that is its job — so it loads resiliently on its own and is
+    // dispatched before the strict load below (which aborts on those problems).
+    if matches!(cli.command, Cmd::Status) {
+        return cmd_status(&cli.config_dir);
+    }
     let cfg = Config::load_dir(&cli.config_dir)?;
     let privileged = requires_privilege(&cli.command);
     if privileged {
@@ -227,7 +239,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::FileSearch { filename } => cmd_file_search(&cfg, filename),
         Cmd::Info { name } => cmd_info(&cfg, name),
         Cmd::ListRepos => cmd_list_repos(&cfg),
-        Cmd::Status => cmd_status(&cfg),
+        Cmd::Status => unreachable!("status is dispatched before config load"),
         Cmd::Install { patterns } => cmd_install(cli, &cfg, patterns),
         Cmd::Upgrade { patterns } => cmd_upgrade(cli, &cfg, patterns),
         Cmd::Reinstall { patterns } => cmd_reinstall(cli, &cfg, patterns),
@@ -867,6 +879,63 @@ fn show_plan(plan: &[PlanItem], frozen: &[String], protected: &[String]) {
         for n in protected {
             println!("    {}", ui::white(n));
         }
+    }
+}
+
+/// Read-only: for packages in the plan whose *name* is also offered by other
+/// repos, list those alternatives. The plan already holds the priority/pin
+/// winner that `collect` chose; this only surfaces what was NOT applied so the
+/// user can answer "n" at the prompt and pin / switch a repo if they would
+/// rather have a different build. It never reads or changes the plan's choice.
+/// Returns, per package: (name, chosen-source, [other-sources]).
+fn plan_alternatives(db: &PkgDb, plan: &[PlanItem]) -> Vec<(String, String, Vec<String>)> {
+    let src = |a: &repo::AvailPkg| {
+        format!(
+            "{} {}-{}-{} ({})",
+            a.repo,
+            a.id.version,
+            a.id.arch,
+            a.id.build,
+            db.repo_priority(&a.repo),
+        )
+    };
+    let mut out = Vec::new();
+    for item in plan {
+        let cands = db.candidates(&item.pkg.id.name);
+        if cands.len() < 2 {
+            continue; // only one repo offers this name — nothing to surface
+        }
+        let others: Vec<String> =
+            cands.iter().filter(|c| c.repo != item.pkg.repo).map(|c| src(c)).collect();
+        if !others.is_empty() {
+            out.push((item.pkg.id.name.clone(), src(&item.pkg), others));
+        }
+    }
+    out
+}
+
+/// Styled informational note, shown after the plan and before the prompt, so a
+/// cross-repo collision is visible before the user commits. Empty -> prints
+/// nothing.
+fn show_plan_alternatives(db: &PkgDb, plan: &[PlanItem]) {
+    let alts = plan_alternatives(db, plan);
+    if alts.is_empty() {
+        return;
+    }
+    println!(
+        "\n{}",
+        ui::blue("Also offered by other repos (kept the priority winner — answer 'n' to pin a different one):")
+    );
+    let wname = alts.iter().map(|(n, _, _)| n.len()).max().unwrap_or(0);
+    for (name, chosen, others) in &alts {
+        println!(
+            "  {}  {} {}   {} {}",
+            ui::cyan(&format!("{name:<wname$}")),
+            ui::dim("chosen"),
+            ui::green(chosen),
+            ui::dim("also"),
+            ui::yellow(&others.join(", ")),
+        );
     }
 }
 
@@ -1950,6 +2019,28 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     Ok(Outcome::Ok)
 }
 
+/// Pick the candidate a `search` hit should display. `search` returns the
+/// priority winner per name, but when the package is INSTALLED we want the
+/// candidate matching the installed source (same build tag), so the `[repo]`
+/// label and version name where it actually came from — not merely the
+/// highest-priority repo. Falls back to the winner when nothing is installed,
+/// or when the installed source is no longer offered (e.g. a local/`_SBo` build
+/// with no matching candidate).
+fn search_display<'a>(
+    winner: &'a repo::AvailPkg,
+    installed: Option<&pkg::PkgId>,
+    candidates: &[&'a repo::AvailPkg],
+) -> &'a repo::AvailPkg {
+    match installed {
+        Some(i) => candidates
+            .iter()
+            .copied()
+            .find(|c| c.id.build_tag() == i.build_tag())
+            .unwrap_or(winner),
+        None => winner,
+    }
+}
+
 fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
@@ -1959,7 +2050,17 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
         return Ok(Outcome::NothingFound);
     }
     for p in results {
-        let mark = if system::is_installed(&installed, &p.id.name) {
+        // `p` is the priority-winner candidate that `search` returns. If this
+        // package is installed, show the candidate matching the INSTALLED source
+        // instead, so the [repo] label and version name where it actually came
+        // from rather than merely the highest-priority repo. The blacklist test
+        // stays on the winner `p`, so the frozen/blacklisted marking is
+        // unchanged.
+        let inst = system::installed_by_name(&installed, &p.id.name);
+        let cands = db.candidates(&p.id.name);
+        let shown = search_display(p, inst, &cands);
+
+        let mark = if inst.is_some() {
             ui::green(&format!("{:<11}", "installed"))
         } else {
             ui::red(&format!("{:<11}", "uninstalled"))
@@ -1969,14 +2070,29 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
         } else {
             String::new()
         };
+        // Surface the other repos that ship this name (search shows one winner
+        // per name); `info <name>` gives the full per-repo candidate list.
+        let mut others: Vec<&str> = Vec::new();
+        for c in &cands {
+            let r = c.repo.as_str();
+            if r != shown.repo && !others.contains(&r) {
+                others.push(r);
+            }
+        }
+        let also = if others.is_empty() {
+            String::new()
+        } else {
+            ui::dim(&format!("  (also: {})", others.join(", ")))
+        };
         println!(
-            "{} {} {}{}  {}{}",
-            ui::cyan(&format!("[{}]", p.repo)),
+            "{} {} {}{}  {}{}{}",
+            ui::cyan(&format!("[{}]", shown.repo)),
             mark,
-            ui::white(&p.id.name),
-            ui::dim(&format!("-{}", p.id.version)),
-            p.summary,
-            bl
+            ui::white(&shown.id.name),
+            ui::dim(&format!("-{}", shown.id.version)),
+            shown.summary,
+            bl,
+            also
         );
     }
     Ok(Outcome::Ok)
@@ -2352,7 +2468,119 @@ fn ago(t: std::time::SystemTime) -> String {
 /// real, verifiable fact (config is already structurally validated at load, so
 /// here we check initialisation and reachability) and ends with a truthful
 /// verdict plus concrete next steps. Read-only; safe to run any time.
-fn cmd_status(cfg: &Config) -> Result<Outcome, String> {
+/// True if an executable `name` is found in any of `dirs`. Split out from
+/// [`tool_on_path`] so it can be unit-tested without touching the real `$PATH`.
+fn tool_in_dirs(name: &str, dirs: &[PathBuf]) -> bool {
+    dirs.iter().any(|dir| {
+        let p = dir.join(name);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(&p)
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        }
+        #[cfg(not(unix))]
+        {
+            p.is_file()
+        }
+    })
+}
+
+/// True if `name` resolves to an executable on the current `$PATH` — i.e. a
+/// `Command::new(name)` would find it. Used by `status` to flag a missing
+/// external tool (pkgtools, gpg, bzip2, ...) up front, before its absence
+/// surfaces as a confusing failure in the middle of an operation.
+fn tool_on_path(name: &str) -> bool {
+    match std::env::var_os("PATH") {
+        Some(path) => tool_in_dirs(name, &std::env::split_paths(&path).collect::<Vec<_>>()),
+        None => false,
+    }
+}
+
+/// `status`, the setup doctor. It deliberately does its OWN, resilient loading
+/// (it is dispatched in `run` BEFORE the strict `Config::load_dir`): a broken
+/// configuration is the very thing it must diagnose, so it first checks the
+/// environment and validates the config files, and only then — if they are
+/// sound — runs the full health report against a loaded `Config`.
+fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
+    let ok = ui::green("\u{2713}"); // ✓
+    let bad = ui::red("\u{2717}"); // ✗
+    let warn = ui::yellow("!");
+    let srow = |mark: &str, label: &str, detail: &str| {
+        println!("  {} {} {}", mark, ui::white(&format!("{:<10}", label)), detail);
+    };
+
+    println!("{}", ui::blue("Environment"));
+
+    // The config directory must exist before anything else can be read.
+    if !config_dir.exists() {
+        srow(&bad, "Config dir", &ui::red(&format!("{} does not exist", config_dir.display())));
+        println!(
+            "\n{}",
+            ui::yellow("! create it with a `repos` file (see `man slacker`), then re-run `slacker status`.")
+        );
+        return Err("configuration directory is missing".into());
+    }
+
+    // External tools slacker shells out to. The pkgtools are essential — without
+    // them install/upgrade/remove cannot run at all; the rest each degrade one
+    // feature when absent. Looked up on $PATH, not executed.
+    let missing_pt: Vec<&str> =
+        ["installpkg", "upgradepkg", "removepkg"].into_iter().filter(|&t| !tool_on_path(t)).collect();
+    if missing_pt.is_empty() {
+        srow(&ok, "Pkgtools", &ui::dim("installpkg, upgradepkg, removepkg present"));
+    } else {
+        srow(
+            &bad,
+            "Pkgtools",
+            &ui::red(&format!(
+                "MISSING: {} — install/upgrade/remove cannot run",
+                missing_pt.join(", ")
+            )),
+        );
+    }
+    let missing_aux: Vec<String> = [
+        ("gpg", "signature verification"),
+        ("bzip2", "file-search (MANIFEST)"),
+        ("sha256sum", "sha256 checks"),
+        ("diff", "new-config diffs"),
+    ]
+    .into_iter()
+    .filter(|&(t, _)| !tool_on_path(t))
+    .map(|(t, why)| format!("{t} ({why})"))
+    .collect();
+    if missing_aux.is_empty() {
+        srow(&ok, "Tools", &ui::dim("gpg, bzip2, sha256sum, diff present"));
+    } else {
+        srow(&warn, "Tools", &ui::yellow(&format!("missing: {}", missing_aux.join(", "))));
+    }
+
+    // Config syntax + cross-checks, via the SAME validator the `add-repo`/`add-tag`
+    // editors use. This catches a line that does not start with a priority number,
+    // duplicate priorities, a second `official`, a bad `verify=`, a `mirror` line
+    // with no active mirror, duplicate names/tags, and an empty repo set — the
+    // problems that otherwise abort every other command before it can start.
+    let repos_text = std::fs::read_to_string(config_dir.join("repos")).unwrap_or_default();
+    match config::validate_repos_text(config_dir, &repos_text) {
+        Ok(()) => srow(&ok, "Config", &ui::dim("repos and mirrors parse and cross-check cleanly")),
+        Err(e) => {
+            srow(&bad, "Config", &ui::red(&e));
+            println!(
+                "\n{}",
+                ui::yellow("! fix the `repos`/`mirrors` problem above, then re-run `slacker status`.")
+            );
+            return Err("configuration is invalid".into());
+        }
+    }
+
+    // Everything needed to load is present and valid — run the full report.
+    let cfg = Config::load_dir(config_dir)?;
+    println!();
+    status_full(&cfg)
+}
+
+fn status_full(cfg: &Config) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let (db, missing_meta) = PkgDb::load_available(cfg);
     let repos = cfg.repos_by_priority();
@@ -2551,12 +2779,54 @@ fn cmd_status(cfg: &Config) -> Result<Outcome, String> {
         srow(&ok, "Metadata", &ui::dim(&format!("cached for all repos (oldest {age} old)")));
     }
 
-    // Blacklist
+    // Blacklist — show valid rules, and surface any the parser had to skip so a
+    // typo'd rule is visible instead of silently vanishing. The comment/blank
+    // handling mirrors config's own parse_lines, so the count matches the loader.
     let n_bl = cfg.blacklist.len();
-    srow(if n_bl == 0 { &info } else { &ok }, "Blacklist", &ui::dim(&format!("{n_bl} rule(s)")));
+    let bl_invalid = std::fs::read_to_string(cfg.config_dir.join("blacklist"))
+        .map(|t| {
+            t.lines()
+                .map(|l| match l.find('#') {
+                    Some(i) => l[..i].trim(),
+                    None => l.trim(),
+                })
+                .filter(|l| !l.is_empty())
+                .filter(|l| config::parse_blacklist_rule(l).is_err())
+                .count()
+        })
+        .unwrap_or(0);
+    if bl_invalid == 0 {
+        srow(if n_bl == 0 { &info } else { &ok }, "Blacklist", &ui::dim(&format!("{n_bl} rule(s)")));
+    } else {
+        srow(
+            &warn,
+            "Blacklist",
+            &ui::yellow(&format!("{n_bl} valid, {bl_invalid} invalid — check syntax in `blacklist`")),
+        );
+    }
+
+    // Leftover `*.new` config files from past upgrades, waiting to be reconciled.
+    let pending_new = newconfig::find_new_configs(&newconfig::default_roots()).len();
+    if pending_new > 0 {
+        srow(
+            &warn,
+            "Configs",
+            &ui::yellow(&format!("{pending_new} pending .new file(s) — run `slacker new-config`")),
+        );
+    }
 
     // ---------- Installed ----------
     println!("\n{}", ui::blue("Installed"));
+    if !cfg.pkg_db_dir.exists() {
+        srow(
+            &bad,
+            "Admin dir",
+            &ui::red(&format!(
+                "{} does not exist — slacker sees no installed packages",
+                cfg.pkg_db_dir.display()
+            )),
+        );
+    }
     let (per_repo, per_rule, per_other) = installed_attribution(cfg, Some(&db), &installed);
     srow(&ok, "Packages", &ui::white(&installed.len().to_string()));
     let mut parts: Vec<String> = repos
@@ -2733,6 +3003,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     // `already` is shown via the same blue "kept" line as priority skips — both
     // mean "installed, leaving it alone".
     show_plan(&plan, &frozen, &already);
+    show_plan_alternatives(&db, &plan);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -3132,6 +3403,7 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     // before we ask to proceed (dry-run keeps installed versions, no prompts).
     let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
     show_plan(&plan, &frozen, &[]);
+    show_plan_alternatives(&db, &plan);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -4752,6 +5024,61 @@ mod collect_tests {
     }
 
     #[test]
+    fn search_display_prefers_installed_source_over_priority_winner() {
+        // conraid (the priority winner) and alienbob both ship flatpak.
+        let conraid = av("flatpak-1.18.0-x86_64-2cf", "conraid");
+        let alien = av("flatpak-1.18.0-x86_64-1alien", "alienbob");
+        let cands = [&conraid, &alien]; // candidates(): winner first
+
+        // installed from alienbob (1alien) -> show alienbob, NOT the winner.
+        let inst_alien = pkg::PkgId::parse("flatpak-1.18.0-x86_64-1alien").unwrap();
+        assert_eq!(search_display(&conraid, Some(&inst_alien), &cands).repo.as_str(), "alienbob");
+
+        // installed from conraid (2cf) -> show conraid.
+        let inst_cf = pkg::PkgId::parse("flatpak-1.18.0-x86_64-2cf").unwrap();
+        assert_eq!(search_display(&conraid, Some(&inst_cf), &cands).repo.as_str(), "conraid");
+
+        // not installed -> the priority winner.
+        assert_eq!(search_display(&conraid, None, &cands).repo.as_str(), "conraid");
+
+        // installed from a source with no matching candidate (local/_SBo) ->
+        // fall back to the winner.
+        let inst_sbo = pkg::PkgId::parse("flatpak-1.18.0-x86_64-1_SBo").unwrap();
+        assert_eq!(search_display(&conraid, Some(&inst_sbo), &cands).repo.as_str(), "conraid");
+    }
+
+    #[test]
+    fn tool_in_dirs_detects_executables() {
+        let dir = std::env::temp_dir().join("slacker_tool_in_dirs_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let exe = dir.join("faketool");
+        std::fs::write(&exe, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let dirs = vec![dir.clone()];
+        assert!(tool_in_dirs("faketool", &dirs)); // present and executable
+        assert!(!tool_in_dirs("absent", &dirs)); // not there at all
+
+        // On unix a present-but-non-executable file must NOT count as a tool.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let plain = dir.join("plain");
+            std::fs::write(&plain, b"x").unwrap();
+            std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(!tool_in_dirs("plain", &dirs));
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn prefers_precedence_is_pin_then_priority_then_first() {
         // 1) a pin beats a non-pin, regardless of priority either way
         assert!(collect_prefers(true, 10, false, 100)); // low-prio pin beats high-prio non-pin
@@ -4826,5 +5153,37 @@ mod collect_tests {
         assert!(got.is_empty());
         assert!(miss.contains(&"nonexistent".to_string()));
         assert!(miss.contains(&"zzz:vlc".to_string()));
+    }
+
+    // #5: read-only alternatives note. The plan's choice is untouched; we only
+    // surface that another repo also offers the same name.
+    #[test]
+    fn alternatives_surface_other_repo_for_collided_name() {
+        let db = fixture();
+        let plan = vec![PlanItem {
+            pkg: av("vlc-3.0.20-x86_64-1", "slackware"),
+            action: InstallAction::Install,
+            dep_for: None,
+            from: None,
+        }];
+        let alts = plan_alternatives(&db, &plan);
+        assert_eq!(alts.len(), 1);
+        let (name, chosen, others) = &alts[0];
+        assert_eq!(name, "vlc");
+        assert!(chosen.contains("slackware"));
+        assert_eq!(others.len(), 1);
+        assert!(others[0].contains("alienbob"));
+    }
+
+    #[test]
+    fn no_alternatives_when_single_repo_offers_name() {
+        let db = fixture();
+        let plan = vec![PlanItem {
+            pkg: av("aaa-1.0-x86_64-1", "slackware"),
+            action: InstallAction::Install,
+            dep_for: None,
+            from: None,
+        }];
+        assert!(plan_alternatives(&db, &plan).is_empty());
     }
 }
