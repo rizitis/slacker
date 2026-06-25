@@ -102,6 +102,35 @@ MANIFEST is downloaded on first use and can be large.
 .BI info " PACKAGE"
 Show the installed version and the available candidates per repository
 (highest priority first), with sizes and description.
+.TP
+.B history \fR[\fINAME\fR]
+Print a chronological log of package changes \(em installed, upgraded,
+reinstalled and removed, newest first \(em each with its local date and the
+source repository or build tag
+.B slacker
+attributes it to. The log is reconstructed from the pkgtools administrative
+directories under
+.B ADM_DIR
+.RI ( packages/ " and " removed_packages/ ),
+so it reflects every change on the system, including those made by other tools
+.RB ( slackpkg ", " sbopkg ", " installpkg / upgradepkg / removepkg ),
+not just
+.BR slacker .
+An upgrade reads as \fIold \(-> new\fR; when the successor's record was lost to a
+.I removed_packages
+name collision the new version is inferred from that package's next known entry.
+Name a single package (exact name) to limit the log to it. Options:
+.B \-\-installed
+(only packages currently installed, with their install date),
+.B \-\-removed
+(only packages that left the system, removed or upgraded away),
+.B \-\-upgraded
+(only upgrade and reinstall events),
+.BI \-\-last " N"
+(only the most recent N events), and
+.BI \-\-since " YYYY-MM-DD"
+(only events on or after that date). Output is paged when standard output is a
+terminal.
 .SS Installing and removing
 .TP
 .BI install " PATTERN..."
@@ -298,7 +327,7 @@ Manually quarantine (freeze) a repo so it provides no packages until you
 it again.
 .SH PRIVILEGES
 Read-only commands
-.RB ( search ", " info ", " file-search ", " check-updates ", " show-changelog )
+.RB ( search ", " info ", " file-search ", " check-updates ", " show-changelog ", " history )
 run as any user. Commands that change the system, the cache, or the
 configuration (everything else) must be run as root; non-root invocations stop
 with a clear message before doing anything.
@@ -356,10 +385,19 @@ package and need only be set to force a specific architecture.
 (default
 .IR /var/cache/slacker )
 holds downloaded metadata and packages.
+.B ADM_DIR
+(default
+.IR /var/adm )
+is the Slackware pkgtools administrative root \(em the directory holding
+.IR packages/ ", " removed_packages/ ", " scripts/ " and " setup/ ;
+the
+.B history
+command reads it.
 .B PKG_DB_DIR
 (default
-.IR /var/lib/pkgtools/packages )
-is the installed\-package database.
+.IR ADM_DIR/packages )
+is the installed\-package database; set it explicitly only to override that
+derived location.
 .B VERIFY
 (default
 .IR all )
@@ -433,10 +471,17 @@ errors out if two are active. Supports
 .I /etc/slacker/repos
 Repository priorities, names and external repositories, one per line as
 .IR "priority name url" " [" official "] [" immutable "] [" subtree "] [" verify= ...].
-Higher priority wins. The official line's URL is the keyword
+Higher priority wins. The URL field may be a literal URL, the keyword
 .B mirror
-which is filled in from the active line in
-.IR mirrors .
+(filled in from the active line in
+.IR mirrors ,
+used for the official repo), or
+.BI mirror/ subpath
+\(em the active mirror with a subpath appended (e.g.\&
+.IR mirror/extra ", " mirror/testing ", " mirror/patches )
+so a distribution subtree follows whichever mirror is active without the host
+being hardcoded; combine it with
+.BR subtree .
 .B immutable
 keeps every package attributed to the repo out of
 .BR clean-system .
@@ -656,6 +701,15 @@ slacker update
 slacker install-new
 slacker upgrade-all
 slacker clean-system
+.fi
+.RE
+.PP
+See what changed recently, or for one package:
+.PP
+.RS
+.nf
+slacker history --last 20
+slacker history emacs
 .fi
 .RE
 .SH SEE ALSO

@@ -23,9 +23,23 @@ A Slackware package manager in Rust with full **slackpkg action parity**, plus
   system tools Slackware already ships, so no extra Rust deps.
 - Everything a user edits is plain text.
 
-## Build
+## Install
 
-Needs current Slackware's Rust (1.96+):
+On Slackware you install the **binary package** (built from the SlackBuild). The
+package puts everything in place for you — the `slacker` binary, the man page,
+and the config files under `/etc/slacker/`. You do **not** copy any files. After
+installing, the only edits needed are:
+
+1. uncomment exactly one mirror in `/etc/slacker/mirrors`, and
+2. set your repo priorities (and any external repos) in `/etc/slacker/repos`.
+
+Then `slacker update gpg` once, `slacker update`, and you are ready.
+
+## Build (from source — for developers)
+
+Building needs Rust **1.85.1+** (the effective MSRV; current Slackware ships
+1.96). The crate is edition 2021, but a dependency — `clap_lex`, edition 2024 —
+sets that 1.85.1 floor.
 
     cargo build --release
     install -m0755 target/release/slacker /usr/sbin/slacker
@@ -35,13 +49,16 @@ See `slacker.8` (`man slacker`) for the full manual.
 
 ## Configuration  (/etc/slacker/)
 
-    slacker.conf   KEY=value globals (ARCH, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY)
+    slacker.conf   KEY=value globals (ARCH, ADM_DIR, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY)
     mirrors        catalogue of official mirrors - uncomment exactly ONE
     repos          repo priorities/names + external repos
     blacklist      blacklist rules: [@repo] REGEX | [@repo] series/
     templates/     generated/created templates
 
-PKG_DB_DIR defaults to `/var/lib/pkgtools/packages`.
+`ADM_DIR` (default `/var/adm`) is the Slackware pkgtools admin root, where the
+installed-package database and the removed-package records live; `history` reads
+it. `PKG_DB_DIR` defaults to `ADM_DIR/packages` — set it explicitly only to
+override that.
 
 ### mirrors
 
@@ -55,13 +72,21 @@ is uncommented.
 
     # priority  name        url                                              [flags]
     100         slackware   mirror                                           official
-    90          extras      https://slackware.uk/.../slackware64-current/extra   subtree immutable
+    90          extras      mirror/extra                                     subtree immutable
     80          ktown       https://slackware.nl/people/alien/ktown/current/x86_64
     60          alienbob    https://slackware.nl/people/alien/sbrepos/current/x86_64
 
-Higher priority wins. Pin a repo with `name:package`. The official line's URL
-is the keyword **`mirror`**, filled in from the active line in `mirrors` - URL
-lives in `mirrors`, priority/placement live here. Flags (any order):
+Higher priority wins. Pin a repo with `name:package`. The URL field accepts a
+literal URL, or one of two keywords filled in from the active line in `mirrors`:
+
+- **`mirror`** — the mirror URL as-is (use it for the official repo); URL lives
+  in `mirrors`, priority/placement live here.
+- **`mirror/<subpath>`** — the active mirror with a subpath appended, e.g.
+  **`mirror/extra`**, `mirror/testing`, `mirror/patches`. This tracks a
+  distribution subtree on whichever mirror you picked, without hardcoding the
+  host: change the mirror and these follow. Combine with the `subtree` flag.
+
+Flags (any order):
 
 - **`official`** - marks the tracked repo (ChangeLog, install-new default);
   placement is still by priority only.
@@ -93,6 +118,7 @@ automatically.
     slacker update [gpg]          refresh metadata; `update gpg` imports repo keys
     slacker check-updates         per-repo update check; exit 100 if any pending
     slacker show-changelog [REPO] print a ChangeLog (official by default, or a named repo)
+    slacker history [NAME]        chronological log of package changes (install/upgrade/remove), newest first
     slacker status                health-check the whole setup; says what to fix next
     slacker list-repos            list repos: priority, verify, flags, installed counts
     slacker search PACKAGE        find a package by its exact name (case-insensitive)
@@ -222,6 +248,16 @@ re-check. `list-repos` and `status` show the state.
 - ChangeLog is fetched (on `update`) only for the official repo, and powers
   `show-changelog`. `check-updates` covers every repo: official via ChangeLog,
   external repos by comparing CHECKSUMS.md5 to the cached copy.
+- `history [NAME]` prints a newest-first log of every package change on the box —
+  installed, upgraded, reinstalled, removed — with the local date and the source
+  repo/tag. It is reconstructed from the pkgtools admin directories under
+  `ADM_DIR` (`packages/` + `removed_packages/`), so it also reflects changes made
+  by other tools (slackpkg, sbopkg, installpkg/upgradepkg/removepkg), not just
+  slacker. Filter with `--installed`, `--removed`, `--upgraded`, `--last N`, or
+  `--since YYYY-MM-DD`; name a package to limit the log to it. (Because plain
+  `removepkg` records collide on the package id in `removed_packages`, an upgrade
+  whose target record was overwritten shows the version inferred from that
+  package's next known entry rather than a literal `?`.)
 
 ---
 

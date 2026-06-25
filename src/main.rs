@@ -5,6 +5,7 @@ mod changelog;
 mod config;
 mod download;
 mod gpg;
+mod history;
 mod manifest;
 mod newconfig;
 mod pkg;
@@ -120,6 +121,28 @@ enum Cmd {
     /// Print a repo's cached ChangeLog. With no argument, the official (tracked)
     /// repo; name a repo to fetch and show that one instead.
     ShowChangelog { repo: Option<String> },
+    /// Show a chronological log of package changes — installed, upgraded and
+    /// removed, and when — newest first. Derived from the pkgtools admin
+    /// directories, so it also reflects changes made outside slacker.
+    History {
+        /// Limit to a single package name.
+        name: Option<String>,
+        /// Show only the most recent N events.
+        #[arg(long)]
+        last: Option<usize>,
+        /// Show only events on or after this date (YYYY-MM-DD).
+        #[arg(long)]
+        since: Option<String>,
+        /// Show only packages currently installed (with their install date).
+        #[arg(long)]
+        installed: bool,
+        /// Show only packages that left the system (removed or upgraded away).
+        #[arg(long)]
+        removed: bool,
+        /// Show only upgrade / reinstall events.
+        #[arg(long)]
+        upgraded: bool,
+    },
     /// Snapshot installed packages into a template.
     GenerateTemplate { name: String },
     /// Install all packages listed in a template.
@@ -213,6 +236,9 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::NewConfig => cmd_new_config(cli),
         Cmd::CheckUpdates => cmd_check_updates(&cfg),
         Cmd::ShowChangelog { repo } => cmd_show_changelog(&cfg, repo.as_deref()),
+        Cmd::History { name, last, since, installed, removed, upgraded } => {
+            cmd_history(&cfg, name.as_deref(), *last, since.as_deref(), *installed, *removed, *upgraded)
+        }
         Cmd::GenerateTemplate { name } => cmd_generate_template(&cfg, name),
         Cmd::InstallTemplate { name } => cmd_install_template(cli, &cfg, name),
         Cmd::RemoveTemplate { name } => cmd_remove_template(cli, &cfg, name),
@@ -292,7 +318,8 @@ fn requires_privilege(cmd: &Cmd) -> bool {
         | Cmd::Status
         | Cmd::FileSearch { .. }
         | Cmd::CheckUpdates
-        | Cmd::ShowChangelog { .. } => false,
+        | Cmd::ShowChangelog { .. }
+        | Cmd::History { .. } => false,
         // everything else writes to a root-owned location
         _ => true,
     }
@@ -358,6 +385,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::NewConfig => "new-config",
         Cmd::CheckUpdates => "check-updates",
         Cmd::ShowChangelog { .. } => "show-changelog",
+        Cmd::History { .. } => "history",
         Cmd::GenerateTemplate { .. } => "generate-template",
         Cmd::InstallTemplate { .. } => "install-template",
         Cmd::RemoveTemplate { .. } => "remove-template",
@@ -3642,28 +3670,176 @@ fn cmd_show_changelog(cfg: &Config, repo_name: Option<&str>) -> Result<Outcome, 
     Ok(Outcome::Ok)
 }
 
+/// Source label for a single package id, mirroring installed-attribution
+/// precedence: official (empty tag) -> repo that serves the tag -> declared
+/// tag-rule name -> the raw tag itself.
+fn source_of(cfg: &Config, db: &PkgDb, pkg: &pkg::PkgId) -> String {
+    let tag = pkg.build_tag();
+    if tag.is_empty() {
+        return cfg.official_repo_name().unwrap_or("official").to_string();
+    }
+    if let Some(r) = db.repo_for_tag(tag) {
+        return r.to_string();
+    }
+    if let Some(tp) = cfg.tag_priorities.iter().find(|tp| tp.tag == tag) {
+        return tp.name.clone();
+    }
+    tag.to_string()
+}
+
+fn cmd_history(
+    cfg: &Config,
+    name: Option<&str>,
+    last: Option<usize>,
+    since: Option<&str>,
+    installed_only: bool,
+    removed_only: bool,
+    upgraded_only: bool,
+) -> Result<Outcome, String> {
+    let tl = history::collect(&cfg.adm_dir);
+    let clock = &tl.clock;
+
+    // --installed is a current-state view read straight from packages/, so it is
+    // always complete regardless of how each package last changed (a package
+    // whose last action was an upgrade is still listed here).
+    let mut events: Vec<history::Event> = if installed_only {
+        tl.current
+            .iter()
+            .map(|(pkg, when)| history::Event {
+                when: *when,
+                pkg: pkg.clone(),
+                kind: history::EventKind::Installed { reinstall: false },
+            })
+            .collect()
+    } else {
+        tl.events
+    };
+
+    if let Some(n) = name {
+        events.retain(|e| e.pkg.name == n);
+    }
+    if removed_only {
+        events.retain(|e| {
+            matches!(e.kind, history::EventKind::Removed | history::EventKind::Upgraded { .. })
+        });
+    }
+    if upgraded_only {
+        events.retain(|e| matches!(e.kind, history::EventKind::Upgraded { .. }));
+    }
+    if let Some(s) = since {
+        events.retain(|e| clock.local_date(e.when).as_str() >= s);
+    }
+    events.sort_by(|a, b| b.when.cmp(&a.when)); // newest first
+    if let Some(n) = last {
+        events.truncate(n);
+    }
+    if events.is_empty() {
+        println!("No matching package history.");
+        return Ok(Outcome::NothingFound);
+    }
+
+    // Available-package DB resolves which repo serves a build tag (best-effort:
+    // if metadata is missing the source falls back to the tag-rule name or tag).
+    let (db, _missing) = PkgDb::load_available(cfg);
+    page_output(&render_history(&events, clock, cfg, &db));
+    Ok(Outcome::Ok)
+}
+
+fn render_history(
+    events: &[history::Event],
+    clock: &history::LocalClock,
+    cfg: &Config,
+    db: &PkgDb,
+) -> String {
+    use history::EventKind;
+    let wn = events.iter().map(|e| e.pkg.name.len()).max().unwrap_or(7).max(7);
+    let mut out = String::new();
+    for e in events {
+        let date = ui::dim(&clock.format(e.when));
+        let (sym, label, detail) = match &e.kind {
+            EventKind::Installed { reinstall } => {
+                let mut d = format!("{}-{}", e.pkg.version, e.pkg.build);
+                if *reinstall {
+                    d.push_str(&ui::yellow(" (reinstall)"));
+                }
+                (ui::green("+"), "installed", d)
+            }
+            EventKind::Removed => {
+                (ui::red("\u{2212}"), "removed", format!("{}-{}", e.pkg.version, e.pkg.build))
+            }
+            EventKind::Upgraded { to } => match to {
+                // upgradepkg over the same id is a rebuild / reinstall in place,
+                // not a version change — show it as such, not "X -> X".
+                Some(p) if p.tag() == e.pkg.tag() => (
+                    ui::cyan("\u{21BB}"),
+                    "reinstalled",
+                    format!("{}-{}", e.pkg.version, e.pkg.build),
+                ),
+                Some(p) => (
+                    ui::cyan("\u{2191}"),
+                    "upgraded",
+                    format!(
+                        "{}-{} {} {}-{}",
+                        e.pkg.version, e.pkg.build, ui::dim("\u{2192}"), p.version, p.build
+                    ),
+                ),
+                None => (
+                    ui::cyan("\u{2191}"),
+                    "upgraded",
+                    format!("{}-{} {} ?", e.pkg.version, e.pkg.build, ui::dim("\u{2192}")),
+                ),
+            },
+        };
+        out.push_str(&format!(
+            "{date}  {sym} {label:<11}  {name}  {detail}  {src}\n",
+            name = ui::white(&format!("{:<wn$}", e.pkg.name)),
+            src = ui::dim(&format!("[{}]", source_of(cfg, db, &e.pkg))),
+        ));
+    }
+    out
+}
+
 /// Print text through a pager when stdout is a terminal, so long output (the
-/// ChangeLog) opens at the top — newest first — and is scrollable/quittable
-/// like slackpkg. Falls back to a plain print when not a TTY (piped/redirected)
+/// ChangeLog, history) opens at the top — newest first — and is scrollable and
+/// quittable like slackpkg. Output that fits one screen is printed inline and
+/// the pager exits immediately (`-F`); the alternate screen is not used so short
+/// output stays visible and the terminal is left clean (`-X`); colours pass
+/// through (`-R`). Falls back to a plain print when not a TTY (piped/redirected)
 /// or when no pager is available.
 fn page_output(text: &str) {
     use std::io::IsTerminal;
     if std::io::stdout().is_terminal() {
-        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
+        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -FRX".to_string());
         let mut parts = pager.split_whitespace();
         if let Some(cmd) = parts.next() {
             let args: Vec<&str> = parts.collect();
-            let spawned = std::process::Command::new(cmd)
-                .args(&args)
-                .stdin(std::process::Stdio::piped())
-                .spawn();
-            if let Ok(mut child) = spawned {
-                if let Some(stdin) = child.stdin.take() {
-                    let mut stdin = stdin;
-                    let _ = stdin.write_all(text.as_bytes());
-                    // drop stdin to signal EOF before waiting
+            let mut command = std::process::Command::new(cmd);
+            command.args(&args).stdin(std::process::Stdio::piped());
+            // Give `less` the same sensible defaults even when invoked via a bare
+            // `PAGER=less`, without overriding a LESS the user set themselves.
+            if std::env::var_os("LESS").is_none() {
+                command.env("LESS", "FRX");
+            }
+            if let Ok(mut child) = command.spawn() {
+                if let Some(mut stdin) = child.stdin.take() {
+                    // Feed the pager from a scoped thread so the main thread can
+                    // wait on it immediately. A body larger than the pipe buffer
+                    // (~64 KiB) would otherwise block write_all here while `less`
+                    // sits paused for keypresses, and the main thread would never
+                    // reach wait() — so `q` could not be handled cleanly. With the
+                    // writer detached, `q` makes `less` exit, wait() returns, and
+                    // the writer unblocks on EPIPE. A scoped thread borrows `text`
+                    // directly (no copy, however large) and is always joined.
+                    std::thread::scope(|s| {
+                        s.spawn(move || {
+                            let _ = stdin.write_all(text.as_bytes());
+                            // stdin dropped here -> EOF for the pager
+                        });
+                        let _ = child.wait();
+                    });
+                } else {
+                    let _ = child.wait();
                 }
-                let _ = child.wait();
                 return;
             }
         }

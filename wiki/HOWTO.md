@@ -12,7 +12,7 @@ remove, ...) need root; queries (search, info, file-search, ...) do not.
 
 1. First-time setup
 2. Keeping metadata fresh
-3. Searching, inspecting, and listing repos
+3. Searching, inspecting, listing repos, and package history
 4. Installing
 5. Upgrading
 6. Reinstalling and removing
@@ -30,9 +30,11 @@ remove, ...) need root; queries (search, info, file-search, ...) do not.
 
 ## 1. First-time setup
 
-Configuration lives in `/etc/slacker/` (override with `--config-dir`). Copy the
-shipped templates and edit them:
-
+On Slackware you install the **binary package** (built from the SlackBuild). It
+puts everything in place — the `slacker` binary, the man page, and the config
+files under `/etc/slacker/` (override the directory with `--config-dir`). You do
+**not** copy anything. There are only two files to edit before first use: pick a
+mirror in `mirrors`, and set your repo priorities in `repos`.
 
 Pick exactly one mirror in `/etc/slacker/mirrors` (none is active by default;
 two or more active lines is an error):
@@ -42,14 +44,17 @@ two or more active lines is an error):
 https://slackware.uk/slackware/slackware64-current/
 ```
 
-Declare your repos in `/etc/slacker/repos`. Binary repos take a URL (or the
-keyword `mirror` for the official one) and must have distinct priorities;
+Declare your repos in `/etc/slacker/repos`. The URL field is either a literal
+URL, the keyword `mirror` (the active mirror, for the official repo), or
+`mirror/<subpath>` (the active mirror with a subpath appended, e.g.
+`mirror/extra` — it tracks a distribution subtree on whichever mirror you picked,
+so you never hardcode the host). Binary repos must have distinct priorities;
 higher priority wins:
 
 ```
-# priority  name        url|mirror                                            [flags]
+# priority  name        url|mirror|mirror/<subpath>                          [flags]
 100         slackware   mirror                                                official
-90          extras      https://mirror.nl.leaseweb.net/slackware/slackware64-current/extra   subtree
+90          extras      mirror/extra                                          subtree immutable
 80          conraid     https://slackers.it/repository/slackware64-current
 60          alienbob    https://slackware.nl/people/alien/sbrepos/current/x86_64
 ```
@@ -114,6 +119,32 @@ slacker status                  # health-check the whole setup; says what to fix
 `info` shows which repo wins by priority. For example, if `ffmpeg` exists in
 several repos, the highest-priority one is the candidate; pin another with
 `repo:name` (see below).
+
+### Package history
+
+`slacker history` prints a newest-first log of every package change on the box —
+installed, upgraded, reinstalled, removed — with the local date of each change
+and the source repo or build tag. It is reconstructed from the pkgtools admin
+directories under `ADM_DIR` (`packages/` + `removed_packages/`), so it also
+reflects changes made by other tools (slackpkg, sbopkg, plain
+installpkg/upgradepkg/removepkg), not only slacker.
+
+```
+slacker history                 # everything, newest first
+slacker history emacs           # just one package (exact name)
+slacker history --installed     # only what is installed now, with install dates
+slacker history --removed       # only what left the system (removed or upgraded away)
+slacker history --upgraded      # only upgrade / reinstall events
+slacker history --last 20       # the 20 most recent events
+slacker history --since 2026-06-01   # events on or after a date
+```
+
+An upgrade reads as `old → new`. Filters combine (e.g. `history --installed
+--since 2026-06-01`). Output is paged on a terminal (press `q` to quit). Note:
+because plain `removepkg` records share one filename per package id in
+`removed_packages`, a later removal overwrites an earlier one; when an upgrade's
+target record was lost that way, the new version is inferred from that package's
+next known entry rather than shown as `?`.
 
 ---
 

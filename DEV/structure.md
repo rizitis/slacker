@@ -4,10 +4,12 @@
 parity, plus slackpkg+ multi-repo priority resolution and .dep dependency
 handling.
 
-Build needs current Slackware's Rust (1.96+; edition 2021 for broad
-compatibility). Direct deps: clap, ureq, native-tls, md-5, regex. Heavy lifting (bzip2
-for MANIFEST, GPG) shells out to the system tools Slackware already ships - no
-extra Rust deps.
+Build needs Rust 1.85.1+ (the effective MSRV; current Slackware ships 1.96). The
+crate itself is edition 2021 for broad compatibility, but a dependency (clap_lex
+1.1.0) is written in edition 2024 — that is what sets the 1.85.1 floor, not any
+slacker code. Direct deps: clap, ureq, native-tls, md-5, regex. Heavy lifting
+(bzip2 for MANIFEST, GPG) shells out to the system tools Slackware already ships -
+no extra Rust deps.
 
 ### Source_Tree
 ```
@@ -16,18 +18,19 @@ slacker/
 ├── README.md
 ├── slacker.8                       <- man page (section 8)
 ├── examples/etc-slacker/           <- config templates for /etc/slacker/
-│   ├── slacker.conf                <- globals (ARCH auto-detect, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS)
+│   ├── slacker.conf                <- globals (ARCH auto-detect, ADM_DIR, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY)
 │   ├── mirrors                     <- catalogue of official mirrors - uncomment ONE (none by default)
 │   ├── repos                       <- binary repos + tag-priority lines
 │   └── blacklist                   <- blacklist rules: [@repo] REGEX | [@repo] series/
-└── src/                            <- 13 modules
-    ├── main.rs        CLI + commands (30 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, quarantine)
-    ├── config.rs      plain-text config + arch auto-detect + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + repo flags (official/immutable/subtree) + subtree download base
+└── src/                            <- 14 modules
+    ├── main.rs        CLI + commands (31 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, quarantine, history)
+    ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
     ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch, quarantine/trust markers
     ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, baseline names (clean-system), blacklist source lookups
     ├── download.rs    https/http (ureq+native-tls) + file:// + md5 + sha256 (sha256sum)
     ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path
+    ├── history.rs     package-change timeline reconstructed from the pkgtools admin dirs (ADM_DIR: packages/ + removed_packages/), local-time calibration, upgrade/reinstall inference
     ├── manifest.rs    file-search (decompressed MANIFEST)
     ├── changelog.rs   check-updates / show-changelog (pager when on a TTY)
     ├── gpg.rs         GPG import + TOFU key pinning + verify (captured output, fail-closed)
@@ -39,23 +42,30 @@ slacker/
 ### Config_Model
 
 - **slacker.conf** - `KEY=value`. ARCH is auto-detected from the installed
-  `aaa_base` package (override only for cross). CACHE_DIR (default
-  `/var/cache/slacker`), PKG_DB_DIR (default `/var/lib/pkgtools/packages`),
-  RESOLVE_DEPS (default yes), VERIFY (default all), IGNORE_TAGS (build tags that `clean-system` treats
+  `aaa_base` package (override only for cross). ADM_DIR (default `/var/adm`) is
+  the Slackware pkgtools admin root (holds `packages/`, `removed_packages/`,
+  `scripts/`, `setup/`); `history` reads it. CACHE_DIR (default
+  `/var/cache/slacker`). PKG_DB_DIR defaults to `ADM_DIR/packages`; set it
+  explicitly only to override that (kept for back-compat). RESOLVE_DEPS (default
+  yes), VERIFY (default all), IGNORE_TAGS (build tags that `clean-system` treats
   as non-foreign, e.g. `_SBo cf alien`).
 - **mirrors** - slackpkg-style catalogue; uncomment exactly ONE (none by
   default; 2+ -> error). Holds the official mirror URL (current/15.0 × 64/32,
   http/https/file://).
 - **repos** - two kinds of line:
-  - binary repo: `priority  name  url|mirror  [official] [immutable] [subtree]
-    [verify=...]`. The official line's url is the keyword `mirror` (filled from
-    `mirrors`). Higher priority wins; `name:package` pins a repo. Binary-repo
-    priorities must be **distinct** (duplicate -> fail-fast error). Flags:
-    `official` (tracked repo: ChangeLog + install-new default), `immutable`
-    (its packages never treated as foreign by clean-system), `subtree` (a
-    Slackware distribution subtree - extra/, patches/, testing/, pasture/ -
-    whose PACKAGES.TXT locations are root-relative, so packages and GPG-KEY are
-    fetched from the parent/root URL while metadata comes from the repo URL).
+  - binary repo: `priority  name  url|mirror|mirror/<subpath>  [official]
+    [immutable] [subtree] [verify=...]`. The url field may be a literal URL, the
+    keyword `mirror` (filled from the active line in `mirrors`), or
+    `mirror/<subpath>` (the active mirror with a subpath appended, e.g.
+    `mirror/extra`, `mirror/testing` - so a distribution subtree tracks whichever
+    mirror you picked without hardcoding the host). Higher priority wins;
+    `name:package` pins a repo. Binary-repo priorities must be **distinct**
+    (duplicate -> fail-fast error). Flags: `official` (tracked repo: ChangeLog +
+    install-new default), `immutable` (its packages never treated as foreign by
+    clean-system), `subtree` (a Slackware distribution subtree - extra/, patches/,
+    testing/, pasture/ - whose PACKAGES.TXT locations are root-relative, so
+    packages and GPG-KEY are fetched from the parent/root URL while metadata comes
+    from the repo URL).
   - tag-priority: `priority  name  tag` (e.g. `100 SBo _SBo`). Gives packages
     carrying a build tag a priority on the same scale, so SBo/local/source
     packages are never silently migrated to another repo or downgraded by
@@ -99,19 +109,36 @@ An unknown `@repo`/`@tag` gives a helpful error with a "did you mean" suggestion
 more than one package, install/upgrade/reinstall/remove show a numbered list
 (Enter = all, numbers/ranges like `1 3 5` or `2-4`, `n` = cancel).
 
-### Actions (30; slackpkg parity + extras)
+### Actions (31; slackpkg parity + extras)
 
 ```
 update [gpg]    search        file-search   info        list-repos
 status          install       upgrade       reinstall    remove
 download        clean-cache   upgrade-all   install-new  clean-system
-frozen          new-config    check-updates show-changelog
+frozen          new-config    check-updates show-changelog  history
 add-repo        del-repo      add-tag       del-tag
 vet-repo        trust-repo    distrust-repo
 generate-template  install-template  remove-template  delete-template
 ```
 - `list-repos` / `status` - inspect repos (priority, verify, flags, installed
-  counts) and health-check the whole setup.
+  counts) and health-check the whole setup. An installed package's build tag is
+  treated as a legitimate source, never "untracked": `list-repos` shows an `Inst`
+  count per repo and per declared tag-priority rule, flags a declared rule with
+  zero installed packages as `(declared, no installed package)`, and groups any
+  remaining tags under "Installed under other build tags". `status`'s by-source
+  view lists repos plus declared tag-rules plus remaining raw tags, with no
+  "untracked" bucket.
+- `history [NAME]` - a newest-first timeline of every package change on the box
+  (install / upgrade / reinstall / remove), reconstructed from the pkgtools admin
+  dirs under ADM_DIR (`packages/` + `removed_packages/`), so it captures changes
+  made by any tool (slacker, slackpkg, sbopkg, installpkg, ...), not only
+  slacker's own. Each row shows the local date, the change, the package, the
+  version (upgrades read `old -> new`), and the attributed source repo/tag. When
+  an upgrade target's record was lost to a `removed_packages` name collision, the
+  version is inferred from the next known tenure of that package. Filters:
+  `--installed` (only currently-installed, with install date), `--removed`
+  (left the system), `--upgraded` (upgrade/reinstall events), `--last N`,
+  `--since YYYY-MM-DD`. Paged on a TTY like `show-changelog`.
 - `add-repo`/`del-repo`/`add-tag`/`del-tag` - edit the `repos` file (validated,
   with confirmation). `add-repo` flags: `official`, `immutable`, `subtree`,
   `verify=...`.
@@ -185,7 +212,7 @@ reinstall, upgrade-all, install-new, install-template.
 ### Build_and_Tests
 
 > NO root needed for build & tests (only the mutating actions need root).
-> 61 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
+> 70 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
 
 ```
 cargo build --release
@@ -226,4 +253,16 @@ sed -i 's|^CACHE_DIR=.*|CACHE_DIR=/tmp/slk/cache|' /tmp/slk/slacker.conf
 - `clean-cache` frees disk by deleting cached package files; metadata and GPG
   keys are safe. `download -o DIR` and the symlink guard make explicit
   downloads (e.g. into /tmp) safe.
+- ADM_DIR defaults to `/var/adm` rather than `/var/lib/pkgtools` on purpose: on a
+  real box `/var/adm/packages`, `scripts/`, `setup/` symlink up into
+  `/var/lib/pkgtools`, but `removed_packages/` (and `removed_scripts/`,
+  `removed_uninstall_scripts/`) live under `/var/adm/pkgtools/...` and are NOT
+  exposed by name from `/var/lib/pkgtools`. Only `/var/adm` exposes the whole set,
+  which `history` needs. `removed_packages` is lossy: plain `removepkg` records
+  collide on the package id (a later removal overwrites an earlier one), while
+  `-upgraded-<timestamp>` records are unique — hence the upgrade-target inference.
+- Long output (`history`, `show-changelog`) is paged through `$PAGER` (or
+  `less -FRX`) when stdout is a TTY: it opens at the top, short output prints
+  inline and the pager exits immediately, and `q` quits cleanly. The pager is fed
+  from a scoped thread so a large body cannot deadlock the quit.
 - If a mirror shows stale versions, switch to another in `mirrors`.

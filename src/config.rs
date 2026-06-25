@@ -111,6 +111,11 @@ pub struct Config {
     pub cache_dir: PathBuf,
     /// Directory holding the installed-package database.
     pub pkg_db_dir: PathBuf,
+    /// Slackware pkgtools admin root (holds packages/, removed_packages/,
+    /// scripts/, setup/). The installed-package DB defaults to `adm_dir/packages`;
+    /// reserved so future features can read the sibling directories from here.
+    #[allow(dead_code)]
+    pub adm_dir: PathBuf,
     pub blacklist: Vec<BlacklistRule>,
     pub repos: Vec<Repo>,
     /// Resolve .dep files and pull in dependencies (RESOLVE_DEPS, default on).
@@ -178,10 +183,22 @@ impl Config {
             .get("CACHE_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/var/cache/slacker"));
+        // Slackware pkgtools admin root: holds packages/, removed_packages/,
+        // scripts/, setup/ (some are symlinks resolving to different physical
+        // locations, so /var/adm is the only dir that exposes the whole set by
+        // name). The installed-package DB defaults to ADM_DIR/packages; future
+        // features read the sibling directories from here. Default: /var/adm
+        // (the canonical admin dir; on a stock system it is a symlink to /var/log).
+        let adm_dir = conf
+            .get("ADM_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/var/adm"));
+        // PKG_DB_DIR, when set, overrides the derived location (kept for
+        // backward compatibility); otherwise it is ADM_DIR/packages.
         let pkg_db_dir = conf
             .get("PKG_DB_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/var/lib/pkgtools/packages"));
+            .unwrap_or_else(|| adm_dir.join("packages"));
 
         // RESOLVE_DEPS defaults on; set it to no/false/0 to disable .dep handling.
         let resolve_deps = match conf.get("RESOLVE_DEPS").map(|s| s.to_ascii_lowercase()) {
@@ -224,6 +241,7 @@ impl Config {
             arch,
             cache_dir,
             pkg_db_dir,
+            adm_dir,
             blacklist,
             repos,
             resolve_deps,

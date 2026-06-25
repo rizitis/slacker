@@ -1,0 +1,114 @@
+cargo msrv find
+  [Meta]   cargo-msrv 0.19.3  
+
+Compatibility Check #1: Rust 1.76.0
+  [FAIL]   Is incompatible 
+                                                                                                         
+  ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │ error: failed to parse lock file at: /mnt/data/GITHUB/slacker/Cargo.lock                            │
+  │                                                                                                     │
+  │ Caused by:                                                                                          │
+  │   lock file versi                                                                                   │
+  │ on `4` was found, but this version of Cargo does not understand this lock file, perhaps Cargo needs │
+  │  to be updated?                                                                                     │
+  │                                                                                                     │
+  ╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                         
+
+Compatibility Check #2: Rust 1.86.0
+  [OK]     Is compatible 
+
+Compatibility Check #3: Rust 1.81.0
+  [FAIL]   Is incompatible 
+                                                                                               
+  ╭───────────────────────────────────────────────────────────────────────────────────────────╮
+  │     Updating crates.io index                                                              │
+  │  Downloading crates ...                                                                   │
+  │   Downloaded crypto-common v0.1.7                                                         │
+  │   Downloaded ad                                                                           │
+  │ ler2 v2.0.1                                                                               │
+  │   Downloaded clap_lex v1.1.0                                                              │
+  │ error: failed to parse manifest at `/home/omen/.cargo/regist                              │
+  │ ry/src/index.crates.io-6f17d22bba15001f/clap_lex-1.1.0/Cargo.toml`                        │
+  │                                                                                           │
+  │ Caused by:                                                                                │
+  │   feature `edition2024`                                                                   │
+  │  is required                                                                              │
+  │                                                                                           │
+  │   The package requires the Cargo feature called `edition2024`, but that feature is not    │
+  │ stabilized in this version of Cargo (1.81.0 (2dbb1af80 2024-08-20)).                      │
+  │   Consider trying a newer versi                                                           │
+  │ on of Cargo (this may require the nightly release).                                       │
+  │   See https://doc.rust-lang.org/nightly/cargo/re                                          │
+  │ ference/unstable.html#edition-2024 for more information about the status of this feature. │
+  │                                                                                           │
+  ╰───────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                               
+
+Compatibility Check #4: Rust 1.83.0
+  [FAIL]   Is incompatible 
+                                                                                                         
+  ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │  Downloading crates ...                                                                             │
+  │ error: failed to download `clap_lex v1.1.0`                                                         │
+  │                                                                                                     │
+  │ Caused by:                                                                                          │
+  │   unable to get package                                                                             │
+  │ s from source                                                                                       │
+  │                                                                                                     │
+  │ Caused by:                                                                                          │
+  │   failed to parse manifest at `/home/omen/.cargo/registry/src/index.crates.i                        │
+  │ o-6f17d22bba15001f/clap_lex-1.1.0/Cargo.toml`                                                       │
+  │                                                                                                     │
+  │ Caused by:                                                                                          │
+  │   feature `edition2024` is required                                                                 │
+  │                                                                                                     │
+  │   The pac                                                                                           │
+  │ kage requires the Cargo feature called `edition2024`, but that feature is not stabilized in this ve │
+  │ rsion of Cargo (1.83.0 (5ffbef321 2024-10-29)).                                                     │
+  │   Consider trying a newer version of Cargo (this may                                                │
+  │  require the nightly release).                                                                      │
+  │   See https://doc.rust-lang.org/nightly/cargo/reference/unstable.html                               │
+  │ #edition-2024 for more information about the status of this feature.                                │
+  │                                                                                                     │
+  ╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                         
+
+Compatibility Check #5: Rust 1.84.1
+  [FAIL]   Is incompatible 
+                                                                                                         
+  ╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │  Downloading crates ...                                                                             │
+  │ error: failed to download `clap_lex v1.1.0`                                                         │
+  │                                                                                                     │
+  │ Caused by:                                                                                          │
+  │   unable to get package                                                                             │
+  │ s from source                                                                                       │
+  │                                                                                                     │
+  │ Caused by:                                                                                          │
+  │   failed to parse manifest at `/home/omen/.cargo/registry/src/index.crates.i                        │
+  │ o-6f17d22bba15001f/clap_lex-1.1.0/Cargo.toml`                                                       │
+  │                                                                                                     │
+  │ Caused by:                                                                                          │
+  │   feature `edition2024` is required                                                                 │
+  │                                                                                                     │
+  │   The pac                                                                                           │
+  │ kage requires the Cargo feature called `edition2024`, but that feature is not stabilized in this ve │
+  │ rsion of Cargo (1.84.1 (66221abde 2024-11-19)).                                                     │
+  │   Consider trying a newer version of Cargo (this may                                                │
+  │  require the nightly release).                                                                      │
+  │   See https://doc.rust-lang.org/nightly/cargo/reference/unstable.html                               │
+  │ #edition-2024 for more information about the status of this feature.                                │
+  │                                                                                                     │
+  ╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                         
+
+Compatibility Check #6: Rust 1.85.1
+  [OK]     Is compatible 
+
+Result:
+   Considered (min … max):   Rust 1.56.1 … Rust 1.96.0 
+   Search method:            bisect                    
+   MSRV:                     1.85.1                    
+   Target:                   x86_64-unknown-linux-gnu  
+                                                       

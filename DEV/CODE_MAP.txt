@@ -10,8 +10,8 @@ The mental model: config.rs reads your /etc/slacker files -> repo.rs fetches and
 parses each repo's metadata into AvailPkg records -> pkgdb.rs unifies them into
 one priority-ordered database and answers "what wins / what upgrades / what
 matches" -> main.rs turns a CLI command into a plan and calls system.rs to run
-the real pkgtools. download.rs, gpg.rs, manifest.rs, changelog.rs, template.rs,
-newconfig.rs are focused helpers used along the way.
+the real pkgtools. download.rs, gpg.rs, manifest.rs, changelog.rs, history.rs,
+template.rs, newconfig.rs are focused helpers used along the way.
 
 Everything is synchronous. Errors are String (Result<_, String>) on purpose —
 simple, greppable messages, no error crates.
@@ -36,16 +36,20 @@ LOOK HERE IF: package names parse wrong (epoch, odd arch like fw/x86, names with
 dashes). Parsing is positional from the right, so unusual names are the risk.
 
 --------------------------------------------------------------------------------
-config.rs         (~889 lines)   read & model /etc/slacker
+config.rs         (~935 lines)   read & model /etc/slacker
 --------------------------------------------------------------------------------
 Parses the plain-text config files into typed structs. No network, no side
 effects beyond reading files.
 
-  Config           struct: arch, cache_dir, pkg_db_dir, resolve_deps,
+  Config           struct: arch, cache_dir, pkg_db_dir, adm_dir, resolve_deps,
                    ignore_tags, repos, tag_priorities, blacklist
-                   (Vec<BlacklistRule>), verify, + helpers (repo_by_name,
-                   repos_by_priority, blacklist_hit, official_repo_name,
-                   is_ignored_tag)
+                   (Vec<BlacklistRule>), config_dir, verify, + helpers
+                   (repo_by_name, repos_by_priority, blacklist_hit,
+                   official_repo_name, is_ignored_tag)
+  ADM_DIR/PKG_DB_DIR  ADM_DIR (slacker.conf, default /var/adm) is the pkgtools
+                   admin root; pkg_db_dir is an explicit PKG_DB_DIR when set
+                   (back-compat override), else adm_dir.join("packages"). adm_dir
+                   itself is what history.rs walks (packages/ + removed_packages/).
   BlacklistRule    struct: optional @repo scope, optional series, optional
                    compiled regex (matched against the full package id). With
                    matches(id, series, repo) + repo()/pattern()/describe()
@@ -62,9 +66,12 @@ effects beyond reading files.
   Config::load     the entry point; ties all files together
   detect_arch      reads ARCH from the installed aaa_base package
   parse_repos      splits binary-repo lines from tag-priority lines: the 3rd
-                   field is a URL/"mirror" -> binary repo; otherwise -> tag line.
-                   Also parses `official`, `immutable`, `subtree` and `verify=`
-                   flags (any order; an unknown flag is a fail-fast error)
+                   field is a URL / "mirror" / "mirror/<subpath>" -> binary repo;
+                   otherwise -> tag line. The url keyword resolves to the active
+                   mirror (bare `mirror`) or the active mirror plus a subpath
+                   (`mirror/extra`, `mirror/testing`). Also parses `official`,
+                   `immutable`, `subtree` and `verify=` flags (any order; an
+                   unknown flag is a fail-fast error)
   parse_mirrors    enforces "exactly one uncommented mirror"
 
 KEY RULES ENFORCED HERE:
@@ -193,7 +200,8 @@ system.rs         (~100 lines)    the bridge to real pkgtools
 Reads the installed-package DB and shells out to the Slackware tools. This is
 the only module that mutates the system.
 
-  installed_packages   parse PKG_DB_DIR (default /var/lib/pkgtools/packages)
+  installed_packages   parse PKG_DB_DIR (default ADM_DIR/packages, i.e.
+                   /var/adm/packages)
   is_installed / installed_by_name   lookups over that list
   install / upgrade_only / reinstall / remove_package
                    thin wrappers over installpkg/upgradepkg/removepkg
@@ -202,6 +210,50 @@ the only module that mutates the system.
 LOOK HERE IF: install/upgrade/remove behaves differently from the native tools,
 or the installed-DB parse is wrong. slacker is intentionally a THIN layer here:
 it does not reimplement pkgtools, it calls them. Keep it that way.
+
+--------------------------------------------------------------------------------
+history.rs        (~420 lines)   package-change timeline from the admin dirs
+--------------------------------------------------------------------------------
+Reconstructs a chronological log of every package change on the box from the
+pkgtools admin dirs under ADM_DIR — so it sees changes from any tool (slacker,
+slackpkg, sbopkg, installpkg/upgradepkg/removepkg), not just slacker's own. Pure
+logic, unit-tested, no network. Shells out to nothing (uses std MetadataExt for
+mtime/ctime).
+
+  collect(adm_dir)     the entry point -> Timeline { events, clock, current }.
+                       Reads packages/ (current installs; mtime = install time)
+                       and removed_packages/ (departures).
+  RawRecord            one admin-dir entry: pkg (PkgId), installed_at (mtime),
+                       departure: Removed(ctime) | Upgraded(ctime) | None.
+                       A plain removed_packages/<id> = removepkg (ctime = removal,
+                       mtime preserved = its install). An <id>-upgraded-<TS> =
+                       the OLD version replaced by upgradepkg.
+  build_events         PURE core: per-NAME chronological chaining. Each name's
+                       records are successive tenures sorted by install time; an
+                       Upgraded-away tenure pairs with the very next tenure (within
+                       ~2 days = real in-place successor, consumed). If that
+                       successor's record was LOST to a removed_packages name
+                       collision, the target VERSION is inferred from the next
+                       known tenure (display only, not consumed) — so an upgrade
+                       reads "old -> new", never "old -> ?". Reinstall = the same
+                       id departed before this install.
+  Event / EventKind    Event { when, pkg, kind }; kind = Installed{reinstall} |
+                       Removed | Upgraded{ to: Option<PkgId> }
+  LocalClock           self-calibrating UTC->local offset from (upgraded-filename
+                       local time, that file's ctime) pairs, nearest sample per
+                       event (DST-correct, no tz crate; falls back to UTC). format
+                       / local_date for display + --since filtering.
+  days_from_civil / civil_from_days   Hinnant date math (no chrono).
+
+WHY removed_packages IS LOSSY: plain removepkg records collide on the package id
+(a later removal overwrites an earlier one); only -upgraded-<timestamp> records
+are unique. That is the structural reason build_events sometimes has to infer an
+upgrade target instead of reading it.
+
+LOOK HERE IF: a date is off (clock calibration), an upgrade shows the wrong target
+or "?", or a reinstall is misclassified. The render (colour, columns, the
+"reinstalled" same-version case) and the single-package source attribution live in
+main.rs (render_history / source_of), not here.
 
 --------------------------------------------------------------------------------
 manifest.rs       (~111 lines)   file-search
@@ -275,7 +327,7 @@ Used by the plan tables, search/info output, and prompts. Piped/redirected
 output and `NO_COLOR` stay plain text.
 
 --------------------------------------------------------------------------------
-main.rs           (~4341 lines)  CLI, planning, and every command
+main.rs           (~4624 lines)  CLI, planning, and every command
 --------------------------------------------------------------------------------
 The orchestrator. clap definitions, the command dispatch, the install/upgrade
 PLAN builder, and one cmd_* function per action.
@@ -332,7 +384,7 @@ PLAN builder, and one cmd_* function per action.
   COMMANDS: cmd_update, cmd_search, cmd_file_search, cmd_info, cmd_install,
   cmd_upgrade, cmd_reinstall, cmd_remove, cmd_download, cmd_upgrade_all,
   cmd_install_new, cmd_clean_system, cmd_clean_cache, cmd_new_config,
-  cmd_check_updates, cmd_show_changelog, cmd_generate_template,
+  cmd_check_updates, cmd_show_changelog, cmd_history, cmd_generate_template,
   cmd_install_template, cmd_remove_template, cmd_delete_template, cmd_frozen
 
   REPO / TAG / STATUS / SAFETY COMMANDS:
@@ -344,12 +396,32 @@ PLAN builder, and one cmd_* function per action.
                       file (validated via config::validate_repos_text, confirmed)
     cmd_vet_repo / cmd_trust_repo / cmd_distrust_repo   the quarantine model:
                       re-vet on demand, lift a quarantine (override), or freeze
-    installed_attribution   tag-based source mapping (empty tag -> official;
-                      else repo_for_tag) feeding list-repos counts + status
+    installed_attribution / attribute_tags   tag-based source mapping with a pure,
+                      testable core attribute_tags(official, tag_priorities,
+                      resolve_repo, installed) -> (per_repo, per_rule, per_other).
+                      Precedence: official (empty tag) -> binary repo (repo_for_tag)
+                      -> declared tag-rule name -> raw tag. There is NO "untracked"
+                      bucket: an installed package's own build tag is always a
+                      legitimate source. Feeds list-repos (the Inst column + the
+                      "(declared, no installed package)" / "Installed under other
+                      build tags" lines) and status's by-source view.
+    cmd_history / render_history / source_of   the `history` command: read the
+                      timeline via history::collect(adm_dir), filter
+                      (--installed reads tl.current directly; --removed = Removed |
+                      Upgraded; --upgraded = Upgraded; name exact-match; --since;
+                      --last N), then render newest-first as a colour table.
+                      source_of attributes a single PkgId (same precedence as
+                      attribute_tags). render_history shows a same-version upgrade
+                      as "reinstalled".
     cmd_clean_system  the baseline rule: foreign = not provided by official +
                       immutable repos; kept via blacklist / IGNORE_TAGS /
                       immutable attribution; refuses on missing baseline metadata
-  page_output   pipe long output through $PAGER/less when stdout is a TTY
+  page_output   pipe long output (history, show-changelog) through $PAGER /
+                `less -FRX` when stdout is a TTY. The text is written from a scoped
+                thread while the main thread waits on the pager, so a body larger
+                than the pipe buffer cannot deadlock and `q` always quits cleanly;
+                short output prints inline (less -F) and the terminal is left clean
+                (less -X).
 
 LOOK HERE IF: anything about how a command behaves end-to-end, prompts, dry-run
 wiring, exit codes, or adding a new command/flag. The per-command logic is small
@@ -400,7 +472,10 @@ General hints for a forker
   things sandboxes miss (encoding, paging, arch edge cases): build debug,
   reinstall, test on a real -current box.
 
-- edition 2021 on purpose (broad Rust compatibility). Direct deps: clap, ureq,
-  native-tls, md-5, and regex (added for blacklist rule matching); think hard
-  before adding a sixth.
+- edition 2021 on purpose (broad Rust compatibility). The crate's own edition is
+  2021, but the EFFECTIVE MSRV is 1.85.1: a transitive dep (clap_lex 1.1.0) is
+  edition 2024, which only stabilised in Rust 1.85. `cargo msrv find` confirms
+  this; declare it as `rust-version` and freeze deps (Cargo.lock + cargo vendor)
+  before shipping to a distro. Direct deps: clap, ureq, native-tls, md-5, and
+  regex (added for blacklist rule matching); think hard before adding a sixth.
 ================================================================================

@@ -8,6 +8,7 @@ license = "Apache-2.0"
 readme = "README.md"
 keywords = ["slackware", "package-manager", "slackpkg"]
 categories = ["command-line-utilities"]
+rust-version = "1.85.1"
 
 [[bin]]
 name = "slacker"

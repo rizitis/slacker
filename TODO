@@ -1,11 +1,4 @@
-- check if its better to have glibc as crate (?)
-
 - ask to remove “orphan” dependencies if they are not used elsewhere (for repos that support it)
-
-- History
-  - what was installed
-  - what was removed
-  - when was the change made
 
 - inform when a mirror is outdated (only for official)
 

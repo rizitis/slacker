@@ -1,3 +1,27 @@
+Add: slacker history
+slacker history --help
+Show a chronological log of package changes — installed, upgraded and removed, and when — newest first. Derived from the pkgtools admin directories, so it also reflects changes made outside slacker
+
+Usage: slacker history [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]  Limit to a single package name
+
+Options:
+      --config-dir <CONFIG_DIR>  Directory holding the plain-text config files [default: /etc/slacker]
+      --last <LAST>              Show only the most recent N events
+      --since <SINCE>            Show only events on or after this date (YYYY-MM-DD)
+  -y, --yes                      Assume "yes" to confirmation prompts
+      --dry-run                  Show what would happen without changing the system
+      --installed                Show only packages currently installed (with their install date)
+      --no-deps                  Do not read .dep files / pull in dependencies for this run
+      --removed                  Show only packages that left the system (removed or upgraded away)
+      --upgraded                 Show only upgrade / reinstall events
+  -h, --help                     Print help
+
+Update: new syntax in repos file: mirror/<subpath>
+---
+
 Version Beta.2 0.6.0
 =====
 Add: protection mechanism from "rogue" or tampered repositories will be put into auto-quarantine:
