@@ -19,6 +19,8 @@ A Slackware package manager in Rust with full **slackpkg action parity**, plus
 - Everything a user edits is plain text.
 
 # wiki
+
+TESTERS needed for bug report!<br>
 Everything you need to know about slacker: [Wiki](https://forge.slackware.nl/rizitis/slacker/wiki)
 
 ## NOTE: 

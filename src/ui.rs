@@ -20,7 +20,15 @@ fn enabled() -> bool {
 }
 
 fn paint(code: &str, s: &str) -> String {
-    if enabled() {
+    paint_when(enabled(), code, s)
+}
+
+/// The pure colour gate: wrap `s` in the escape for `code` when `on`, else
+/// return it unchanged. Kept separate from [`enabled`] so the painting logic can
+/// be tested deterministically, without depending on whether the test runner's
+/// stdout happens to be a terminal.
+fn paint_when(on: bool, code: &str, s: &str) -> String {
+    if on {
         format!("\x1b[{code}m{s}\x1b[0m")
     } else {
         s.to_string()
@@ -58,13 +66,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plain_when_not_a_tty() {
-        // Under `cargo test` stdout is not a TTY, so colouring is disabled and
-        // every helper must return its input unchanged (no escape sequences).
-        for f in [blue, green, red, purple, yellow, white] {
+    fn paint_gate_is_pure() {
+        // The colour gate depends only on its boolean argument, never on the
+        // ambient TTY of the test runner — which differs between a piped build
+        // (e.g. `... | tee build.log`) and an interactive one. Off: the input,
+        // unchanged. On: the input wrapped in the escape for that code.
+        for code in ["34", "32", "31", "35", "33", "37", "36", "90"] {
+            let off = paint_when(false, code, "bash");
+            assert_eq!(off, "bash");
+            assert!(!off.contains('\x1b'));
+
+            let on = paint_when(true, code, "bash");
+            assert_eq!(on, format!("\x1b[{code}mbash\x1b[0m"));
+        }
+    }
+
+    #[test]
+    fn helpers_map_to_the_right_code() {
+        // Each helper either returns plain text (colour disabled in this
+        // environment) or wraps its input in that helper's own code — checked
+        // without forcing the TTY state, so it holds either way.
+        let cases: [(fn(&str) -> String, &str); 8] = [
+            (blue, "34"),
+            (green, "32"),
+            (red, "31"),
+            (purple, "35"),
+            (yellow, "33"),
+            (white, "37"),
+            (cyan, "36"),
+            (dim, "90"),
+        ];
+        for (f, code) in cases {
             let out = f("bash");
-            assert_eq!(out, "bash");
-            assert!(!out.contains('\x1b'));
+            let coloured = format!("\x1b[{code}mbash\x1b[0m");
+            assert!(
+                out == "bash" || out == coloured,
+                "helper produced {out:?}, expected plain \"bash\" or {coloured:?}"
+            );
         }
     }
 }
