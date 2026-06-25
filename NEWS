@@ -1,3 +1,8 @@
+Version Beta.3 0.7.0
+=====
+Major Release Updates.
+BREAKING CHANGE: please update your conf file <slacker new-config>
+Update: new syntax in repos file: mirror/<subpath>
 Add: slacker history
 slacker history --help
 Show a chronological log of package changes — installed, upgraded and removed, and when — newest first. Derived from the pkgtools admin directories, so it also reflects changes made outside slacker
@@ -18,8 +23,6 @@ Options:
       --removed                  Show only packages that left the system (removed or upgraded away)
       --upgraded                 Show only upgrade / reinstall events
   -h, --help                     Print help
-
-Update: new syntax in repos file: mirror/<subpath>
 ---
 
 Version Beta.2 0.6.0
