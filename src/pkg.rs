@@ -53,6 +53,17 @@ impl PkgId {
         self.build.trim_start_matches(|c: char| c.is_ascii_digit())
     }
 
+    /// True if this package counts as an OFFICIAL Slackware package for the
+    /// purpose of source attribution and clean-system: either a tagless build
+    /// (the -current convention) OR a stable patched build carrying a
+    /// `_slack<version>` tag (the official stable convention — e.g.
+    /// `glibc-2.33-x86_64-9_slack15.0`). Stable patched packages are the MOST
+    /// official packages on a stable system, so they must never be treated as
+    /// third-party / foreign just because they carry a tag.
+    pub fn is_official_build(&self) -> bool {
+        is_official_tag(self.build_tag())
+    }
+
     /// True when `other` is a different version/build of the *same* name.
     pub fn is_other_revision_of(&self, other: &PkgId) -> bool {
         self.name == other.name
@@ -66,8 +77,10 @@ impl fmt::Display for PkgId {
     }
 }
 
-/// Remove a trailing Slackware package extension, if any.
-fn strip_pkg_ext(s: &str) -> &str {
+/// Remove a trailing Slackware package extension, if any. Public so a caller can
+/// turn a package filename (`foo-1.0-x86_64-1.txz`) into the name of its installed
+/// package-database record (`foo-1.0-x86_64-1`).
+pub fn strip_pkg_ext(s: &str) -> &str {
     for ext in [".txz", ".tgz", ".tbz", ".tlz", ".tar.gz", ".tar.xz"] {
         if let Some(stripped) = s.strip_suffix(ext) {
             return stripped;
@@ -104,6 +117,30 @@ pub fn is_safe_filename(name: &str) -> bool {
 /// locations are rejected so the fetch URL can't be steered off the repo.
 pub fn is_safe_location(loc: &str) -> bool {
     !loc.split(['/', '\\']).any(|seg| seg == "..")
+}
+
+/// True if `tag` (a stripped build tag from [`PkgId::build_tag`]) denotes an
+/// OFFICIAL Slackware source: the empty tag (tagless -current packages) or a
+/// stable patch tag `_slack<version>` (e.g. `_slack15.0`, `_slack15.1`).
+pub fn is_official_tag(tag: &str) -> bool {
+    tag.is_empty() || is_slack_stable_tag(tag)
+}
+
+/// True if `tag` is exactly `_slack<version>` where `<version>` is a dotted
+/// number like `15.0` or `15` — the tag the official Slackware *stable* tree
+/// stamps onto its patched packages. Anything else (`_SBo`, `alien`, `cf`, a
+/// bare `_slack`, `_slack_x`) is not a stable patch tag.
+pub fn is_slack_stable_tag(tag: &str) -> bool {
+    match tag.strip_prefix("_slack") {
+        Some(v) => {
+            !v.is_empty()
+                && v.chars().all(|c| c.is_ascii_digit() || c == '.')
+                && v.chars().any(|c| c.is_ascii_digit())
+                && !v.starts_with('.')
+                && !v.ends_with('.')
+        }
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -188,5 +225,31 @@ mod tests {
         assert!(is_safe_location("x86_64/multimedia"));
         assert!(!is_safe_location("../../../etc"));
         assert!(!is_safe_location("a/../../b"));
+    }
+
+    #[test]
+    fn slack_stable_tag_is_recognised_as_official() {
+        // The official stable patch tag, any version.
+        assert!(is_slack_stable_tag("_slack15.0"));
+        assert!(is_slack_stable_tag("_slack15.1"));
+        assert!(is_slack_stable_tag("_slack16"));
+        // tagless and stable-patch both count as official.
+        assert!(is_official_tag(""));
+        assert!(is_official_tag("_slack15.0"));
+        // genuine third-party tags are NOT official.
+        assert!(!is_slack_stable_tag("_SBo"));
+        assert!(!is_slack_stable_tag("alien"));
+        assert!(!is_slack_stable_tag("cf"));
+        assert!(!is_slack_stable_tag("_slack"));     // no version
+        assert!(!is_slack_stable_tag("_slack15.0a")); // trailing junk
+        assert!(!is_official_tag("_SBo"));
+        assert!(!is_official_tag("alien"));
+        // a real package: glibc patched on 15.0 is official.
+        let p = PkgId::parse("glibc-2.33-x86_64-9_slack15.0").unwrap();
+        assert_eq!(p.build_tag(), "_slack15.0");
+        assert!(p.is_official_build());
+        // an alien package is not.
+        let a = PkgId::parse("vlc-3.0.23-x86_64-1alien").unwrap();
+        assert!(!a.is_official_build());
     }
 }

@@ -12,6 +12,7 @@
 # official repo's priority/placement here.
 #
 # priority  name        url       [official]
+200         patches     mirror/patches subtree immutable
 100         slackware   mirror    official
 #90         extras      mirror/extra subtree
 #90         testin      mirror/testing subtree

@@ -235,7 +235,7 @@ fn parse_upgraded_suffix(fname: &str) -> Option<(&str, (i64, i64, i64, i64, i64,
     Some((base, (y, mo, da, h, mi, s)))
 }
 
-fn to_naive_epoch((y, m, d, h, mi, s): (i64, i64, i64, i64, i64, i64)) -> i64 {
+pub(crate) fn to_naive_epoch((y, m, d, h, mi, s): (i64, i64, i64, i64, i64, i64)) -> i64 {
     days_from_civil(y, m, d) * 86400 + h * 3600 + mi * 60 + s
 }
 

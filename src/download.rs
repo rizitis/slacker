@@ -1,23 +1,22 @@
 //! Network and local downloads, plus integrity checking.
 //!
-//! Supports https/http (via ureq with a native-tls backend) and file:// URLs
-//! for a local repo clone, NFS mount, or mounted install media. file:// is
-//! handled directly against the filesystem since ureq is HTTP-only.
+//! Supports https/http (via ureq with a bundled rustls backend — TLS is
+//! compiled into the binary with the Mozilla CA roots, so slacker needs no
+//! system libssl and runs unchanged on OpenSSL 1.1 and 3.x systems alike) and
+//! file:// URLs for a local repo clone, NFS mount, or mounted install media.
+//! file:// is handled directly against the filesystem since ureq is HTTP-only.
 
 use md5::{Digest, Md5};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
-/// Build a ureq Agent backed by the system TLS (native-tls / OpenSSL).
+/// Build a ureq Agent. TLS is rustls, linked into the binary with the Mozilla
+/// CA roots bundled (ureq's `tls` feature), so there is no dependency on a
+/// system OpenSSL. Kept fallible (returns Result) for call-site compatibility,
+/// though construction no longer fails.
 fn build_agent(timeout: Duration) -> Result<ureq::Agent, String> {
-    let connector = native_tls::TlsConnector::new()
-        .map_err(|e| format!("failed to initialise TLS backend: {e}"))?;
-    Ok(ureq::AgentBuilder::new()
-        .timeout(timeout)
-        .tls_connector(Arc::new(connector))
-        .build())
+    Ok(ureq::AgentBuilder::new().timeout(timeout).build())
 }
 
 /// Convert a `file://` URL to a filesystem path, or None for other schemes.

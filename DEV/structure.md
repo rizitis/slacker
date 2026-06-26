@@ -7,31 +7,34 @@ handling.
 Build needs Rust 1.85.1+ (the effective MSRV; current Slackware ships 1.96). The
 crate itself is edition 2021 for broad compatibility, but a dependency (clap_lex
 1.1.0) is written in edition 2024 — that is what sets the 1.85.1 floor, not any
-slacker code. Direct deps: clap, ureq, native-tls, md-5, regex. Heavy lifting
-(bzip2 for MANIFEST, GPG) shells out to the system tools Slackware already ships -
-no extra Rust deps.
+slacker code. Direct deps: clap, ureq (rustls TLS — no system OpenSSL needed),
+md-5, regex. Heavy lifting (bzip2 for MANIFEST, GPG) shells out to the system
+tools Slackware already ships - no extra Rust deps.
 
 ### Source_Tree
 ```
 slacker/
-├── Cargo.toml                      <- build manifest (deps: clap, ureq, native-tls, md-5, regex; Apache-2.0)
+├── Cargo.toml                      <- build manifest (deps: clap, ureq [rustls], md-5, regex; Apache-2.0)
 ├── slacker.8                       <- man page (section 8)
 ├── examples/etc-slacker/           <- config templates for /etc/slacker/
 │   ├── slacker.conf                <- globals (ARCH auto-detect, ADM_DIR, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY, MAX_PARALLEL, REVERT, CUMULATIVE_URL)
 │   ├── mirrors                     <- catalogue of official mirrors - uncomment ONE (none by default)
 │   ├── repos                       <- binary repos + tag-priority lines
-│   └── blacklist                   <- blacklist rules: [@repo] REGEX | [@repo] series/
-└── src/                            <- 15 modules
-    ├── main.rs        CLI + commands (33 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, quarantine, history)
-    ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs
+│   ├── blacklist                   <- blacklist rules: [@repo] REGEX | [@repo] series/
+│   └── distro-upgrade.conf         <- optional DISTRO_UPGRADE_MIRROR (local source for upgrade-dist)
+└── src/                            <- 17 modules
+    ├── main.rs        CLI + commands (35 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, quarantine, history, distribution upgrade)
+    ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs + DISTRO_UPGRADE_MIRROR (distro-upgrade.conf)
+    ├── dist.rs        distribution-upgrade engine: Release/Route types, parse_release_from_os (os-release) + parse_release_from_url, the fail-closed route whitelist (dist_route), release suffix/target parsing (used by upgrade-dist and the release-mismatch guard)
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
     ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch, quarantine/trust markers
     ├── revert.rs      revert-pkg rollback helpers: previous official versions from removed_packages (strip -upgraded- suffix), cumulative PACKAGES.TXT location parse + .txz URL build
     ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, baseline names (clean-system), blacklist source lookups
-    ├── download.rs    https/http (ureq+native-tls) + file:// + md5 + sha256 (sha256sum); parallel batch downloads (std::thread::scope, MAX_PARALLEL, best-effort)
-    ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path + version_codename (os-release, for revert-pkg's -current guard)
+    ├── download.rs    https/http (ureq+rustls) + file:// + md5 + sha256 (sha256sum); parallel batch downloads (std::thread::scope, MAX_PARALLEL, best-effort)
+    ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path + version_codename/version_id (os-release, for revert-pkg's -current guard and the release-mismatch check)
     ├── history.rs     package-change timeline reconstructed from the pkgtools admin dirs (ADM_DIR: packages/ + removed_packages/), local-time calibration, upgrade/reinstall inference
     ├── manifest.rs    file-search (decompressed MANIFEST)
+    ├── mirrors.rs     find-mirror engine: fetch the official https mirror list, probe each with one timed range request (latency + the mirror's own timestamp), rank by speed dropping stale ones
     ├── changelog.rs   check-updates / show-changelog (pager when on a TTY)
     ├── gpg.rs         GPG import + TOFU key pinning + verify (captured output, fail-closed)
     ├── template.rs    templates (generate/load/delete, includes)
@@ -86,6 +89,13 @@ slacker/
   upgrades and `check-updates`, but still shown by `search`/`info` marked
   `[blacklisted]`. The `frozen` and `unfrozen` commands add and remove rules in
   this file for you (`unfrozen` matches literally, never as a regex).
+- **distro-upgrade.conf** (optional) - a single `DISTRO_UPGRADE_MIRROR=` key
+  pointing `upgrade-dist` at a local source instead of the network: a local copy
+  of the target release tree (`file://` or `http://`), an NFS clone, or a mounted
+  install ISO. When set, the distribution upgrade re-points to this base and
+  validates it (matches the requested target + reachable) before the point of no
+  return; absent/empty, `upgrade-dist` uses the configured mirrors. Parsed into
+  `Config.distro_upgrade_mirror` (`parse_distro_upgrade_mirror`).
 
 ### Build-tag priority model
 
@@ -114,16 +124,16 @@ An unknown `@repo`/`@tag` gives a helpful error with a "did you mean" suggestion
 more than one package, install/upgrade/reinstall/remove show a numbered list
 (Enter = all, numbers/ranges like `1 3 5` or `2-4`, `n` = cancel).
 
-### Actions (33; slackpkg parity + extras)
+### Actions (35; slackpkg parity + extras)
 
 ```
 update [gpg]    search        file-search   info         list-repos
-status          install       upgrade       reinstall    remove
-download        revert-pkg    clean-cache   upgrade-all  install-new
-clean-system    frozen        unfrozen      new-config   check-updates
-show-changelog  history       add-repo      del-repo     add-tag
-del-tag         vet-repo      trust-repo    distrust-repo
-generate-template  install-template  remove-template  delete-template
+status          find-mirror   install       upgrade      reinstall
+remove          download      revert-pkg    clean-cache  upgrade-all
+install-new     upgrade-dist  clean-system  frozen       unfrozen
+new-config      check-updates show-changelog history     add-repo
+del-repo        add-tag       del-tag       vet-repo     trust-repo
+distrust-repo   generate-template  install-template  remove-template  delete-template
 ```
 - `list-repos` / `status` - inspect repos (priority, verify, flags, installed
   counts) and health-check the whole setup. An installed package's build tag is
@@ -179,6 +189,35 @@ generate-template  install-template  remove-template  delete-template
   named repo (fetched on demand if not cached).
 - `search` matches an **exact** package name (case-insensitive); use `info` or
   `file-search` for broader lookups.
+- `find-mirror` - probe the official Slackware mirror list and rank the fastest,
+  fresh https mirrors for your location (one timed range request per mirror reads
+  both latency and the mirror's own timestamp; stale mirrors >48h behind are
+  dropped). Prints the line to make active in `mirrors`; never edits it for you.
+  Runs before any mirror is configured (first-setup friendly). -current only.
+  Engine in `mirrors.rs`.
+- `upgrade-dist {current|VERSION}` - whole-system **distribution upgrade** to a
+  different Slackware release. Target is an explicit argument (never read from
+  the mirror); allowed routes are a fail-closed whitelist (15.0 -> -current, or
+  15.0 -> a newer stable). After a typed point-of-no-return: writes an escape-kit
+  template, re-points the active mirror + every `mirror`/`subtree` repo to the
+  target and comments out third-party repos it can't re-point, backs up + empties
+  the blacklist, then upgrades **every** installed package to the target build
+  **bypassing the priority/blacklist/frozen guards on purpose** (core first, the
+  GnuPG verification chain last), runs install-new + clean-system + a second pass,
+  and ends with a kernel/initrd + bootloader reminder. Downloads in batches that
+  are deleted as they install (no whole-release disk spike). With
+  `DISTRO_UPGRADE_MIRROR` set it upgrades from a local tree/clone/ISO instead of
+  the network. `--yes` non-interactive, `--dry-run` shows the plan + URL transform
+  and writes nothing. Logic in `dist.rs` + the `cmd_upgrade_dist`/`dist_*` family
+  in `main.rs`.
+- **Release-mismatch guard:** install/upgrade **refuse** a package whose source
+  repo targets a different Slackware release than the running system (a GPG/md5
+  signature authenticates *who* built a package, not *which release* it targets,
+  so e.g. an alienbob `-current` repo left active on 15.0 would otherwise install
+  cleanly and break the box). `repo_release_token(url)` detects the release from
+  the `slackware{arch}-<suffix>` form or a bare `current`/`X.Y` path segment;
+  `--yes` overrides; `upgrade-dist` is exempt (it changes the release on purpose);
+  `status` reports any mismatch.
 
 Global flags: `-y/--yes`, `--dry-run`, `--no-deps`, `--config-dir`.
 Exit codes: 0 ok ; 1 error ; 20 nothing found ; 50 self-upgrade ; 100 pending.
@@ -230,7 +269,7 @@ reinstall, upgrade-all, install-new, install-template.
 ### Build_and_Tests
 
 > NO root needed for build & tests (only the mutating actions need root).
-> 113 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
+> 150 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
 
 ```
 cargo build --release
@@ -251,7 +290,9 @@ sed -i 's|^CACHE_DIR=.*|CACHE_DIR=/tmp/slk/cache|' /tmp/slk/slacker.conf
 
 ### Notes
 
-- TLS via native-tls (system OpenSSL). file:// reads the filesystem directly.
+- TLS via rustls (bundled roots) — no system OpenSSL/libssl dependency, so the
+  binary runs on an old base (this is what lets a -current-built test binary run
+  on a 15.0 box). file:// reads the filesystem directly.
 - PACKAGES.TXT/CHECKSUMS/MANIFEST/ChangeLog are read UTF-8-lossy (some repos,
   e.g. extras, contain non-UTF-8 bytes).
 - Arch filtering keeps native arch + noarch + fw (firmware) + x86 (32-bit
@@ -284,3 +325,14 @@ sed -i 's|^CACHE_DIR=.*|CACHE_DIR=/tmp/slk/cache|' /tmp/slk/slacker.conf
   inline and the pager exits immediately, and `q` quits cleanly. The pager is fed
   from a scoped thread so a large body cannot deadlock the quit.
 - If a mirror shows stale versions, switch to another in `mirrors`.
+- `upgrade-dist` deliberately bypasses the priority/blacklist/frozen guards (a
+  distribution upgrade is precisely when they must not apply) and is the only
+  command that does. It downloads in batches that are deleted as they install, so
+  the upgrade never needs disk for a whole release at once, and a disk-space
+  preflight stops before touching the system. It is also exempt from the
+  release-mismatch guard (it changes the release on purpose). Core packages go
+  first and the GnuPG chain (`DIST_GPG_LAST`) last, so signature verification
+  stays working throughout.
+- `slacker ... | head` (and any piped, early-closed output) does not panic:
+  SIGPIPE is reset to its default disposition at startup, so a broken pipe ends
+  the process quietly instead of erroring on the next write.

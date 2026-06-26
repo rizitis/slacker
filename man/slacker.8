@@ -1,4 +1,4 @@
-.TH SLACKER 8 "June 2026" "slacker 0.7.2" "Slackware Package Management"
+.TH SLACKER 8 "June 2026" "slacker 0.8.0" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -219,6 +219,54 @@ repository of lower priority than the one already installed) and the
 .B blacklist
 \(em frozen packages are skipped and listed as frozen.
 .TP
+.B upgrade-dist \fR{\fIcurrent\fR|\fIVERSION\fR}
+Upgrade the whole system to a different Slackware release \(em a distribution
+upgrade. The target is an explicit argument (where you are going), never read
+from the mirror:
+.I current
+moves a stable release to \-current, or give a stable
+.I VERSION
+(e.g.\&
+.IR 15.1 )
+to move to a newer stable. The allowed routes are a fail\-closed whitelist
+(currently 15.0 \(-> \-current and 15.0 \(-> a newer stable); anything else is
+refused. This is a deliberately heavyweight, one\-way operation and is gated by a
+typed point\-of\-no\-return confirmation.
+.IP
+What it does, in order: writes an escape\-kit template of the current package set
+first; re\-points the active
+.I mirrors
+line and every
+.B mirror
+/
+.B subtree
+repository to the target release, comments out any third\-party repository whose
+versioned URL it cannot re\-point, and backs up then empties the
+.IR blacklist ;
+refreshes metadata; then upgrades
+.I every
+installed package to the target's build, bypassing the priority/blacklist/frozen
+guards on purpose (a distribution upgrade is exactly when those must not apply).
+Core packages (glibc\-solibs, pkgtools, tar, xz, \&...) go first and the GnuPG
+verification toolchain goes last, so package signatures keep being checked
+throughout. It then runs
+.BR install-new ,
+.BR clean-system ,
+and a second confirming pass, and finishes with a kernel/initrd and bootloader
+reminder. Downloads happen in batches that are deleted as they install, so the
+upgrade does not need disk for the whole release at once.
+.IP
+With a
+.B DISTRO_UPGRADE_MIRROR
+configured (see
+.IR distro-upgrade.conf )
+the upgrade is driven from a local mirror tree, clone, or mounted ISO instead of
+the network.
+.B \-\-yes
+runs non\-interactively;
+.B \-\-dry\-run
+shows the whole plan and the URL transform but writes nothing.
+.TP
 .B clean-system
 List installed packages that are no longer part of the official distribution
 \(em packages absent from the baseline (the official repo's
@@ -256,16 +304,30 @@ deleting and reports how much space is freed.
 .TP
 .B new-config
 Reconcile leftover \fI*.new\fR configuration files under /etc and
-/usr/share/vim. For each one a coloured unified diff against the installed file
-is shown, then you choose to (K)eep both files unchanged and decide later
-(the default, nothing is deleted), (O)verwrite the installed file with the
-\fI.new\fR, (R)emove just the \fI.new\fR and keep your current file, (M)erge the
-two with an external tool, or (D)iff again. A \fI.new\fR byte-identical to the
-installed file is removed automatically. The merge tool is
+/usr/share/vim. A \fI.new\fR byte-identical to the installed file is removed
+automatically; the rest are presented for resolution. First a single
+.I bulk
+choice applies to all of them at once, slackpkg\-style:
+.RB (K)eep
+the current files and leave every \fI.new\fR in place to deal with later,
+.RB (O)verwrite
+all installed files with the new versions (the old file is saved alongside with
+a \fI.orig\fR suffix),
+.RB (R)emove
+every \fI.new\fR and keep your current files, or
+.RB (P)rompt
+one by one (the default). When prompting, each file shows a coloured unified
+diff against the installed copy and you choose to (K)eep both and decide later,
+(O)verwrite the installed file (the old one saved as \fI.orig\fR), (R)emove just
+the \fI.new\fR, (M)erge the two with an external tool, or (D)iff again. The merge
+tool is
 .B vimdiff
 by default and may be overridden with the
 .B SLACKER_MERGE
-environment variable. After
+environment variable. With
+.B \-\-yes
+the current configs are kept and the \fI.new\fR files removed, non-interactively.
+After
 .B upgrade-all
 any pending \fI.new\fR files \(em both newly installed and pre-existing \(em are
 listed with a reminder to run this command.
@@ -335,7 +397,9 @@ and a quarantine marker when a repo is frozen.
 Health\-check the whole setup and report whether slacker is correctly
 configured and what to do next: active mirror and whether it is up to date with
 the upstream master, repos and priorities, verification policy, imported/pinned
-GPG keys, metadata freshness, blacklist, the sources of installed packages, and
+GPG keys, metadata freshness, whether every repository targets the same
+Slackware release as the running system, blacklist, the sources of installed
+packages, and
 \(em when online \(em reachability and pending updates. When your mirror is more
 than 48 hours behind upstream it says so and points you at
 .BR find-mirror .
@@ -620,6 +684,17 @@ and
 marked
 .IR [blacklisted] .
 .TP
+.I /etc/slacker/distro-upgrade.conf
+Optional. Sets
+.B DISTRO_UPGRADE_MIRROR
+to a local source for
+.BR upgrade-dist :
+a local copy of the target release tree (\fIfile://\fR or \fIhttp://\fR), an NFS
+clone, or a mounted installation ISO. When set, the distribution upgrade is
+driven from this source instead of the network; slacker validates that it
+matches the requested target and is reachable before the point of no return.
+Absent or empty, \fIupgrade-dist\fR uses the configured mirrors as usual.
+.TP
 .I /etc/slacker/templates/
 Generated and user\-created template files.
 .SH DEPENDENCIES
@@ -724,6 +799,25 @@ to re\-check on demand. Quarantine state is shown by
 .B list-repos
 and
 .BR status .
+.PP
+.B Release matching.
+A GPG or checksum signature authenticates
+.I who
+built a package, not
+.I "which Slackware release"
+it targets, so a repository left pointing at the wrong release (for example a
+\-current third\-party repo still active on a 15.0 system) can authenticate
+cleanly yet install packages that break the system. Before any install or
+upgrade,
+.B slacker
+therefore refuses a package whose source repository targets a different release
+than the running system, naming the offenders;
+.B status
+reports the same mismatch. Pass
+.B \-\-yes
+to override when you are sure. A distribution upgrade
+.RB ( upgrade-dist )
+changes the release on purpose and is not subject to this guard.
 .SH EXIT STATUS
 .TP
 .B 0

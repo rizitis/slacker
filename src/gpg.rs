@@ -15,9 +15,46 @@ use crate::config::Repo;
 use crate::download;
 use crate::repo;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 const GPG_KEY_FILE: &str = "GPG-KEY";
+
+/// The GnuPG binary to use. Slackware 15.0 ships GnuPG 1.4 as `gpg` (which lacks
+/// `--import-options show-only` and other 2.x features we rely on), while GnuPG
+/// 2.x is available there as `gpg2`. Prefer `gpg2` when present, otherwise fall
+/// back to `gpg`. Detected once and cached for the life of the process. This
+/// matters for upgrade-dist too: a 15.0 system starts on GnuPG 1.4, so all key
+/// handling must keep working there.
+fn gpg_bin() -> &'static str {
+    static BIN: OnceLock<&'static str> = OnceLock::new();
+    BIN.get_or_init(|| if gpg2_present() { "gpg2" } else { "gpg" })
+}
+
+fn gpg2_present() -> bool {
+    Command::new("gpg2")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Pull 40-hex key fingerprints out of gpg `--with-colons` output (`fpr:` records).
+fn parse_fpr_colons(text: &str) -> Vec<String> {
+    let mut fprs: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("fpr:") {
+            // fpr:::::::::<FINGERPRINT>:
+            let fpr = rest.trim_matches(':').to_uppercase();
+            if fpr.len() == 40 && fpr.chars().all(|c| c.is_ascii_hexdigit()) && !fprs.contains(&fpr) {
+                fprs.push(fpr);
+            }
+        }
+    }
+    fprs
+}
 
 fn keyring_dir(cache_root: &Path) -> PathBuf {
     cache_root.join("gpg")
@@ -82,24 +119,28 @@ impl ImportError {
 /// Read the fingerprint(s) contained in a key file WITHOUT importing it, using
 /// gpg's show-only mode. Reliable even if the key is already in the keyring.
 fn fingerprints_in_keyfile(dir: &Path, key_path: &Path) -> Result<Vec<String>, String> {
-    let out = Command::new("gpg")
+    let bin = gpg_bin();
+    // Preferred path (GnuPG 2.x): list the keys in the file without importing.
+    let out = Command::new(bin)
         .args(["--homedir", &dir.to_string_lossy(), "--batch", "--with-colons"])
         .args(["--import-options", "show-only", "--import"])
         .arg(key_path)
         .output()
-        .map_err(|e| format!("failed to run gpg: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut fprs: Vec<String> = Vec::new();
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("fpr:") {
-            // fpr:::::::::<FINGERPRINT>:
-            let fpr = rest.trim_matches(':').to_uppercase();
-            if fpr.len() == 40 && fpr.chars().all(|c| c.is_ascii_hexdigit()) && !fprs.contains(&fpr)
-            {
-                fprs.push(fpr);
-            }
-        }
+        .map_err(|e| format!("failed to run {bin}: {e}"))?;
+    let mut fprs = parse_fpr_colons(&String::from_utf8_lossy(&out.stdout));
+
+    // Fallback for GnuPG 1.4 (no `--import-options show-only`): read the
+    // fingerprint directly with `--with-fingerprint`, which 1.x and 2.x both
+    // accept and which also does not import the key.
+    if fprs.is_empty() {
+        let out = Command::new(bin)
+            .args(["--homedir", &dir.to_string_lossy(), "--batch", "--with-colons", "--with-fingerprint"])
+            .arg(key_path)
+            .output()
+            .map_err(|e| format!("failed to run {bin}: {e}"))?;
+        fprs = parse_fpr_colons(&String::from_utf8_lossy(&out.stdout));
     }
+
     if fprs.is_empty() {
         return Err("no usable public key found in the repo's GPG-KEY".into());
     }
@@ -143,11 +184,11 @@ pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, Impo
     }
 
     // Import the key into the keyring for real (idempotent; gpg merges).
-    let out = Command::new("gpg")
+    let out = Command::new(gpg_bin())
         .args(["--homedir", &dir.to_string_lossy(), "--batch", "--import"])
         .arg(&key_path)
         .output()
-        .map_err(|e| ImportError::Other(format!("failed to run gpg: {e}")))?;
+        .map_err(|e| ImportError::Other(format!("failed to run {}: {e}", gpg_bin())))?;
     if !out.status.success() {
         return Err(ImportError::Other(format!("gpg --import failed for repo '{}'", repo_.name)));
     }
@@ -196,12 +237,12 @@ fn verify_against_pin(
         return Ok(Verify::NoSignature);
     }
     let dir = keyring_dir(cache_root);
-    let out = Command::new("gpg")
+    let out = Command::new(gpg_bin())
         .args(["--homedir", &dir.to_string_lossy(), "--batch", "--status-fd", "1", "--verify"])
         .arg(sig)
         .arg(data)
         .output()
-        .map_err(|e| format!("failed to run gpg: {e}"))?;
+        .map_err(|e| format!("failed to run {}: {e}", gpg_bin()))?;
     let status = String::from_utf8_lossy(&out.stdout);
 
     if status.lines().any(|l| l.starts_with("[GNUPG:] BADSIG")) {

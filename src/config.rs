@@ -141,6 +141,12 @@ pub struct Config {
     /// check-updates, so its historical (older) packages cannot leak into the
     /// normal priority model.
     pub cumulative_url: String,
+    /// Optional local mirror used as the SOURCE for `upgrade-dist`
+    /// (DISTRO_UPGRADE_MIRROR in `distro-upgrade.conf`). When set, a distribution
+    /// upgrade pulls the target release from here — a local http/file mirror, an
+    /// NFS clone, or a mounted install ISO — instead of re-pointing the existing
+    /// remote mirror. None = normal remote behaviour. Used ONLY by upgrade-dist.
+    pub distro_upgrade_mirror: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +252,14 @@ impl Config {
         // packages. Revert-only source; never used by update/upgrade/install.
         let cumulative_url = parse_cumulative_url(conf.get("CUMULATIVE_URL").map(String::as_str));
 
+        // DISTRO_UPGRADE_MIRROR: optional local source for upgrade-dist, kept in
+        // its own `distro-upgrade.conf` so the (rare, deliberate) local-mirror /
+        // ISO dist setup is separate from everyday config. Absent file or empty
+        // value => None => normal remote dist.
+        let du_conf = parse_keyvals(&read_optional(&dir.join("distro-upgrade.conf"))?);
+        let distro_upgrade_mirror =
+            parse_distro_upgrade_mirror(du_conf.get("DISTRO_UPGRADE_MIRROR").map(String::as_str));
+
         // ARCH is normally auto-detected from the installed system, the way
         // slackpkg does. It is only set in slacker.conf to force a specific
         // architecture (e.g. cross/ARM setups).
@@ -278,6 +292,7 @@ impl Config {
             max_parallel,
             revert_enabled,
             cumulative_url,
+            distro_upgrade_mirror,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -773,10 +788,35 @@ fn parse_cumulative_url(raw: Option<&str>) -> String {
         .to_string()
 }
 
+/// Parse a `DISTRO_UPGRADE_MIRROR` value: an optional local mirror base URL for
+/// upgrade-dist, with any trailing slash trimmed. None when absent or empty (the
+/// common case — normal remote dist). Pure, for unit testing. The URL is NOT
+/// otherwise validated here; upgrade-dist checks reachability and the target
+/// release before the point of no return.
+fn parse_distro_upgrade_mirror(raw: Option<&str>) -> Option<String> {
+    raw.map(|s| s.trim().trim_end_matches('/'))
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn distro_upgrade_mirror_parse() {
+        assert_eq!(parse_distro_upgrade_mirror(None), None);
+        assert_eq!(parse_distro_upgrade_mirror(Some("")), None);
+        assert_eq!(parse_distro_upgrade_mirror(Some("   ")), None);
+        assert_eq!(
+            parse_distro_upgrade_mirror(Some("file:///mnt/iso/")),
+            Some("file:///mnt/iso".to_string())
+        );
+        assert_eq!(
+            parse_distro_upgrade_mirror(Some("  http://nas/slackware64-current/  ")),
+            Some("http://nas/slackware64-current".to_string())
+        );
+    }
     #[test]
     fn keyvals_and_comments() {
         let m = parse_keyvals("# c\nARCH = x86_64  # inline\nCACHE_DIR=\"/var/cache/slacker\"\n\n");

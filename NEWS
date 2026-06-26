@@ -1,9 +1,15 @@
-
+Version Beta 0.8.0
+=====
+Update: wiki
+New: add cmd: upgrade-dist (upgrade slackware installation from stable to new stable or current but downgrade)
+New: add distro-upgrade.conf file
+Update: Cargo.toml file, Slacker stop using native-tls / system OpenSSL
+Add: Release status security table (Do not install packages from 3rd repos when release-mismatch)
 ---
 
 Version Beta 0.7.2
 =====
-New: add cmf: slacker find-mirror - it find a VALID and fast mirror according to your location.
+New: add cmd: slacker find-mirror - it find a VALID and fast mirror according to your location.
 New: add Freshness in status command that check if your mirror is in sync with upstream (osuosl.org)
 New: add cmd: slacker unfrozen <pkg-*>
 New: add cmd: slacker revert-pkg <pkg_name> (only for slackware-current) using slackware.uk/cumulative as repo hardcoded

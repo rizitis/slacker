@@ -3,6 +3,7 @@
 
 mod changelog;
 mod config;
+mod dist;
 mod download;
 mod gpg;
 mod history;
@@ -117,6 +118,29 @@ enum Cmd {
     },
     /// Upgrade every installed package that has a newer revision.
     UpgradeAll,
+    /// Distribution upgrade: migrate a Slackware 15.0 system to -current (or to
+    /// the next stable). UNLIKE every other command it deliberately ignores
+    /// source priority and the blacklist and takes the target distribution's
+    /// version of every package.
+    ///
+    /// TARGET is where you are going, not where you are: `current` for the
+    /// rolling release, or a newer stable version like `15.1`. The running
+    /// release is read from /etc/os-release; the target comes from this argument
+    /// (not your mirror), and upgrade-dist re-points the mirror and repos itself.
+    ///
+    /// Allowed directions only: 15.0 -> -current, and 15.0 -> a newer stable.
+    /// Every other direction (running on -current, going backward, an unknown
+    /// release) is refused. After a typed point-of-no-return confirmation it
+    /// writes an escape-kit template, re-points the mirror and every mirror/
+    /// subtree repo, comments out un-re-pointable third-party repos, empties the
+    /// blacklist, then upgrades every installed package to the target (core
+    /// first, the GnuPG chain last), runs install-new + clean-system + a second
+    /// pass, and ends with a kernel/boot reminder. --dry-run shows it all and
+    /// changes nothing; --yes runs non-interactively.
+    UpgradeDist {
+        /// Where to upgrade TO: `current` or a newer stable version (e.g. `15.1`).
+        target: String,
+    },
     /// Install every package the selected repos provide that isn't already
     /// installed — the "fill what's missing" counterpart to `install @repo`:
     /// catches packages new to the distribution and ones you removed, correct
@@ -216,7 +240,30 @@ enum Cmd {
     DistrustRepo { name: String },
 }
 
+/// Restore the default SIGPIPE disposition (SIG_DFL) on Unix. Rust sets SIGPIPE
+/// to SIG_IGN at startup, which turns a closed downstream pipe into an EPIPE that
+/// `println!` then PANICS on ("failed printing to stdout") — e.g.
+/// `slacker install x --dry-run | head` aborts with a panic once `head` exits.
+/// Resetting to SIG_DFL makes the process terminate quietly on a broken pipe,
+/// the normal Unix behaviour. Done with a raw libc `signal` call so no extra
+/// crate dependency is pulled in (libc is always linked).
+#[cfg(unix)]
+fn restore_default_sigpipe() {
+    extern "C" {
+        fn signal(signum: core::ffi::c_int, handler: usize) -> usize;
+    }
+    const SIGPIPE: core::ffi::c_int = 13; // Linux/glibc
+    const SIG_DFL: usize = 0;
+    unsafe {
+        signal(SIGPIPE, SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_default_sigpipe() {}
+
 fn main() -> ExitCode {
+    restore_default_sigpipe();
     let cli = Cli::parse();
     match run(&cli) {
         Ok(Outcome::Ok) => ExitCode::SUCCESS,
@@ -273,6 +320,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::RevertPkg { name } => cmd_revert_pkg(cli, &cfg, name),
         Cmd::Download { patterns, output } => cmd_download(cli, &cfg, patterns, output.as_deref()),
         Cmd::UpgradeAll => cmd_upgrade_all(cli, &cfg),
+        Cmd::UpgradeDist { target } => cmd_upgrade_dist(cli, &cfg, target),
         Cmd::InstallNew { repos } => cmd_install_new(cli, &cfg, repos),
         Cmd::CleanSystem => cmd_clean_system(cli, &cfg),
         Cmd::CleanCache { repos } => cmd_clean_cache(cli, &cfg, repos),
@@ -426,6 +474,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::RevertPkg { .. } => "revert-pkg",
         Cmd::Download { .. } => "download",
         Cmd::UpgradeAll => "upgrade-all",
+        Cmd::UpgradeDist { .. } => "upgrade-dist",
         Cmd::InstallNew { .. } => "install-new",
         Cmd::CleanSystem => "clean-system",
         Cmd::CleanCache { .. } => "clean-cache",
@@ -454,7 +503,15 @@ fn confirm(prompt: &str, assume_yes: bool) -> bool {
     if assume_yes {
         return true;
     }
-    print!("{} ", ui::blue(&format!("{prompt} [y/N]")));
+    print!(
+        "{} {}{}{}{}{} ",
+        ui::blue(prompt),
+        ui::blue("["),
+        ui::white("y"),
+        ui::blue("/"),
+        ui::white("N"),
+        ui::blue("]")
+    );
     std::io::stdout().flush().ok();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
@@ -1280,10 +1337,150 @@ fn report_batch_failures(
 /// best-effort — a package that fails to download/verify is skipped (its installed
 /// version left intact) and reported at the end, rather than aborting the whole
 /// batch. A package that fails GPG/md5 verification is never installed.
-fn execute_plan(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
+/// True if `name` is a boot-critical kernel package — upgrading it means the
+/// bootloader and (if used) the initrd must be refreshed before the next reboot,
+/// or the machine may not boot.
+fn is_kernel_pkg(name: &str) -> bool {
+    name.starts_with("kernel-generic")
+        || name.starts_with("kernel-huge")
+        || name == "kernel-modules"
+        || name.starts_with("kernel-modules-")
+}
+
+/// After a plan that upgraded/installed a kernel, remind the user to refresh the
+/// bootloader and initrd before rebooting (Slackware does not do this
+/// automatically). No-op if the plan touched no kernel package.
+fn kernel_reboot_reminder(plan: &[PlanItem]) {
+    if !plan.iter().any(|it| is_kernel_pkg(&it.pkg.id.name)) {
+        return;
+    }
+    println!();
+    println!("{}", ui::yellow("A kernel package was upgraded."));
+    println!(
+        "  {}",
+        ui::white(
+            "Before rebooting: update the bootloader, and if you use an initrd rebuild it (mkinitrd)."
+        )
+    );
+    println!(
+        "  {}",
+        ui::dim(
+            "LILO: run `lilo`  |  ELILO/UEFI: `eliloconfig`  |  GRUB: regenerate grub.cfg  \
+             |  keep the previous kernel in the menu as a fallback"
+        )
+    );
+}
+
+/// Detect the Slackware release a repo URL targets, for the release-mismatch
+/// guard. First the precise `slackware{arch}-<suffix>` segment (official tree /
+/// conraid); failing that, a bare `current` segment or a clean `X.Y` version
+/// segment (e.g. alienbob's `sbrepos/current/x86_64` or `.../15.0/...`). None
+/// when the URL carries no release token (SBo and other release-agnostic repos)
+/// — those are never flagged.
+fn repo_release_token(url: &str) -> Option<dist::Release> {
+    if let Some(r) = dist::parse_release_from_url(url) {
+        return Some(r);
+    }
+    for seg in url.split(['/', '\\']) {
+        if seg.eq_ignore_ascii_case("current") {
+            return Some(dist::Release::Current);
+        }
+        if is_release_version_segment(seg) {
+            return Some(dist::Release::Stable(seg.to_string()));
+        }
+    }
+    None
+}
+
+/// A clean `X.Y` version path segment (e.g. `15.0`, `14.2`), used only to spot a
+/// stable-release directory in a third-party repo URL. Requires exactly one dot
+/// with digits on both sides, so bare integers and longer dotted strings (a
+/// package version like `3.0.23`) are NOT mistaken for a release.
+fn is_release_version_segment(s: &str) -> bool {
+    let mut parts = s.split('.');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(a), Some(b), None) => {
+            !a.is_empty()
+                && !b.is_empty()
+                && a.bytes().all(|c| c.is_ascii_digit())
+                && b.bytes().all(|c| c.is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
+/// The running system's release, from `/etc/os-release`. None if it cannot be
+/// determined (then the release-mismatch guard stays silent — fail-open).
+fn system_release() -> Option<dist::Release> {
+    dist::parse_release_from_os(
+        system::version_id().as_deref(),
+        system::version_codename().as_deref(),
+    )
+}
+
+/// Refuse a plan that would install/upgrade packages from a repo built for a
+/// DIFFERENT Slackware release than the running system (e.g. an alienbob
+/// `-current` repo left active on a 15.0 system). GPG/md5 authenticate WHO built
+/// a package, not WHICH RELEASE it targets, so this is the only thing standing
+/// between the user and a release-mixing foot-gun that can break the system.
+/// HARD REFUSE unless `allow` (passed from `--yes`). Suppressed for upgrade-dist,
+/// which has its own execution path and deliberately changes release.
+fn enforce_release_match(cfg: &Config, plan: &[PlanItem], allow: bool) -> Result<(), String> {
+    let Some(sys) = system_release() else {
+        return Ok(()); // can't tell the system release — don't block
+    };
+    let mut bad: Vec<(String, String, String)> = Vec::new(); // (pkg, repo, repo_release)
+    for it in plan {
+        let Some(r) = cfg.repo_by_name(&it.pkg.repo) else {
+            continue;
+        };
+        if let Some(rel) = repo_release_token(&r.url) {
+            if rel != sys {
+                bad.push((it.pkg.id.name.clone(), r.name.clone(), dist::show(&rel)));
+            }
+        }
+    }
+    if bad.is_empty() {
+        return Ok(());
+    }
+    let sys_show = dist::show(&sys);
+    println!(
+        "{}",
+        ui::red(&format!(
+            "release mismatch: this system is Slackware {sys_show}, but these packages come from \
+             a repo built for a different release:"
+        ))
+    );
+    for (pkg, repo, rel) in &bad {
+        println!(
+            "  {}  {}  {}",
+            ui::white(pkg),
+            ui::cyan(repo),
+            ui::red(&format!("(targets {rel})"))
+        );
+    }
+    if allow {
+        println!(
+            "{}",
+            ui::yellow("--yes given: proceeding despite the release mismatch (at your own risk).")
+        );
+        return Ok(());
+    }
+    Err(format!(
+        "refusing to mix releases — installing {}-release packages on a {sys_show} system can \
+         break it. Point the repo at the {sys_show} tree, or pass --yes to override.",
+        bad.first().map(|b| b.2.as_str()).unwrap_or("another"),
+    ))
+}
+
+fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -> Result<(), String> {
     if plan.is_empty() {
         return Ok(());
     }
+
+    // Release-mismatch guard (fail-closed unless --yes). Runs before any download
+    // or install. upgrade-dist does NOT use execute_plan, so it is unaffected.
+    enforce_release_match(cfg, plan, allow_release_mismatch)?;
 
     // Resolve repo + safe destination for every item first. A repo-lookup miss
     // or an unsafe (path-traversal) filename is a hard error, not a transient
@@ -1311,6 +1508,7 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
             InstallAction::Upgrade => system::upgrade_only(&it.dest)?,
             InstallAction::Reinstall => system::reinstall(&it.dest)?,
         }
+        kernel_reboot_reminder(plan);
         return Ok(());
     }
 
@@ -1343,6 +1541,7 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
     }
 
     report_batch_failures(plan.len(), installed, &dl_failed, &install_failed);
+    kernel_reboot_reminder(plan);
     Ok(())
 }
 
@@ -3083,13 +3282,117 @@ fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
     status_full(&cfg)
 }
 
-/// Upstream -current mirror that every other mirror syncs from. Used only to
-/// compare the PACKAGES.TXT header timestamp against the user's chosen official
-/// mirror, so plain http is acceptable here — no package data is ever trusted
-/// from it, only a timestamp is read. -current only; stable updates live under
-/// patches/ and would need a configurable URL (deferred while -current-only).
-pub(crate) const UPSTREAM_CURRENT_PACKAGES: &str =
-    "http://ftp.osuosl.org/pub/slackware/slackware64-current/PACKAGES.TXT";
+/// The Slackware distribution directory segment for this system, e.g.
+/// `slackware64-current`, `slackware64-15.0`, `slackware-15.0`. The arch prefix
+/// is `slackware64` on x86_64 and `slackware` otherwise (the official 32-bit
+/// tree); the release is `current` on -current, else the numeric `VERSION_ID`
+/// read from /etc/os-release (e.g. `15.0`). Returns None when the release cannot
+/// be determined (not -current and no VERSION_ID), so callers fail open rather
+/// than build a wrong path.
+///
+/// This is the single place that turns "what release/arch am I on" into a
+/// distribution path; anywhere slacker would otherwise hardcode
+/// `slackware64-current` should derive it here so a non-current system gets its
+/// own version substituted. (Slackware ARM uses slackwarearm/slackwareaarch64
+/// and lives on different mirrors; only the x86 trees are reachable on the
+/// osuosl reference, so a wrong ARM path simply fails open below.)
+pub(crate) fn slackware_dir(arch: &str) -> Option<String> {
+    slackware_dir_parts(
+        arch,
+        system::version_codename().as_deref(),
+        system::version_id().as_deref(),
+    )
+}
+
+/// Pure core of [`slackware_dir`], split out so the release/arch logic is
+/// unit-testable without reading /etc/os-release.
+fn slackware_dir_parts(arch: &str, codename: Option<&str>, version_id: Option<&str>) -> Option<String> {
+    let prefix = if arch == "x86_64" { "slackware64" } else { "slackware" };
+    let release = if is_current_codename(codename) {
+        "current".to_string()
+    } else {
+        // Stable: the numeric VERSION_ID. -current is identified by the codename
+        // (a real -current reports VERSION_ID=15.0 with NO suffix), so any
+        // trailing development `+` seen here is spurious — e.g. a hand-made
+        // os-release that wrote "15.0+" — and is part of no mirror directory.
+        // Strip it: slackware64-15.0, never slackware64-15.0+.
+        let v = version_id?
+            .trim()
+            .trim_matches('"')
+            .trim_end_matches('+')
+            .trim();
+        if v.is_empty() {
+            return None;
+        }
+        v.to_string()
+    };
+    Some(format!("{prefix}-{release}"))
+}
+
+/// -current is marked by `VERSION_CODENAME=current` in /etc/os-release; that
+/// codename is the reliable signal. A real -current reports VERSION_ID=15.0 with
+/// no suffix, while stable releases carry a different codename (e.g. "stable").
+pub(crate) fn is_current_codename(codename: Option<&str>) -> bool {
+    codename
+        .map(|c| c.trim().eq_ignore_ascii_case("current"))
+        .unwrap_or(false)
+}
+
+/// Upstream reference PACKAGES.TXT (osuosl) for THIS system's release and arch,
+/// used only to compare the header timestamp against the user's chosen official
+/// mirror — no package data is ever trusted from it, only a timestamp is read,
+/// so plain http is acceptable. None when the release can't be determined.
+///
+/// NOTE: on stable this points at the release's ROOT PACKAGES.TXT (the frozen
+/// snapshot); security updates land under patches/, so a fully meaningful stable
+/// freshness check would read patches/PACKAGES.TXT — a later refinement.
+pub(crate) fn upstream_packages_url(arch: &str) -> Option<String> {
+    slackware_dir(arch).map(|dir| format!("http://ftp.osuosl.org/pub/slackware/{dir}/PACKAGES.TXT"))
+}
+
+/// osuosl reference PACKAGES.TXT for the FRESHNESS check. On -current the main
+/// tree moves, so we read the release root; on STABLE the root is a frozen
+/// snapshot and the `patches/` subtree is what actually changes when security
+/// updates land, so we read patches/PACKAGES.TXT. `dir` is the
+/// `slackware{64}-{release}` segment.
+fn osuosl_freshness_url(dir: &str, is_current: bool) -> String {
+    let sub = if is_current { "" } else { "/patches" };
+    format!("http://ftp.osuosl.org/pub/slackware/{dir}{sub}/PACKAGES.TXT")
+}
+
+/// The (upstream, your-mirror) PACKAGES.TXT pair the freshness check compares,
+/// or None if the release/arch can't be determined or there is no official
+/// mirror. -current → the main-tree root on both sides; STABLE → the `patches/`
+/// tree on both sides (the frozen root never moves; patches/ is where the server
+/// publishes security updates, so that is the timestamp that signals freshness).
+/// On stable the "your" side prefers a configured `patches` subtree repo, falling
+/// back to deriving patches/ from the official mirror base.
+fn freshness_urls(cfg: &Config) -> Option<(String, String)> {
+    let official = cfg.repos.iter().find(|r| r.official)?;
+    // Freshness checks YOUR MIRROR, so key everything off the mirror's own
+    // release (read from its URL), not the running system's os-release — the two
+    // can disagree mid dist-upgrade (mirror already re-pointed to -current while
+    // os-release still says 15.0), and comparing across releases is meaningless.
+    let mirror_release = dist::parse_release_from_url(&official.url)?;
+    let is_current = matches!(mirror_release, dist::Release::Current);
+    let prefix = if cfg.arch == "x86_64" { "slackware64" } else { "slackware" };
+    let dir = format!("{prefix}-{}", dist::release_suffix(&mirror_release));
+    let upstream = osuosl_freshness_url(&dir, is_current);
+
+    let mine = if is_current {
+        official.join_url(repo::PACKAGES_TXT)
+    } else {
+        match cfg.repos.iter().find(|r| r.subtree && r.url.contains("/patches")) {
+            Some(p) => p.join_url(repo::PACKAGES_TXT),
+            None => format!(
+                "{}/patches/{}",
+                official.url.trim_end_matches('/'),
+                repo::PACKAGES_TXT
+            ),
+        }
+    };
+    Some((upstream, mine))
+}
 
 /// A mirror lagging upstream by more than this is reported as stale.
 pub(crate) const FRESHNESS_MAX_LAG_SECS: i64 = 48 * 3600;
@@ -3187,12 +3490,13 @@ fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, String> {
 
     // Upstream reference for freshness; fail-open — if osuosl is unreachable we
     // still rank by speed, just without the freshness filter. Keep the raw line
-    // too, so we can show upstream's own timestamp as proof of the check.
-    let upstream_line = download::first_line(
-        UPSTREAM_CURRENT_PACKAGES,
-        std::time::Duration::from_secs(FRESHNESS_TIMEOUT_SECS),
-    )
-    .ok();
+    // too, so we can show upstream's own timestamp as proof of the check. arch
+    // comes from the (optional) config; find-mirror is -current only, so the
+    // release resolves to `current` here.
+    let arch = cfg.as_ref().map(|c| c.arch.as_str()).unwrap_or("x86_64");
+    let upstream_line = upstream_packages_url(arch).and_then(|u| {
+        download::first_line(&u, std::time::Duration::from_secs(FRESHNESS_TIMEOUT_SECS)).ok()
+    });
     let upstream = upstream_line.as_deref().and_then(parse_packages_date);
 
     let probed = mirrors::probe_all(&candidates);
@@ -3307,39 +3611,36 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     }
 
     // Mirror freshness vs upstream. Every other row reads local state; this is
-    // the one that touches the network. It is scoped to an official mirror on
-    // -current (the only case with a known upstream), uses a short timeout, and
-    // FAILS OPEN: an unreachable or unparseable mirror never yields a false
-    // "stale" verdict and never blocks — the official repo keeps working either
-    // way. Stable would compare patches/PACKAGES.TXT against a configurable URL
-    // and is deferred while slacker is -current-only.
-    if let Some(off) = cfg.repos.iter().find(|r| r.official) {
-        if system::version_codename().as_deref() == Some("current") {
-            let t = std::time::Duration::from_secs(FRESHNESS_TIMEOUT_SECS);
-            let up = download::first_line(UPSTREAM_CURRENT_PACKAGES, t)
-                .ok()
-                .and_then(|l| parse_packages_date(&l));
-            let mine = download::first_line(&off.join_url(repo::PACKAGES_TXT), t)
-                .ok()
-                .and_then(|l| parse_packages_date(&l));
-            match (up, mine) {
-                (Some(up), Some(mine)) if mirror_is_stale(up, mine) => srow(
-                    &warn,
-                    "Freshness",
-                    &ui::yellow(&format!(
-                        "your mirror is {} behind upstream — run `slacker find-mirror`",
-                        humanize_lag(up - mine)
-                    )),
-                ),
-                (Some(_), Some(_)) => {
-                    srow(&ok, "Freshness", &ui::dim("mirror is in sync with upstream"))
-                }
-                _ => srow(
-                    &info,
-                    "Freshness",
-                    &ui::dim("could not check (upstream or mirror unreachable)"),
-                ),
+    // the one that touches the network. On -current we compare the main-tree
+    // PACKAGES.TXT; on STABLE the release root is frozen, so we compare the
+    // patches/ PACKAGES.TXT — that is the timestamp that moves when the server
+    // publishes security updates. Short timeout, FAILS OPEN: an unreachable or
+    // unparseable side never yields a false "stale" verdict and never blocks.
+    if let Some((up_url, mine_url)) = freshness_urls(cfg) {
+        let t = std::time::Duration::from_secs(FRESHNESS_TIMEOUT_SECS);
+        let up = download::first_line(&up_url, t)
+            .ok()
+            .and_then(|l| parse_packages_date(&l));
+        let mine = download::first_line(&mine_url, t)
+            .ok()
+            .and_then(|l| parse_packages_date(&l));
+        match (up, mine) {
+            (Some(up), Some(mine)) if mirror_is_stale(up, mine) => srow(
+                &warn,
+                "Freshness",
+                &ui::yellow(&format!(
+                    "your mirror is {} behind upstream — run `slacker find-mirror`",
+                    humanize_lag(up - mine)
+                )),
+            ),
+            (Some(_), Some(_)) => {
+                srow(&ok, "Freshness", &ui::dim("mirror is in sync with upstream"))
             }
+            _ => srow(
+                &info,
+                "Freshness",
+                &ui::dim("could not check (upstream or mirror unreachable)"),
+            ),
         }
     }
 
@@ -3372,6 +3673,33 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
                 insecure.join(", ")
             )),
         );
+    }
+
+    // Release match: any active repo built for a different Slackware release than
+    // this system is a foot-gun (release-mixing) — installing from it is refused.
+    if let Some(sys) = system_release() {
+        let mism: Vec<String> = cfg
+            .repos
+            .iter()
+            .filter_map(|r| {
+                repo_release_token(&r.url)
+                    .filter(|rel| *rel != sys)
+                    .map(|rel| format!("{} → {}", r.name, dist::show(&rel)))
+            })
+            .collect();
+        if mism.is_empty() {
+            srow(&ok, "Repo release", &ui::dim(&format!("all match this system ({})", dist::show(&sys))));
+        } else {
+            srow(
+                &warn,
+                "Repo release",
+                &ui::yellow(&format!(
+                    "MISMATCH (installs refused without --yes): {} — system is {}",
+                    mism.join(", "),
+                    dist::show(&sys)
+                )),
+            );
+        }
     }
 
     // Frozen repos: hard (needs trust-repo) vs soft (unreachable, auto-retried)
@@ -3728,7 +4056,11 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     if gpg_missing {
         steps.push("slacker update gpg");
     }
-    if metadata_incomplete {
+    // `update` comes first whenever the local cache is not in step with the
+    // repos: either no metadata yet (fresh/unsynced) OR the online repo has
+    // changes the cache has not pulled (pending). install-new/upgrade-all read
+    // the cache, so it must be refreshed before them.
+    if metadata_incomplete || pending {
         steps.push("slacker update");
     }
     // A fresh/unsynced system, or one with pending changes, installs the newly
@@ -3853,7 +4185,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
         .into_iter()
         .map(|nc| nc.new_file)
         .collect();
-    execute_plan(cfg, &plan)?;
+    execute_plan(cfg, &plan, cli.yes)?;
     report_pending_configs(&before_cfgs);
     Ok(Outcome::Ok)
 }
@@ -3899,7 +4231,7 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
         .into_iter()
         .map(|nc| nc.new_file)
         .collect();
-    execute_plan(cfg, &plan)?;
+    execute_plan(cfg, &plan, cli.yes)?;
     report_pending_configs(&before_cfgs);
     Ok(Outcome::Ok)
 }
@@ -3941,7 +4273,7 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     if !confirm("Proceed with reinstall?", cli.yes) {
         return Ok(Outcome::Ok);
     }
-    execute_plan(cfg, &plan)?;
+    execute_plan(cfg, &plan, cli.yes)?;
     Ok(Outcome::Ok)
 }
 
@@ -4341,6 +4673,1026 @@ fn cmd_download(
     Ok(Outcome::Ok)
 }
 
+/// `upgrade-dist` — GATE ONLY for now.
+/// Core packages that must be upgraded FIRST, serially, in this order: the C
+/// runtime, then the very tools `upgradepkg` relies on to unpack and install the
+/// rest. Doing the whole tree before these are in step is how a dist-upgrade
+/// bricks a system. Both `glibc-solibs` spellings are covered (some releases ship
+/// `aaa_glibc-solibs`).
+const DIST_CRITICAL: &[&str] = &[
+    "aaa_glibc-solibs",
+    "glibc-solibs",
+    "pkgtools",
+    "tar",
+    "xz",
+    "gzip",
+    "findutils",
+];
+
+/// The GnuPG verification toolchain: gnupg(2) and the libraries it links.
+/// These are deferred to the VERY END of the dist upgrade order so the running
+/// `gpg` keeps verifying every other package's per-package signature throughout
+/// the run; if gpg or one of its libraries is replaced mid-run, verification
+/// silently falls back to md5 ("integrity only (no GPG)"). Kept tight to the
+/// GnuPG chain on purpose — extend against the real package .dep if a wider set
+/// is ever needed (e.g. libksba, libgcrypt).
+const DIST_GPG_LAST: &[&str] = &[
+    "gpgme",
+    "libassuan",
+    "libgpg-error",
+    "npth",
+    "gnupg",
+    "gnupg2",
+];
+
+/// Build the dist upgrade set: for every installed package take the TARGET's
+/// winning candidate (`db.resolve` = highest-priority repo, i.e. patches over
+/// slackware after the transform), IGNORING the priority guard — this is the
+/// deliberate dist bypass. blacklist/frozen are already emptied by the transform.
+/// A package the target does not provide (e.g. a now-disabled third-party one) is
+/// left untouched. Returns `(critical, rest)`: the critical set ordered per
+/// `DIST_CRITICAL`, the rest sorted by name.
+fn dist_upgrade_sets(db: &PkgDb, installed: &[pkg::PkgId]) -> (Vec<PlanItem>, Vec<PlanItem>) {
+    let mut by_name: HashMap<String, PlanItem> = HashMap::new();
+    for inst in installed {
+        let Some(avail) = db.resolve(&inst.name) else {
+            continue; // target has no package by this name — leave it as-is
+        };
+        // Already at the target's exact version+build: nothing to do.
+        if avail.id.version == inst.version && avail.id.build == inst.build {
+            continue;
+        }
+        by_name.insert(
+            inst.name.clone(),
+            PlanItem {
+                pkg: avail.clone(),
+                action: InstallAction::Upgrade,
+                dep_for: None,
+                from: Some(format!("{}-{}-{}", inst.version, inst.arch, inst.build)),
+            },
+        );
+    }
+    let mut critical = Vec::new();
+    for name in DIST_CRITICAL {
+        if let Some(it) = by_name.remove(*name) {
+            critical.push(it);
+        }
+    }
+    let mut rest: Vec<PlanItem> = by_name.into_values().collect();
+    rest.sort_by(|a, b| a.pkg.id.name.cmp(&b.pkg.id.name));
+    // Defer the GnuPG verification toolchain (DIST_GPG_LAST) to the very end, so
+    // the working gpg keeps verifying every other package and is only replaced
+    // once nothing else remains to install.
+    let (mut others, gpg_last): (Vec<PlanItem>, Vec<PlanItem>) = rest
+        .into_iter()
+        .partition(|it| !DIST_GPG_LAST.contains(&it.pkg.id.name.as_str()));
+    others.extend(gpg_last);
+    (critical, others)
+}
+
+/// The dist install-new set: every package the OFFICIAL repos (slackware +
+/// patches after the transform) provide that is not currently installed — the
+/// target distribution's newly-added packages. Sorted by name, deduplicated.
+fn dist_install_new(
+    cfg: &Config,
+    db: &PkgDb,
+    installed: &[pkg::PkgId],
+) -> Result<Vec<PlanItem>, String> {
+    let at: Vec<String> = cfg
+        .repos
+        .iter()
+        .filter(|r| r.official)
+        .map(|r| format!("@{}", r.name))
+        .collect();
+    if at.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (matched, _misses) = collect(db, &at)?;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<PlanItem> = Vec::new();
+    for p in matched {
+        if system::is_installed(installed, &p.id.name) || !seen.insert(p.id.name.clone()) {
+            continue;
+        }
+        out.push(PlanItem {
+            pkg: p.clone(),
+            action: InstallAction::Install,
+            dep_for: None,
+            from: None,
+        });
+    }
+    out.sort_by(|a, b| a.pkg.id.name.cmp(&b.pkg.id.name));
+    Ok(out)
+}
+
+/// Non-core packages are downloaded, installed, then DELETED in batches of this
+/// many, so the download cache never has to hold the whole distribution at once
+/// (the disk-full failure mode that bricked a test VM). Core packages are exempt:
+/// they are fetched all together first so a missing core aborts before any
+/// install.
+const DIST_BATCH: usize = 24;
+
+/// Cheap disk gate run BEFORE the point of no return: a full distribution upgrade
+/// needs several GiB, so refuse outright when free space is obviously too low,
+/// before the transform touches anything. Floors only — the precise, plan-aware
+/// check is [`dist_disk_preflight`], after the target metadata is known.
+fn dist_early_disk_gate(cfg: &Config) -> Result<(), String> {
+    const MIN_ROOT_GIB: u64 = 5;
+    const MIN_CACHE_GIB: u64 = 2;
+    let gib = |kb: u64| kb as f64 / 1024.0 / 1024.0;
+    if let Some(kb) = avail_kb(std::path::Path::new("/")) {
+        if kb < MIN_ROOT_GIB * 1024 * 1024 {
+            return Err(format!(
+                "only {:.1} GiB free on / — a distribution upgrade needs at least {} GiB there. \
+                 Free space and re-run (nothing has been changed).",
+                gib(kb),
+                MIN_ROOT_GIB
+            ));
+        }
+    }
+    if let Some(kb) = avail_kb(&cfg.cache_dir) {
+        if kb < MIN_CACHE_GIB * 1024 * 1024 {
+            return Err(format!(
+                "only {:.1} GiB free on the cache partition — need at least {} GiB for staged \
+                 downloads. Free space and re-run (nothing has been changed).",
+                gib(kb),
+                MIN_CACHE_GIB
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Available 1K-blocks on the filesystem holding `path` (POSIX `df -Pk`), or None
+/// if it cannot be determined.
+fn avail_kb(path: &std::path::Path) -> Option<u64> {
+    let out = std::process::Command::new("df").arg("-Pk").arg(path).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    s.lines()
+        .nth(1)?
+        .split_whitespace()
+        .nth(3)?
+        .parse::<u64>()
+        .ok()
+}
+
+/// Plan-aware disk pre-flight that STOPS (returns Err) when there is clearly not
+/// enough room, rather than only warning. Checks two things: that `/` can hold
+/// the genuinely-new packages (install-new, uncompressed) plus headroom, and that
+/// the cache partition can hold at least one download batch (since non-core
+/// downloads are now staged in batches of `DIST_BATCH` and deleted as they go,
+/// the cache never needs the whole tree). Aborting here is safe: the transform is
+/// idempotent, so the user frees space and re-runs.
+fn dist_disk_preflight(
+    cfg: &Config,
+    install_new: &[PlanItem],
+    upgrades: &[PlanItem],
+) -> Result<(), String> {
+    let gib = |kb: u64| kb as f64 / 1024.0 / 1024.0;
+    let new_uncompressed_k: u64 =
+        install_new.iter().filter_map(|it| it.pkg.size_uncompressed_k).sum();
+    let max_compressed_k: u64 = install_new
+        .iter()
+        .chain(upgrades.iter())
+        .filter_map(|it| it.pkg.size_k)
+        .max()
+        .unwrap_or(0);
+    let batch_cache_k = max_compressed_k.saturating_mul(DIST_BATCH as u64);
+    let buffer_k: u64 = 1024 * 1024; // 1 GiB headroom for upgrade churn
+    let need_root_k = new_uncompressed_k + buffer_k;
+
+    println!("{}", ui::blue("Disk space:"));
+    if let Some(kb) = avail_kb(std::path::Path::new("/")) {
+        println!(
+            "  {} /      {:.1} GiB free (need ~{:.1} GiB for new packages + headroom)",
+            ui::dim("·"),
+            gib(kb),
+            gib(need_root_k)
+        );
+        if kb < need_root_k {
+            return Err(format!(
+                "not enough space on / for the new packages: {:.1} GiB free, ~{:.1} GiB needed. \
+                 Free space and re-run `slacker upgrade-dist` (safe to re-run).",
+                gib(kb),
+                gib(need_root_k)
+            ));
+        }
+    }
+    if let Some(kb) = avail_kb(&cfg.cache_dir) {
+        println!(
+            "  {} cache  {:.1} GiB free (staged in batches of {}, ~{:.1} GiB per batch)",
+            ui::dim("·"),
+            gib(kb),
+            DIST_BATCH,
+            gib(batch_cache_k)
+        );
+        if batch_cache_k > 0 && kb < batch_cache_k {
+            return Err(format!(
+                "not enough space on the cache partition for even one download batch: {:.1} GiB \
+                 free, ~{:.1} GiB needed. Free space and re-run.",
+                gib(kb),
+                gib(batch_cache_k)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Outcome of a [`dist_execute`] pass: how many non-core packages failed to
+/// download or install. A pass with ANY failures means the system is only
+/// partially upgraded, so clean-system and the second pass must be skipped (you
+/// never prune a half-upgraded system). Core failures are fatal and return Err
+/// instead, never reaching here.
+struct DistReport {
+    dl_failed: usize,
+    install_failed: usize,
+}
+impl DistReport {
+    fn clean(&self) -> bool {
+        self.dl_failed == 0 && self.install_failed == 0
+    }
+}
+
+/// Drive the install. Core first: fetch+verify ALL core together, abort if any is
+/// missing (system still untouched), then install them serially with a
+/// post-install package-database check, aborting if a core does not actually land
+/// (the disk-full "did not install correctly" case). Then non-core install-new
+/// and the rest, processed in batches that are downloaded, installed and DELETED
+/// as they go so the cache never holds the whole tree; non-core is best-effort
+/// (a failed item is skipped, reported, and never leaves a partial package).
+///
+/// Note we never parse or second-guess pkgtools' exit status — pkgtools is left
+/// exactly as Pat ships it. The safety net is feeding it only verified packages
+/// and confirming the *result* (the DB record) for the core, plus stopping on a
+/// full disk before it can produce a broken install at all.
+fn dist_execute(
+    cfg: &Config,
+    critical: &[PlanItem],
+    install_new: &[PlanItem],
+    upgrades: &[PlanItem],
+) -> Result<DistReport, String> {
+    let noncore: Vec<&PlanItem> = install_new.iter().chain(upgrades.iter()).collect();
+    if critical.is_empty() && noncore.is_empty() {
+        println!("{}", ui::green("Nothing to upgrade or install — already at the target."));
+        return Ok(DistReport { dl_failed: 0, install_failed: 0 });
+    }
+
+    // In a dist we always allow installing a package with no installed
+    // counterpart (renames across releases, e.g. glibc-solibs -> aaa_glibc-solibs),
+    // hence --install-new even for the "upgrade" action.
+    let do_install = |dest: &Path, action: InstallAction| match action {
+        InstallAction::Install => system::install(dest),
+        InstallAction::Upgrade => system::upgrade_install_new(dest),
+        InstallAction::Reinstall => system::reinstall(dest),
+    };
+    let rm_cached = |dest: &Path| {
+        let _ = std::fs::remove_file(dest);
+    };
+
+    let mut dl_failed: Vec<(String, String)> = Vec::new();
+    let mut install_failed: Vec<(String, String)> = Vec::new();
+    let mut done = 0usize;
+
+    // ---- CORE: fetch + verify all together; a missing core aborts now. ----
+    if !critical.is_empty() {
+        let mut citems: Vec<DlItem> = Vec::with_capacity(critical.len());
+        for it in critical {
+            let r = cfg.repo_by_name(&it.pkg.repo).ok_or("internal repo lookup failed")?;
+            let dest = package_dest(cfg, &it.pkg.repo, &it.pkg.filename)?;
+            citems.push(DlItem { repo: r, pkg: &it.pkg, dest });
+        }
+        println!(
+            "{}",
+            ui::blue(&format!(
+                "Core: downloading + verifying {} package(s) before touching the system...",
+                citems.len()
+            ))
+        );
+        let outc = parallel_fetch(cfg, &citems, cfg.max_parallel);
+        let (ready, _dlf) = summarize_outcomes(&outc, citems.len());
+        for (i, it) in citems.iter().enumerate() {
+            if !ready[i] {
+                return Err(format!(
+                    "core package '{}' failed download/verify — aborting before any install \
+                     (system untouched). Fix the mirror/network/disk and re-run \
+                     `slacker upgrade-dist` (safe to re-run).",
+                    it.pkg.id.name
+                ));
+            }
+        }
+        // ---- Phase 0: install core serially, ABORT on failure, with a
+        //      post-install record check. ----
+        println!("{}", ui::blue("Phase 0 — core packages (in order):"));
+        for (i, it) in citems.iter().enumerate() {
+            do_install(&it.dest, critical[i].action).map_err(|e| {
+                format!(
+                    "Phase 0: installing core '{}' failed: {e}\nThe system may be in a partial \
+                     state — resolve this package by hand before continuing.",
+                    it.pkg.id.name
+                )
+            })?;
+            let record = pkg::strip_pkg_ext(&it.pkg.filename);
+            if !system::record_present(&cfg.pkg_db_dir, record) {
+                return Err(format!(
+                    "Phase 0: core '{}' did not register as installed (no package-database \
+                     record '{record}') — the install did not take, most often a full disk. \
+                     Aborting before touching anything else; free space and re-run \
+                     `slacker upgrade-dist` (safe to re-run).",
+                    it.pkg.id.name
+                ));
+            }
+            rm_cached(&it.dest);
+            println!("  {} {}", ui::green("✓"), it.pkg.id.name);
+        }
+    }
+
+    // ---- Non-core: download -> install -> DELETE, in batches, best-effort. ----
+    let n_new = install_new.len();
+    if n_new > 0 {
+        println!("{}", ui::blue(&format!("Phase 1 — install-new ({n_new}):")));
+    }
+    let mut announced_phase2 = false;
+    let total_noncore = noncore.len();
+    let mut idx = 0usize;
+    while idx < total_noncore {
+        let end = (idx + DIST_BATCH).min(total_noncore);
+        let mut batch: Vec<DlItem> = Vec::with_capacity(end - idx);
+        for it in &noncore[idx..end] {
+            let r = cfg.repo_by_name(&it.pkg.repo).ok_or("internal repo lookup failed")?;
+            let dest = package_dest(cfg, &it.pkg.repo, &it.pkg.filename)?;
+            batch.push(DlItem { repo: r, pkg: &it.pkg, dest });
+        }
+        let outc = parallel_fetch(cfg, &batch, cfg.max_parallel);
+        let (ready, mut dlf) = summarize_outcomes(&outc, batch.len());
+        dl_failed.append(&mut dlf);
+        for (b, it) in batch.iter().enumerate() {
+            let gi = idx + b;
+            if !announced_phase2 && gi >= n_new && !upgrades.is_empty() {
+                println!(
+                    "{}",
+                    ui::blue(&format!("Phase 2 — upgrade the rest ({}):", upgrades.len()))
+                );
+                announced_phase2 = true;
+            }
+            if !ready[b] {
+                continue; // download/verify failed; counted in dl_failed
+            }
+            match do_install(&it.dest, noncore[gi].action) {
+                Ok(()) => done += 1,
+                Err(e) => install_failed.push((it.pkg.id.name.clone(), e)),
+            }
+            rm_cached(&it.dest); // free space whether it installed or not
+        }
+        idx = end;
+    }
+
+    let attempted = critical.len() + total_noncore;
+    let ok = critical.len() + done;
+    report_batch_failures(attempted, ok, &dl_failed, &install_failed);
+    Ok(DistReport {
+        dl_failed: dl_failed.len(),
+        install_failed: install_failed.len(),
+    })
+}
+
+/// Resolves the running release (from `/etc/os-release`) and the target release
+/// (the explicit argument). Runs the fail-closed direction check, applies the
+/// repo/blacklist transform, then drives the phased upgrade: refresh metadata for
+/// the target, take the target's version of every package (priority bypassed),
+/// and install core-first, then install-new, then the rest.
+fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome, String> {
+    // Running side: codename is authoritative for -current; VERSION_ID names a
+    // stable. An unrecognisable os-release is a refusal, never a guess.
+    let running = dist::parse_release_from_os(
+        system::version_id().as_deref(),
+        system::version_codename().as_deref(),
+    )
+    .ok_or(
+        "could not identify this system's Slackware release from /etc/os-release \
+         (need VERSION_CODENAME=current or a numeric VERSION_ID)",
+    )?;
+
+    // Target side: the explicit argument — where you are GOING, not where you are.
+    let target = dist::parse_target(target_arg).ok_or_else(|| {
+        format!(
+            "unrecognised upgrade-dist target {target_arg:?}; use `current` or a \
+             newer stable version like `15.1`"
+        )
+    })?;
+
+    // Fail-closed routing: only whitelisted directions return Ok.
+    let route = dist::dist_route(&running, &target)?;
+
+    println!(
+        "{}",
+        ui::blue(&format!(
+            "upgrade-dist: {} -> {}",
+            dist::show(&running),
+            dist::show(&target)
+        ))
+    );
+    match &route {
+        dist::Route::StableToCurrent => println!("  {}", ui::green("route allowed: 15.0 -> -current")),
+        dist::Route::StableToStable(n) => {
+            println!("  {}", ui::green(&format!("route allowed: 15.0 -> {n}")))
+        }
+    }
+
+    // The release-segment rewrite: replace the running release directory with the
+    // target's everywhere it appears in the mirror/repo URLs (so `mirror` and
+    // `mirror/patches` repos auto-follow, and any literal slackware URL is moved).
+    let running_seg = slackware_dir(&cfg.arch)
+        .ok_or("cannot determine this system's slackware release directory")?;
+    let prefix = running_seg
+        .rsplit_once('-')
+        .map(|(p, _)| p)
+        .unwrap_or(running_seg.as_str());
+    let target_seg = format!("{prefix}-{}", dist::release_suffix(&target));
+
+    // Local upgrade-dist source (DISTRO_UPGRADE_MIRROR): when set, the dist pulls
+    // the target release from this local mirror / mounted ISO. Validate it now,
+    // before anything is touched — a bad/missing local mirror STOPS here.
+    let local_mirror = cfg.distro_upgrade_mirror.as_deref();
+    if let Some(m) = local_mirror {
+        dist_validate_local_mirror(m, &target)?;
+    }
+
+    if cli.dry_run {
+        println!("{}", ui::blue("dry run — showing what would change, nothing is touched:"));
+        dist_transform(cfg, &running_seg, &target_seg, local_mirror, true)?;
+        println!(
+            "{}",
+            ui::dim(
+                "  then: disk gate, save an escape kit (config backup + installed-set template), \
+                 refresh metadata, fetch+verify core first, phase0 core \
+                 (glibc-solibs -> pkgtools/tar/xz/gzip/findutils), then install-new and the rest \
+                 staged in batches (download -> install -> delete), clean-system, a second \
+                 upgrade-all+install-new, new-config, status, kernel/boot reminder. \
+                 clean-system and the second pass are skipped if anything fails to install."
+            )
+        );
+        return Ok(Outcome::Ok);
+    }
+
+    // Cheap disk gate BEFORE the point of no return: refuse outright if free
+    // space is obviously too low for a whole-distribution upgrade, before the
+    // transform touches anything.
+    dist_early_disk_gate(cfg)?;
+
+    // ---- POINT OF NO RETURN ----
+    let suffix = dist::release_suffix(&target);
+    let bar = "=".repeat(70);
+    println!("{}", ui::red(&bar));
+    println!("{}", ui::red("  DISTRIBUTION UPGRADE — this is not a normal update."));
+    println!(
+        "{}",
+        ui::red(&format!(
+            "  It re-points your mirror/repos to {target_seg} and will take the target's"
+        ))
+    );
+    println!("{}", ui::red("  version of EVERY package, IGNORING source priority, the blacklist,"));
+    println!("{}", ui::red("  and frozen packages. The blacklist is backed up and emptied."));
+    println!("{}", ui::red("  A half-finished dist-upgrade can leave the system unbootable."));
+    println!("{}", ui::red("  Take a VM snapshot / full backup first."));
+    println!("{}", ui::red(&bar));
+
+    if !cli.yes {
+        print!(
+            "{}",
+            ui::blue(&format!("Type `{suffix}` exactly to proceed (anything else aborts): "))
+        );
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() || line.trim() != suffix {
+            println!("{}", ui::blue("aborted — nothing changed."));
+            return Ok(Outcome::Ok);
+        }
+    }
+
+    // ---- Phase -1: escape kit — runs BEFORE the transform, while the repos
+    // still point at the running release, so the package snapshot resolves the
+    // current (15.0) official set. Backs up the config files verbatim and writes
+    // a template of the installed packages, so there is always something to fall
+    // back on if the upgrade goes wrong. Best-effort: a backup failure warns but
+    // does not stop the upgrade.
+    if let Err(e) = dist_backup(cfg) {
+        println!("{}", ui::yellow(&format!("escape-kit backup incomplete: {e} (continuing)")));
+    }
+
+    // Apply the transform for real.
+    dist_transform(cfg, &running_seg, &target_seg, local_mirror, false)?;
+    println!(
+        "{}",
+        ui::green(&format!("re-pointed mirror/repos to {target_seg}; blacklist backed up + emptied."))
+    );
+
+    // The repos file changed, so re-read the configuration before doing anything
+    // that depends on it (metadata refresh, plan building).
+    let cfg = Config::load_dir(&cfg.config_dir)
+        .map_err(|e| format!("reload config after transform: {e}"))?;
+
+    // Refresh metadata for the target release (the cache still holds the old
+    // release's PACKAGES.TXT until now). The user already committed at the point
+    // of no return, so DON'T show the normal per-repo update menu (which, on
+    // -current, lists "patches updates available" and only confuses the flow).
+    // One clear confirmation, default YES (Enter proceeds), then update all repos
+    // silently.
+    println!(
+        "{}",
+        ui::blue(&format!("Connected to the {} repositories.", dist::show(&target)))
+    );
+    let proceed = if cli.yes {
+        true
+    } else {
+        print!(
+            "{} {}{}{}{}{} ",
+            ui::blue("Proceed with the distribution upgrade?"),
+            ui::blue("["),
+            ui::white("Y"),
+            ui::blue("/"),
+            ui::white("n"),
+            ui::blue("]")
+        );
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok();
+        let t = line.trim().to_lowercase();
+        t.is_empty() || t == "y" || t == "yes" // default YES
+    };
+    if !proceed {
+        println!(
+            "{}",
+            ui::blue(
+                "aborted — the mirror/repos were already re-pointed; restore from the escape kit \
+                 (printed above) to undo."
+            )
+        );
+        return Ok(Outcome::Ok);
+    }
+    // Update ALL active repos non-interactively (best-effort: an empty
+    // current/patches printing FAILED must not abort the dist).
+    let changelog_repo = changelog::changelog_repo(&cfg.repos).map(|r| r.name.clone());
+    let mut up = UpdateOutcomes::default();
+    for r in &cfg.repos {
+        let track = changelog_repo.as_deref() == Some(r.name.as_str());
+        update_one_repo(&cfg, r, track, &mut up);
+    }
+
+    // Build the dist plan against the refreshed cache: the target's version of
+    // every installed package (priority bypassed), plus the target's new packages.
+    let db = PkgDb::load(&cfg)?;
+    let installed = system::installed_packages(&cfg.pkg_db_dir)?;
+    let (critical, upgrades) = dist_upgrade_sets(&db, &installed);
+    let install_new = dist_install_new(&cfg, &db, &installed)?;
+
+    let self_upgrade = critical
+        .iter()
+        .chain(install_new.iter())
+        .chain(upgrades.iter())
+        .any(|it| it.pkg.id.name == env!("CARGO_PKG_NAME"));
+
+    println!(
+        "{}",
+        ui::blue(&format!(
+            "Plan: {} core, {} new, {} other upgrade(s).",
+            critical.len(),
+            install_new.len(),
+            upgrades.len()
+        ))
+    );
+    // Plan-aware disk pre-flight that STOPS if there is clearly not enough room
+    // (safe to re-run: the transform is idempotent).
+    dist_disk_preflight(&cfg, &install_new, &upgrades)?;
+
+    // Download (staged in batches) + install core-first -> install-new -> rest.
+    let report = dist_execute(&cfg, &critical, &install_new, &upgrades)?;
+
+    if report.clean() {
+        // ---- Phase 3: remove packages no longer in the distribution ----
+        // clean-system anchors membership on the OFFICIAL main-tree PACKAGES.TXT
+        // (the full distribution), so an empty current/patches or a patches subset
+        // on N+1 cannot mislead it; it is interactive, so the user reviews the
+        // list (e.g. the now-disabled third-party packages) and confirms before
+        // anything is removed.
+        println!();
+        println!("{}", ui::blue("Phase 3 — remove packages no longer in the distribution:"));
+        cmd_clean_system(cli, &cfg)?;
+
+        // ---- Phase 4: a second upgrade-all + install-new, for certainty ----
+        // After the core upgrades and the clean-up, run the selection once more so
+        // anything that shifted is caught. Normally this finds nothing.
+        println!();
+        println!("{}", ui::blue("Phase 4 — second pass (upgrade-all + install-new) to be sure:"));
+        let db2 = PkgDb::load(&cfg)?;
+        let installed2 = system::installed_packages(&cfg.pkg_db_dir)?;
+        let (critical2, upgrades2) = dist_upgrade_sets(&db2, &installed2);
+        let new2 = dist_install_new(&cfg, &db2, &installed2)?;
+        let _ = dist_execute(&cfg, &critical2, &new2, &upgrades2)?;
+    } else {
+        // Some packages failed to download or install: the system is only
+        // partially upgraded. Skip clean-system and the second pass — pruning a
+        // half-upgraded system is exactly how the test VM proposed deleting live
+        // packages. The transform is idempotent, so re-running after fixing the
+        // cause (usually disk space or a mirror) is safe and resumes cleanly.
+        println!();
+        println!(
+            "{}",
+            ui::yellow(&format!(
+                "{} download and {} install failure(s) — the upgrade is INCOMPLETE.",
+                report.dl_failed, report.install_failed
+            ))
+        );
+        println!(
+            "{}",
+            ui::yellow(
+                "Skipping clean-system and the second pass: a partially-upgraded system must \
+                 not be pruned (it would propose removing packages that simply did not upgrade \
+                 yet). Fix the cause (free disk space / check the mirror) and re-run \
+                 `slacker upgrade-dist` — it is safe to re-run and will resume."
+            )
+        );
+    }
+
+    // ---- Phase 5: merge .new config files ----
+    println!();
+    println!("{}", ui::blue("Phase 5 — config files (.new):"));
+    cmd_new_config(cli)?;
+
+    // ---- Phase 6: final report ----
+    println!();
+    cmd_status(&cfg.config_dir)?;
+
+    // ---- Boot reminder ----
+    println!();
+    println!("{}", ui::green(&format!("Distribution upgrade to {target_seg} complete.")));
+    println!("{}", ui::blue("Before rebooting:"));
+    println!(
+        "  {}",
+        ui::white("rebuild the initrd (mkinitrd) and reinstall the bootloader — lilo, or eliloconfig on UEFI")
+    );
+
+    // If a local mirror / ISO drove the upgrade, the active mirror now points at
+    // that local source — fine for the upgrade just done, but useless for future
+    // updates once it is unmounted/removed. Tell the user to set a remote mirror.
+    if let Some(m) = local_mirror {
+        println!();
+        println!(
+            "{}",
+            ui::yellow(&format!("Your mirror now points at the local source: {m}"))
+        );
+        println!(
+            "  {}",
+            ui::white(
+                "set a remote -current mirror for future updates (uncomment one in `mirrors`, \
+                 or run `slacker find-mirror`), and you can clear DISTRO_UPGRADE_MIRROR."
+            )
+        );
+    }
+
+    if self_upgrade {
+        println!();
+        println!("{}", ui::blue("slacker upgraded itself during the dist-upgrade; re-run it to continue."));
+        return Ok(Outcome::SelfUpgrade);
+    }
+    Ok(Outcome::Ok)
+}
+
+/// Phase -1 escape kit. Before the dist touches anything, save enough to recover:
+///  * the config files (`slacker.conf`, `mirrors`, `repos`, `blacklist`) copied
+///    verbatim into a timestamped `dist-backup-<stamp>/` under the config dir, so
+///    the original release's mirror/repo URLs (which the transform rewrites in
+///    place) can be restored;
+///  * a `dist-backup-<stamp>` template of every installed package that a repo
+///    knows about (orphans/third-party-not-in-a-repo are skipped, exactly like
+///    `generate-template`), written to the normal `templates/` dir AND copied into
+///    the backup dir — a manifest of what was installed, reusable via
+///    `install-template`.
+/// Must be called while the repos still point at the running release. Best-effort
+/// at the call site (a failure warns, the upgrade continues).
+fn dist_backup(cfg: &Config) -> Result<(), String> {
+    let stamp = backup_stamp();
+    let dir = cfg.config_dir.join(format!("dist-backup-{stamp}"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+
+    // 1) config files, verbatim
+    let mut saved: Vec<&str> = Vec::new();
+    for f in ["slacker.conf", "mirrors", "repos", "blacklist"] {
+        let src = cfg.config_dir.join(f);
+        if src.exists() {
+            std::fs::copy(&src, dir.join(f)).map_err(|e| format!("back up {f}: {e}"))?;
+            saved.push(f);
+        }
+    }
+
+    // 2) template of the installed set known to a repo (skip orphans)
+    let db = PkgDb::load(cfg)?;
+    let installed = system::installed_packages(&cfg.pkg_db_dir)?;
+    let orphans: HashSet<&str> =
+        db.orphans(&installed).into_iter().map(|p| p.name.as_str()).collect();
+    let names: Vec<String> = installed
+        .iter()
+        .map(|p| p.name.clone())
+        .filter(|n| !orphans.contains(n.as_str()))
+        .collect();
+    let tmpl_name = format!("dist-backup-{stamp}");
+    let tmpl_path = template::generate(&cfg.config_dir, &tmpl_name, &names)?;
+    // self-contained kit: also drop the template inside the backup dir
+    let _ = std::fs::copy(&tmpl_path, dir.join(format!("{tmpl_name}.template")));
+
+    println!(
+        "{}",
+        ui::green(&format!(
+            "Escape kit saved to {}: configs ({}), template '{}' ({} packages).",
+            dir.display(),
+            saved.join(", "),
+            tmpl_name,
+            names.len()
+        ))
+    );
+    println!(
+        "  {}",
+        ui::dim(&format!(
+            "to undo before reboot: restore the files from {} into {}",
+            dir.display(),
+            cfg.config_dir.display()
+        ))
+    );
+    Ok(())
+}
+
+/// A sortable, human-readable timestamp for backup names (`YYYYmmdd-HHMMSS`).
+/// Uses the system `date` if available; falls back to UNIX epoch seconds so a
+/// backup name is always produced.
+fn backup_stamp() -> String {
+    if let Ok(out) = std::process::Command::new("date").arg("+%Y%m%d-%H%M%S").output() {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() {
+                return s;
+            }
+        }
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("epoch-{secs}")
+}
+
+/// Replace the running release directory segment with the target's in the
+/// `mirrors` and `repos` files (so `mirror`/`mirror/patches` repos and any
+/// literal slackware URL follow the dist target), then back up the blacklist to
+/// `blacklist.bak` and empty it. `dry_run` prints the changes without touching
+/// anything.
+fn dist_transform(
+    cfg: &Config,
+    running_seg: &str,
+    target_seg: &str,
+    local_mirror: Option<&str>,
+    dry_run: bool,
+) -> Result<(), String> {
+    let cd = &cfg.config_dir;
+
+    // 1) mirrors: either set the active line to a LOCAL mirror (DISTRO_UPGRADE_
+    // MIRROR — local http/file mirror or mounted ISO), or, in the normal case,
+    // re-point the active mirror's release directory to the target.
+    {
+        let path = cd.join("mirrors");
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let new = match local_mirror {
+                Some(m) => set_active_mirror_line(&text, m),
+                None => dist_rewrite_text(&text, running_seg, target_seg),
+            };
+            let label = match local_mirror {
+                Some(m) => format!("use local mirror {m}"),
+                None => format!("-> {target_seg}"),
+            };
+            if new != text {
+                if dry_run {
+                    println!("  {}", ui::white("mirrors"));
+                    for (o, n) in text.lines().zip(new.lines()).filter(|(o, n)| o != n) {
+                        println!("    {}", ui::red(&format!("- {o}")));
+                        println!("    {}", ui::green(&format!("+ {n}")));
+                    }
+                    // set_active_mirror_line may also APPEND a line (no zip pair).
+                    if local_mirror.is_some() && new.lines().count() > text.lines().count() {
+                        for extra in new.lines().skip(text.lines().count()) {
+                            println!("    {}", ui::green(&format!("+ {extra}")));
+                        }
+                    }
+                } else {
+                    refuse_through_symlink(&path)?;
+                    std::fs::write(&path, &new)
+                        .map_err(|e| format!("write {}: {e}", path.display()))?;
+                    println!("  {}", ui::dim(&format!("rewrote mirrors ({label})")));
+                }
+            } else if dry_run {
+                println!("  {} {}", ui::white("mirrors"), ui::dim("(no change needed)"));
+            }
+        }
+    }
+
+    // 2) repos: DISABLE every active non-mirror repo (a literal `://` URL — a
+    // third-party repo with its own versioning slacker cannot safely re-point).
+    // `mirror`/`mirror/<subpath>` repos follow the rewritten mirror and stay;
+    // build-tag priority lines stay. The user re-enables/fixes third-party repos
+    // by hand after the dist-upgrade.
+    {
+        let path = cd.join("repos");
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let (new, disabled) = comment_nonmirror_repos(&text);
+            if disabled.is_empty() {
+                if dry_run {
+                    println!("  {} {}", ui::white("repos"), ui::dim("(no third-party repos to disable)"));
+                }
+            } else if dry_run {
+                println!("  {}", ui::white("repos"));
+                for line in &disabled {
+                    println!("    {}", ui::purple(&format!("# {line}   (would disable — non-mirror repo)")));
+                }
+            } else {
+                refuse_through_symlink(&path)?;
+                std::fs::write(&path, &new).map_err(|e| format!("write {}: {e}", path.display()))?;
+                println!(
+                    "  {}",
+                    ui::dim(&format!("disabled {} non-mirror repo(s) in repos", disabled.len()))
+                );
+            }
+        }
+    }
+
+    // 3) blacklist: back up and empty.
+    let bl = cd.join("blacklist");
+    if let Ok(text) = std::fs::read_to_string(&bl) {
+        let rules = text
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                !t.is_empty() && !t.starts_with('#')
+            })
+            .count();
+        if dry_run {
+            println!(
+                "  {} {}",
+                ui::white("blacklist"),
+                ui::dim(&format!("(would back up {rules} rule(s) -> blacklist.bak and empty it)"))
+            );
+        } else {
+            // Preserve the ORIGINAL backup across re-runs: only create
+            // blacklist.bak if it does not already exist. A re-run (e.g. after a
+            // disk-space stop) would otherwise copy the now-empty blacklist over
+            // the real backup and lose the user's rules. Either way the live
+            // blacklist is emptied so the dist ignores it.
+            let bak = cd.join("blacklist.bak");
+            if bak.exists() {
+                println!(
+                    "  {}",
+                    ui::dim("blacklist.bak already exists (kept); emptied blacklist")
+                );
+            } else {
+                std::fs::copy(&bl, &bak).map_err(|e| format!("back up blacklist: {e}"))?;
+                println!(
+                    "  {}",
+                    ui::dim(&format!(
+                        "backed up {rules} blacklist rule(s) -> blacklist.bak, emptied blacklist"
+                    ))
+                );
+            }
+            std::fs::write(&bl, "").map_err(|e| format!("empty blacklist: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Pure: swap every occurrence of the running release directory segment for the
+/// target's. Lines using the `mirror` keyword carry no segment and pass through
+/// untouched (they follow the rewritten mirrors file).
+fn dist_rewrite_text(text: &str, running_seg: &str, target_seg: &str) -> String {
+    text.replace(running_seg, target_seg)
+}
+
+/// Pure: make `url` the sole ACTIVE line in a mirrors file. Every existing active
+/// (uncommented, non-blank) line is commented out, then `url` is appended as the
+/// one active line. Used by the local-mirror (DISTRO_UPGRADE_MIRROR) dist path so
+/// downloads come from the local http/file mirror or mounted ISO. Idempotent: if
+/// `url` is already the only active line, the text is returned unchanged.
+fn set_active_mirror_line(text: &str, url: &str) -> String {
+    let already_sole_active = {
+        let mut actives = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'));
+        actives.next() == Some(url) && actives.next().is_none()
+    };
+    if already_sole_active {
+        return text.to_string();
+    }
+    let mut out: Vec<String> = Vec::with_capacity(text.lines().count() + 2);
+    for line in text.lines() {
+        let t = line.trim_start();
+        if !t.is_empty() && !t.starts_with('#') {
+            out.push(format!("# {line}"));
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    out.push(format!("# --- upgrade-dist: local mirror (DISTRO_UPGRADE_MIRROR) ---"));
+    out.push(url.to_string());
+    let mut joined = out.join("\n");
+    joined.push('\n');
+    joined
+}
+
+/// Validate a local upgrade-dist mirror (DISTRO_UPGRADE_MIRROR) BEFORE the point
+/// of no return. Two checks: (1) if the mirror URL contains a recognisable
+/// `slackware*-<release>` segment it MUST match the target (catches a mirror
+/// left pointing at the wrong release); a mounted-ISO/path with no such segment
+/// can't be checked this way, so we warn and rely on the explicit target plus
+/// the typed confirmation. (2) the mirror must actually serve a PACKAGES.TXT.
+/// Any failure returns Err so the caller STOPS without touching anything.
+fn dist_validate_local_mirror(mirror: &str, target: &dist::Release) -> Result<(), String> {
+    println!("{}", ui::blue(&format!("Local upgrade-dist mirror: {mirror}")));
+    match dist::parse_release_from_url(mirror) {
+        Some(r) if &r == target => {
+            println!("  {}", ui::green(&format!("path names the target release ({})", dist::show(target))));
+        }
+        Some(r) => {
+            return Err(format!(
+                "the local mirror path names release '{}', but you asked to upgrade to '{}'. \
+                 Point DISTRO_UPGRADE_MIRROR at the {} tree (or fix the target).",
+                dist::show(&r),
+                dist::show(target),
+                dist::show(target),
+            ));
+        }
+        None => {
+            println!(
+                "  {}",
+                ui::yellow(&format!(
+                    "could not confirm the release from the path (e.g. a mounted ISO) — make \
+                     sure it is the {} tree; proceeding on your explicit target + confirmation",
+                    dist::show(target)
+                ))
+            );
+        }
+    }
+    // Reachability: the mirror must serve a PACKAGES.TXT.
+    let probe = format!("{}/PACKAGES.TXT", mirror.trim_end_matches('/'));
+    match download::first_line(&probe, std::time::Duration::from_secs(20)) {
+        Ok(_) => {
+            println!("  {}", ui::green("PACKAGES.TXT is reachable"));
+            Ok(())
+        }
+        Err(e) => Err(format!(
+            "the local mirror does not serve a readable PACKAGES.TXT at {probe} ({e}). \
+             Check the path/mount and that it is a full Slackware tree."
+        )),
+    }
+}
+
+/// Pure: comment out every ACTIVE repos-file line that is a non-mirror repo —
+/// one whose third field is a literal URL (`://`), i.e. a third-party repo.
+/// `mirror`/`mirror/<subpath>` repos and build-tag priority lines (third field
+/// not a URL) are left untouched, as are already-commented/blank lines. Returns
+/// the rewritten text and the list of lines that were disabled.
+fn comment_nonmirror_repos(text: &str) -> (String, Vec<String>) {
+    let mut out: Vec<String> = Vec::with_capacity(text.lines().count());
+    let mut disabled: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim_start();
+        let is_active = !t.is_empty() && !t.starts_with('#');
+        let third_is_url = t.split_whitespace().nth(2).is_some_and(|f| f.contains("://"));
+        if is_active && third_is_url {
+            out.push(format!("#{line}"));
+            disabled.push(line.trim().to_string());
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    (joined, disabled)
+}
+
+/// Refuse to write through a symlink at `path` (so a planted symlink cannot
+/// redirect a config write elsewhere).
+fn refuse_through_symlink(path: &std::path::Path) -> Result<(), String> {
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to write through symlink {}; remove it first",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
@@ -4388,7 +5740,7 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
         .into_iter()
         .map(|nc| nc.new_file)
         .collect();
-    execute_plan(cfg, &plan)?;
+    execute_plan(cfg, &plan, cli.yes)?;
     report_pending_configs(&before_cfgs);
     if self_upgrade {
         println!("slacker upgraded itself; please re-run.");
@@ -4480,7 +5832,7 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     if !confirm("Install new packages?", cli.yes) {
         return Ok(Outcome::Ok);
     }
-    execute_plan(cfg, &plan)?;
+    execute_plan(cfg, &plan, cli.yes)?;
     Ok(Outcome::Ok)
 }
 
@@ -4520,9 +5872,16 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
 
     // Safety: if a baseline repo is configured but its metadata isn't loaded
     // (never updated, or quarantined), packages it would keep could look foreign.
-    // Refuse rather than propose mass removal as root.
+    // Refuse rather than propose mass removal as root. EXCEPTION: a `subtree` repo
+    // (patches/extra/testing) can be legitimately empty — e.g. slackware64-current
+    // ships an empty patches/ — and an empty repo simply contributes no names, so
+    // it cannot cause a wrong removal. The official main tree remains the authority.
     for name in &baseline {
         if !db.has_repo_packages(name) {
+            let is_subtree = cfg.repo_by_name(name).is_some_and(|r| r.subtree);
+            if is_subtree {
+                continue;
+            }
             return Err(format!(
                 "baseline repo '{name}' has no package data loaded — run `slacker update` first. \
                  Refusing to continue so nothing is wrongly removed."
@@ -4534,17 +5893,31 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let orphans: Vec<&pkg::PkgId> = installed
         .iter()
         .filter(|p| {
+            // Never propose removing slacker itself. clean-system (and the
+            // dist-upgrade phase that reuses this logic) must not delete the
+            // running package manager — and the _FRG/third-party build of
+            // slacker belongs to no official repo, so without this guard it
+            // would look "foreign". The name is taken from our own package so a
+            // rename of the project keeps the guard correct.
+            if p.name.as_str() == env!("CARGO_PKG_NAME") {
+                return false;
+            }
             if bl_installed(cfg, Some(&db), p) {
                 return false; // blacklisted -> always kept
             }
-            let tag = p.build_tag();
-            if !tag.is_empty() {
-                // Tagged: kept by IGNORE_TAGS, or if its owning repo is immutable.
+            if !p.is_official_build() {
+                // Genuine third-party tag (e.g. `_SBo`, `alien`): kept by
+                // IGNORE_TAGS, or if its owning repo is immutable.
+                let tag = p.build_tag();
                 let owned_by_immutable =
                     db.repo_for_tag(tag).map_or(false, |r| immutable.contains(r));
                 !(cfg.is_ignored_tag(tag) || owned_by_immutable)
             } else {
-                // Tagless: kept iff its name is in the baseline (official+immutable).
+                // Official: tagless (-current) OR a `_slack<version>` stable patch
+                // — both kept iff their NAME is in the baseline (official +
+                // immutable). A stable system's patched packages carry
+                // `_slack15.0` but are the most official packages there are, so
+                // they must never be flagged foreign for the sake of that tag.
                 !baseline_names.contains(p.name.as_str())
             }
         })
@@ -4929,100 +6302,298 @@ fn report_pending_configs(before: &HashSet<PathBuf>) {
     );
 }
 
+/// Build an interactive choice prompt whose bracketed KEY letters are WHITE (so
+/// they stand out) and whose surrounding text is blue. Each entry is
+/// `(KEY, text-after-the-bracket)`; `default_key` is shown at the end as `? [X]`.
+/// Centralised so every letter-choice prompt highlights its keys consistently.
+fn choice_line(prefix: &str, entries: &[(&str, &str)], default_key: &str) -> String {
+    let mut s = String::new();
+    if !prefix.is_empty() {
+        s.push_str(&ui::blue(prefix));
+        s.push(' ');
+    }
+    for (i, (key, after)) in entries.iter().enumerate() {
+        if i > 0 {
+            s.push_str("  ");
+        }
+        s.push_str(&ui::white(&format!("[{key}]")));
+        if !after.is_empty() {
+            s.push_str(&ui::blue(after));
+        }
+    }
+    s.push_str(&ui::blue(" ? "));
+    s.push_str(&ui::white(&format!("[{default_key}]")));
+    s
+}
+
+/// Overwrite `target` with the `.new` file, first saving the existing `target`
+/// as `<target>.orig` (slackpkg-style), so the previous config stays recoverable.
+/// If a `.orig` already exists it is replaced (latest superseded config wins).
+fn overwrite_with_orig(nc: &newconfig::NewConfig) -> Result<(), String> {
+    if nc.target.exists() {
+        let mut orig = nc.target.as_os_str().to_os_string();
+        orig.push(".orig");
+        let orig = std::path::PathBuf::from(orig);
+        std::fs::copy(&nc.target, &orig)
+            .map_err(|e| format!("back up {} -> {}: {e}", nc.target.display(), orig.display()))?;
+    }
+    std::fs::rename(&nc.new_file, &nc.target)
+        .map_err(|e| format!("overwrite {}: {e}", nc.target.display()))?;
+    Ok(())
+}
+
+/// Interactive per-file resolution for one differing config file: show the diff,
+/// then [K]eep both / [O]verwrite (old saved as .orig) / [R]emove .new / [M]erge /
+/// [D]iff. Used by the "(P)rompt one by one" path of `cmd_new_config`.
+fn review_one_config(nc: &newconfig::NewConfig) -> Result<(), String> {
+    println!("\n{}", ui::white(&nc.target.display().to_string()));
+    show_config_diff(&nc.target, &nc.new_file);
+    loop {
+        print!(
+            "  {} ",
+            choice_line(
+                "",
+                &[
+                    ("K", "eep both"),
+                    ("O", "verwrite"),
+                    ("R", "emove .new"),
+                    ("M", "erge"),
+                    ("D", "iff"),
+                ],
+                "K",
+            )
+        );
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            break;
+        }
+        match line.trim().to_lowercase().as_str() {
+            "" | "k" => {
+                println!("    {}", ui::dim("kept both — decide later"));
+                break;
+            }
+            "o" => {
+                overwrite_with_orig(nc)?;
+                println!("    {}", ui::dim("overwritten with the new file (old saved as .orig)"));
+                break;
+            }
+            "r" => {
+                std::fs::remove_file(&nc.new_file).map_err(|e| format!("remove: {e}"))?;
+                println!("    {}", ui::dim("kept your current config — removed .new"));
+                break;
+            }
+            "m" => {
+                match merge_config(&nc.target, &nc.new_file) {
+                    Ok(()) => {
+                        if confirm("  merge done — remove the .new file?", false) {
+                            std::fs::remove_file(&nc.new_file).map_err(|e| format!("remove: {e}"))?;
+                            println!("    {}", ui::dim("merged, .new removed"));
+                        } else {
+                            println!("    {}", ui::dim("merged, .new left in place"));
+                        }
+                    }
+                    Err(e) => println!("    {}", ui::red(&e)),
+                }
+                break;
+            }
+            "d" => {
+                show_config_diff(&nc.target, &nc.new_file);
+            }
+            other => {
+                println!("    {}", ui::dim(&format!("'{other}'? choose K, O, R, M or D")));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn cmd_new_config(cli: &Cli) -> Result<Outcome, String> {
     let found = newconfig::find_new_configs(&newconfig::default_roots());
     if found.is_empty() {
         println!("No .new configuration files found.");
         return Ok(Outcome::Ok);
     }
+
+    // Classify up front so we can show the whole picture before asking anything:
+    //  * broken    — a .new with no installed counterpart (a broken package; we
+    //                never touch it, just warn);
+    //  * identical — a .new byte-identical to the installed file (redundant, drop);
+    //  * conflicts — a .new that differs (the ones that actually need a decision).
+    let mut broken: Vec<&newconfig::NewConfig> = Vec::new();
+    let mut identical: Vec<&newconfig::NewConfig> = Vec::new();
+    let mut conflicts: Vec<&newconfig::NewConfig> = Vec::new();
     for nc in &found {
-        println!("\n{}", ui::white(&nc.new_file.display().to_string()));
-
-        // A .new only reaches us when the installed file exists and differs:
-        // the package's own doinst.sh moves a .new into place when there is no
-        // previous file, and removes one identical to it. So a .new with no
-        // installed counterpart should never happen; if it does, the package is
-        // most likely broken. We cannot diff or merge it, so warn loudly and
-        // leave it untouched for the user to deal with.
         if !nc.target.exists() {
-            let bar = "=".repeat(66);
-            println!("{}", ui::red(&format!("  {bar}")));
-            println!("{}", ui::red("  !! WARNING: this package looks broken"));
-            println!("{}", ui::red("  !! a .new config file was installed but no previous version exists:"));
-            println!("{}{}", ui::red("  !!   "), ui::white(&nc.new_file.display().to_string()));
-            println!("{}", ui::red("  !! slacker cannot diff or merge it. Please review it manually,"));
-            println!("{}", ui::red("  !! at your own responsibility."));
-            println!("{}", ui::red(&format!("  {bar}")));
-            continue;
+            broken.push(nc);
+        } else if files_identical(&nc.target, &nc.new_file) {
+            identical.push(nc);
+        } else {
+            conflicts.push(nc);
         }
+    }
 
-        // Identical to the installed file: the .new is redundant, drop it.
-        if files_identical(&nc.target, &nc.new_file) {
-            if cli.dry_run {
-                println!("    {}", ui::dim("identical to the installed file (would remove .new)"));
-                continue;
-            }
-            std::fs::remove_file(&nc.new_file).map_err(|e| format!("remove: {e}"))?;
-            println!("    {}", ui::dim("identical to the installed file — removed redundant .new"));
-            continue;
-        }
+    // Broken packages: warn loudly, never touch.
+    for nc in &broken {
+        let bar = "=".repeat(66);
+        println!("{}", ui::red(&format!("  {bar}")));
+        println!("{}", ui::red("  !! WARNING: this package looks broken"));
+        println!("{}", ui::red("  !! a .new config file was installed but no previous version exists:"));
+        println!("{}{}", ui::red("  !!   "), ui::white(&nc.new_file.display().to_string()));
+        println!("{}", ui::red("  !! slacker cannot diff or merge it. Please review it manually,"));
+        println!("{}", ui::red("  !! at your own responsibility."));
+        println!("{}", ui::red(&format!("  {bar}")));
+    }
 
+    // Redundant .new identical to the installed file: drop them (report in dry-run).
+    if !identical.is_empty() {
         if cli.dry_run {
-            println!("    {}", ui::dim(&format!("differs from {}", nc.target.display())));
-            continue;
-        }
-
-        show_config_diff(&nc.target, &nc.new_file);
-        loop {
-            print!(
-                "  {} ",
-                ui::blue("[K]eep both  [O]verwrite  [R]emove .new  [M]erge  [D]iff ? [K]")
+            println!(
+                "{}",
+                ui::dim(&format!(
+                    "{} .new identical to the installed file (would remove)",
+                    identical.len()
+                ))
             );
-            std::io::stdout().flush().ok();
-            let mut line = String::new();
-            if std::io::stdin().read_line(&mut line).is_err() {
-                break;
+        } else {
+            let mut removed = 0usize;
+            for nc in &identical {
+                if std::fs::remove_file(&nc.new_file).is_ok() {
+                    removed += 1;
+                }
             }
-            match line.trim().to_lowercase().as_str() {
-                "" | "k" => {
-                    println!("    {}", ui::dim("kept both — decide later"));
-                    break;
-                }
-                "o" => {
-                    std::fs::rename(&nc.new_file, &nc.target).map_err(|e| format!("rename: {e}"))?;
-                    println!("    {}", ui::dim("overwritten with the new file"));
-                    break;
-                }
-                "r" => {
-                    std::fs::remove_file(&nc.new_file).map_err(|e| format!("remove: {e}"))?;
-                    println!("    {}", ui::dim("kept your current config — removed .new"));
-                    break;
-                }
-                "m" => {
-                    match merge_config(&nc.target, &nc.new_file) {
-                        Ok(()) => {
-                            if confirm("  merge done — remove the .new file?", false) {
-                                std::fs::remove_file(&nc.new_file)
-                                    .map_err(|e| format!("remove: {e}"))?;
-                                println!("    {}", ui::dim("merged, .new removed"));
-                            } else {
-                                println!("    {}", ui::dim("merged, .new left in place"));
-                            }
-                        }
-                        Err(e) => println!("    {}", ui::red(&e)),
-                    }
-                    break;
-                }
-                "d" => {
-                    show_config_diff(&nc.target, &nc.new_file);
-                }
-                other => {
-                    println!("    {}", ui::dim(&format!("'{other}'? choose K, O, R, M or D")));
-                }
+            if removed > 0 {
+                println!(
+                    "{}",
+                    ui::dim(&format!("removed {removed} redundant .new (identical to installed)"))
+                );
             }
         }
     }
-    Ok(Outcome::Ok)
+
+    if conflicts.is_empty() {
+        println!("{}", ui::green("No config files need merging."));
+        return Ok(Outcome::Ok);
+    }
+
+    // ---- Phase 1: show the whole list of differing files up front ----
+    println!();
+    println!(
+        "{}",
+        ui::blue(&format!("{} config file(s) differ from the new version:", conflicts.len()))
+    );
+    for (i, nc) in conflicts.iter().enumerate() {
+        println!("  {:>3}) {}", i + 1, ui::white(&nc.target.display().to_string()));
+    }
+
+    if cli.dry_run {
+        println!("{}", ui::dim("dry run — re-run without --dry-run to choose what to do"));
+        return Ok(Outcome::Ok);
+    }
+
+    // --yes: non-interactive, keep the current configs (drop the .new) — the safe
+    // default, and what the dist phase needs so it never blocks on a prompt.
+    if cli.yes {
+        let mut n = 0usize;
+        for nc in &conflicts {
+            if std::fs::remove_file(&nc.new_file).is_ok() {
+                n += 1;
+            }
+        }
+        println!("{}", ui::dim(&format!("--yes: kept current configs, removed {n} .new file(s)")));
+        return Ok(Outcome::Ok);
+    }
+
+    // ---- Phase 2: one bulk choice for ALL files (slackpkg-style K/O/R/P) ----
+    println!();
+    loop {
+        print!(
+            "{} ",
+            choice_line(
+                &format!("ALL {} files:", conflicts.len()),
+                &[
+                    ("K", "eep current (.new left for later)"),
+                    ("O", "verwrite all (old saved as .orig)"),
+                    ("R", "emove all .new"),
+                    ("P", "rompt one by one"),
+                ],
+                "P",
+            )
+        );
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return Ok(Outcome::Ok);
+        }
+        match line.trim().to_lowercase().as_str() {
+            "o" => {
+                if !confirm(
+                    &format!(
+                        "Overwrite all {} files with the new versions (old saved as .orig)?",
+                        conflicts.len()
+                    ),
+                    false,
+                ) {
+                    println!("{}", ui::blue("cancelled — nothing changed."));
+                    return Ok(Outcome::Ok);
+                }
+                let mut n = 0usize;
+                for nc in &conflicts {
+                    overwrite_with_orig(nc)?;
+                    n += 1;
+                }
+                println!(
+                    "{}",
+                    ui::green(&format!(
+                        "overwrote {n} file(s) with the new versions (previous saved as .orig)."
+                    ))
+                );
+                return Ok(Outcome::Ok);
+            }
+            "k" => {
+                // slackpkg (K)eep: keep the current files, LEAVE the .new files in
+                // place to deal with later. (Use R to discard them.)
+                println!(
+                    "{}",
+                    ui::green(&format!(
+                        "kept your current configs — {} .new file(s) left in place for later.",
+                        conflicts.len()
+                    ))
+                );
+                return Ok(Outcome::Ok);
+            }
+            "r" => {
+                if !confirm(
+                    &format!("Remove all {} .new file(s) and keep your current configs?", conflicts.len()),
+                    false,
+                ) {
+                    println!("{}", ui::blue("cancelled — nothing changed."));
+                    return Ok(Outcome::Ok);
+                }
+                let mut n = 0usize;
+                for nc in &conflicts {
+                    std::fs::remove_file(&nc.new_file)
+                        .map_err(|e| format!("remove {}: {e}", nc.new_file.display()))?;
+                    n += 1;
+                }
+                println!(
+                    "{}",
+                    ui::green(&format!("kept your current configs — removed {n} .new file(s)."))
+                );
+                return Ok(Outcome::Ok);
+            }
+            "" | "p" => {
+                // ---- Phase 3: prompt for each one individually ----
+                for nc in &conflicts {
+                    review_one_config(nc)?;
+                }
+                return Ok(Outcome::Ok);
+            }
+            other => {
+                println!("    {}", ui::dim(&format!("'{other}'? choose K, O, R or P")));
+            }
+        }
+    }
 }
 
 fn cmd_check_updates(cfg: &Config) -> Result<Outcome, String> {
@@ -5321,7 +6892,7 @@ fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, 
     if !confirm("Install template packages?", cli.yes) {
         return Ok(Outcome::Ok);
     }
-    execute_plan(cfg, &plan)?;
+    execute_plan(cfg, &plan, cli.yes)?;
     Ok(Outcome::Ok)
 }
 
@@ -6316,6 +7887,90 @@ mod collect_tests {
     }
 
     #[test]
+    fn dist_upgrade_sets_bypass_priority_and_order_critical() {
+        // Target repos after the transform: slackware(100) and patches(200).
+        let db = PkgDb::for_test(
+            vec![
+                av("glibc-solibs-2.41-x86_64-1", "slackware"),
+                av("xz-5.6.2-x86_64-1", "slackware"),
+                av("vlc-3.0.21-x86_64-1", "slackware"),
+                av("kernel-generic-6.6.30-x86_64-1", "patches"),
+                av("kernel-generic-6.6.10-x86_64-1", "slackware"),
+            ],
+            &[("slackware", 100), ("patches", 200)],
+            Some(100),
+        );
+        // Installed: old core (glibc-solibs, xz), a vlc that came from a now-disabled
+        // third-party repo (its build tag would outrank slackware), and an old kernel.
+        let installed = vec![
+            pkg::PkgId::parse("glibc-solibs-2.33-x86_64-1").unwrap(),
+            pkg::PkgId::parse("xz-5.2.5-x86_64-1").unwrap(),
+            pkg::PkgId::parse("vlc-3.0.18-x86_64-1alien").unwrap(),
+            pkg::PkgId::parse("kernel-generic-6.6.5-x86_64-1").unwrap(),
+        ];
+        let (critical, rest) = dist_upgrade_sets(&db, &installed);
+
+        // Critical set is ordered per DIST_CRITICAL: glibc-solibs before xz; the
+        // absent ones (pkgtools/tar/gzip/findutils) are simply skipped.
+        let cnames: Vec<&str> = critical.iter().map(|p| p.pkg.id.name.as_str()).collect();
+        assert_eq!(cnames, vec!["glibc-solibs", "xz"]);
+
+        // vlc is upgraded to slackware's version even though the installed copy
+        // came from a higher-priority third-party source — the dist bypass.
+        let vlc = rest.iter().find(|p| p.pkg.id.name == "vlc").unwrap();
+        assert_eq!(vlc.pkg.repo, "slackware");
+        assert_eq!(vlc.pkg.id.version, "3.0.21");
+
+        // kernel-generic is taken from the priority winner (patches), proving the
+        // set is built from db.resolve (highest-priority candidate).
+        let kernel = rest.iter().find(|p| p.pkg.id.name == "kernel-generic").unwrap();
+        assert_eq!(kernel.pkg.repo, "patches");
+    }
+
+    #[test]
+    fn dist_defers_gpg_chain_to_the_end() {
+        // A normal package plus gnupg + a gpg lib, all upgradeable; the GnuPG
+        // verification chain (DIST_GPG_LAST) must come LAST in the rest order so
+        // the working gpg keeps verifying everything else first.
+        let db = PkgDb::for_test(
+            vec![
+                av("zlib-1.3-x86_64-1", "slackware"),
+                av("gnupg-2.4-x86_64-1", "slackware"),
+                av("libassuan-3.0-x86_64-1", "slackware"),
+                av("aaa_base-16.0-x86_64-1", "slackware"),
+            ],
+            &[("slackware", 100)],
+            Some(100),
+        );
+        let installed: Vec<pkg::PkgId> = ["zlib", "gnupg", "libassuan", "aaa_base"]
+            .iter()
+            .map(|n| pkg::PkgId::parse(&format!("{n}-0.1-x86_64-1")).unwrap())
+            .collect();
+        let (_critical, rest) = dist_upgrade_sets(&db, &installed);
+        let order: Vec<&str> = rest.iter().map(|it| it.pkg.id.name.as_str()).collect();
+        let gnupg = order.iter().position(|n| *n == "gnupg").unwrap();
+        let libassuan = order.iter().position(|n| *n == "libassuan").unwrap();
+        let zlib = order.iter().position(|n| *n == "zlib").unwrap();
+        assert!(
+            gnupg > zlib && libassuan > zlib,
+            "gpg chain must come after non-gpg pkgs: {order:?}"
+        );
+    }
+
+    #[test]
+    fn kernel_packages_are_recognised() {
+        assert!(is_kernel_pkg("kernel-generic"));
+        assert!(is_kernel_pkg("kernel-huge"));
+        assert!(is_kernel_pkg("kernel-modules"));
+        assert!(is_kernel_pkg("kernel-modules-6.6.5"));
+        // not boot-critical kernel packages
+        assert!(!is_kernel_pkg("kernel-firmware"));
+        assert!(!is_kernel_pkg("kernel-headers"));
+        assert!(!is_kernel_pkg("kernel-source"));
+        assert!(!is_kernel_pkg("bash"));
+    }
+
+    #[test]
     fn tool_in_dirs_detects_executables() {
         let dir = std::env::temp_dir().join("slacker_tool_in_dirs_test");
         let _ = std::fs::remove_dir_all(&dir);
@@ -6555,5 +8210,177 @@ mod freshness_tests {
         assert_eq!(humanize_lag(3 * 86400 + 5 * 3600), "3d 5h");
         assert_eq!(humanize_lag(5 * 3600), "5h");
         assert_eq!(humanize_lag(40 * 60), "40m");
+    }
+
+    #[test]
+    fn slackware_dir_release_and_arch() {
+        // -current is the codename, NOT a version suffix; a real -current
+        // reports VERSION_ID=15.0 with no '+'.
+        assert_eq!(
+            slackware_dir_parts("x86_64", Some("current"), Some("15.0")).as_deref(),
+            Some("slackware64-current")
+        );
+        // stable VM with a spurious '+' in a hand-made os-release: strip it.
+        assert_eq!(
+            slackware_dir_parts("x86_64", Some("stable"), Some("15.0+")).as_deref(),
+            Some("slackware64-15.0")
+        );
+        // proper stable.
+        assert_eq!(
+            slackware_dir_parts("x86_64", Some("stable"), Some("15.0")).as_deref(),
+            Some("slackware64-15.0")
+        );
+        // 32-bit -> slackware (no 64).
+        assert_eq!(
+            slackware_dir_parts("i586", Some("stable"), Some("15.0")).as_deref(),
+            Some("slackware-15.0")
+        );
+        // quoted VERSION_ID is unwrapped.
+        assert_eq!(
+            slackware_dir_parts("x86_64", None, Some("\"15.0\"")).as_deref(),
+            Some("slackware64-15.0")
+        );
+        // not current and no usable VERSION_ID -> None (caller fails open).
+        assert_eq!(slackware_dir_parts("x86_64", None, None), None);
+        assert_eq!(slackware_dir_parts("x86_64", None, Some("")), None);
+        assert_eq!(slackware_dir_parts("x86_64", None, Some("+")), None);
+    }
+
+    #[test]
+    fn upstream_url_uses_release_dir() {
+        let dir = slackware_dir_parts("x86_64", None, Some("15.0")).unwrap();
+        assert_eq!(
+            format!("http://ftp.osuosl.org/pub/slackware/{dir}/PACKAGES.TXT"),
+            "http://ftp.osuosl.org/pub/slackware/slackware64-15.0/PACKAGES.TXT"
+        );
+    }
+
+    #[test]
+    fn freshness_url_is_patches_on_stable_root_on_current() {
+        // -current: the main-tree root moves, so read the release root.
+        assert_eq!(
+            osuosl_freshness_url("slackware64-current", true),
+            "http://ftp.osuosl.org/pub/slackware/slackware64-current/PACKAGES.TXT"
+        );
+        // stable: the root is frozen, so read patches/ (where updates land).
+        assert_eq!(
+            osuosl_freshness_url("slackware64-15.0", false),
+            "http://ftp.osuosl.org/pub/slackware/slackware64-15.0/patches/PACKAGES.TXT"
+        );
+    }
+
+    #[test]
+    fn dist_rewrite_swaps_release_segment() {
+        let txt = "100 slackware mirror official\n\
+                   200 patches mirror/patches subtree immutable\n\
+                   # http://ftp.cc.uoc.gr/slackware/slackware64-15.0/\n\
+                   http://ftp.cc.uoc.gr/slackware/slackware64-15.0/";
+        // 15.0 -> current: literal slackware64-15.0 URLs move; `mirror` keyword
+        // lines (no segment) are untouched and just follow the mirrors file.
+        let out = dist_rewrite_text(txt, "slackware64-15.0", "slackware64-current");
+        assert!(out.contains("slackware64-current/"));
+        assert!(!out.contains("slackware64-15.0"));
+        assert!(out.contains("200 patches mirror/patches subtree immutable")); // unchanged
+        // 15.0 -> 15.1 likewise.
+        let out2 = dist_rewrite_text(
+            "http://m/slackware64-15.0/patches/",
+            "slackware64-15.0",
+            "slackware64-15.1",
+        );
+        assert_eq!(out2, "http://m/slackware64-15.1/patches/");
+    }
+
+    #[test]
+    fn dist_disables_only_nonmirror_repos() {
+        let txt = "100 slackware mirror official\n\
+                   200 patches mirror/patches subtree immutable\n\
+                   60 alienbob https://slackware.nl/people/alien/sbrepos/15.0/x86_64\n\
+                   #80 conraid https://slackers.it/repository/slackware64-15.0\n\
+                   100 SBo _SBo\n";
+        let (out, disabled) = comment_nonmirror_repos(txt);
+        // only the active literal-URL repo (alienbob) is disabled
+        assert_eq!(disabled.len(), 1);
+        assert!(disabled[0].contains("alienbob"));
+        assert!(out.contains("#60 alienbob https://"));
+        // mirror / mirror-subtree / tag-priority / already-commented stay as-is
+        assert!(out.contains("100 slackware mirror official"));
+        assert!(out.contains("200 patches mirror/patches subtree immutable"));
+        assert!(out.contains("100 SBo _SBo"));
+        assert!(out.contains("#80 conraid")); // not double-commented
+        assert!(!out.contains("##80 conraid"));
+        assert!(out.ends_with('\n')); // trailing newline preserved
+    }
+
+    #[test]
+    fn set_active_mirror_line_comments_and_appends() {
+        // A typical mirrors file: one active line plus commented alternatives.
+        let txt = "# choose one\n\
+                   https://mirrors.slackware.com/slackware/slackware64-15.0/\n\
+                   # https://other/slackware64-15.0/\n";
+        let out = set_active_mirror_line(txt, "file:///mnt/iso");
+        // the old active line is now commented out
+        assert!(out.contains("# https://mirrors.slackware.com/slackware/slackware64-15.0/"));
+        // the local mirror is the sole active (uncommented, non-blank) line
+        let active: Vec<&str> = out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        assert_eq!(active, vec!["file:///mnt/iso"]);
+        // idempotent: applying again changes nothing
+        assert_eq!(set_active_mirror_line(&out, "file:///mnt/iso"), out);
+    }
+
+    #[test]
+    fn set_active_mirror_line_on_all_commented() {
+        // r-tz's shipped template has every line commented: appending makes the
+        // local mirror the only active line.
+        let txt = "# a\n# b\n";
+        let out = set_active_mirror_line(txt, "http://nas/slackware64-current");
+        let active: Vec<&str> = out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        assert_eq!(active, vec!["http://nas/slackware64-current"]);
+    }
+
+    #[test]
+    fn repo_release_token_detects_official_and_thirdparty() {
+        use crate::dist::Release;
+        // official / conraid: the slackware{arch}-<suffix> form.
+        assert_eq!(
+            repo_release_token("https://mirror/slackware64-current/"),
+            Some(Release::Current)
+        );
+        assert_eq!(
+            repo_release_token("https://slackers.it/repository/slackware64-15.0"),
+            Some(Release::Stable("15.0".into()))
+        );
+        // alienbob: a bare `current` or `15.0` path segment.
+        assert_eq!(
+            repo_release_token("https://slackware.nl/people/alien/sbrepos/current/x86_64"),
+            Some(Release::Current)
+        );
+        assert_eq!(
+            repo_release_token("https://slackware.nl/people/alien/sbrepos/15.0/x86_64"),
+            Some(Release::Stable("15.0".into()))
+        );
+        // release-agnostic / no token → None (never flagged).
+        assert_eq!(repo_release_token("https://slackbuilds.org/repository"), None);
+        // a package-version-looking segment (3 dotted parts) is NOT a release.
+        assert_eq!(repo_release_token("https://x/pkgs/3.0.23/here"), None);
+    }
+
+    #[test]
+    fn release_version_segment_is_x_dot_y_only() {
+        assert!(is_release_version_segment("15.0"));
+        assert!(is_release_version_segment("14.2"));
+        assert!(is_release_version_segment("16.0"));
+        assert!(!is_release_version_segment("15")); // bare integer
+        assert!(!is_release_version_segment("3.0.23")); // package version
+        assert!(!is_release_version_segment("current"));
+        assert!(!is_release_version_segment("x86_64"));
+        assert!(!is_release_version_segment(""));
     }
 }
