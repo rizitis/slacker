@@ -1,5 +1,5 @@
-- ask to remove “orphan” dependencies if they are not used elsewhere (for repos that support it)
+- Big step, musl self compiled everything to support upgrade-dist
 
-- inform when a mirror is outdated (only for official)
+- ask to remove “orphan” dependencies if they are not used elsewhere (for repos that support it)
 
 - release stable before 2034
