@@ -225,6 +225,10 @@ enum Cmd {
     },
     /// Remove a binary repository (by name) from the `repos` file.
     DelRepo { name: String },
+    /// Change a repo's priority in the `repos` file: `pri-repo PRIORITY NAME`.
+    /// Refuses if NAME is not an active repo (suggesting the closest match), or
+    /// if PRIORITY is already used by another repo (priorities must be distinct).
+    PriRepo { priority: String, name: String },
     /// Add a build-tag priority line to the `repos` file:
     /// `add-tag PRIORITY NAME TAG` (e.g. `add-tag 100 SBo _SBo`; no quotes).
     AddTag { priority: String, name: String, tag: String },
@@ -342,6 +346,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
             cmd_add_repo(cli, &cfg, priority, name, url, flags)
         }
         Cmd::DelRepo { name } => cmd_del_repo(cli, &cfg, name),
+        Cmd::PriRepo { priority, name } => cmd_pri_repo(cli, &cfg, priority, name),
         Cmd::AddTag { priority, name, tag } => cmd_add_tag(cli, &cfg, priority, name, tag),
         Cmd::DelTag { tag } => cmd_del_tag(cli, &cfg, tag),
         Cmd::VetRepo { name } => cmd_vet_repo(&cfg, name),
@@ -492,6 +497,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::Unfrozen { .. } => "unfrozen",
         Cmd::AddRepo { .. } => "add-repo",
         Cmd::DelRepo { .. } => "del-repo",
+        Cmd::PriRepo { .. } => "pri-repo",
         Cmd::AddTag { .. } => "add-tag",
         Cmd::DelTag { .. } => "del-tag",
         Cmd::VetRepo { .. } => "vet-repo",
@@ -7496,6 +7502,9 @@ const ADD_REPO_USAGE: &str = "usage: slacker add-repo PRIORITY NAME URL [officia
 const ADD_TAG_USAGE: &str = "usage: slacker add-tag PRIORITY NAME TAG\n  \
      e.g.  slacker add-tag 100 SBo _SBo\n  \
      (pass each field as a separate word — no quotes)";
+const PRI_REPO_USAGE: &str = "usage: slacker pri-repo PRIORITY NAME\n  \
+     e.g.  slacker pri-repo 90 alienbob\n  \
+     (the priority comes first, then the repo name — no quotes)";
 
 /// Parse the PRIORITY argument with friendly, suggestion-bearing errors —
 /// including the common case where someone quoted the whole command (a habit
@@ -7527,6 +7536,107 @@ fn strip_repos_prefix(e: &str) -> String {
     } else {
         t.to_string()
     }
+}
+
+/// Rewrite the `repos` text so the active repo line named `name` carries the new
+/// `pri`, changing only the priority token and leaving the URL, flags, and any
+/// indentation untouched. Errors if no active repo line for `name` is found.
+fn repos_text_set_priority(text: &str, name: &str, pri: i32) -> Result<String, String> {
+    let mut out = String::with_capacity(text.len() + 4);
+    let mut changed = false;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if !changed && !trimmed.is_empty() && !trimmed.starts_with('#') {
+            let mut f = trimmed.split_whitespace();
+            let pri_tok = f.next();
+            let name_tok = f.next();
+            let third = f.next();
+            // A repo line (not a build-tag line) has a URL or a `mirror` keyword
+            // in the third field. Only those carry a priority we want to retune.
+            let is_repo_line = third
+                .map(|t| t.contains("://") || t == "mirror" || t.starts_with("mirror/"))
+                .unwrap_or(false);
+            if name_tok == Some(name) && is_repo_line {
+                if let Some(pt) = pri_tok {
+                    let indent = &line[..line.len() - trimmed.len()];
+                    let rest = trimmed[pt.len()..].trim_start_matches([' ', '\t']);
+                    out.push_str(indent);
+                    out.push_str(&pri.to_string());
+                    out.push(' ');
+                    out.push_str(rest);
+                    out.push('\n');
+                    changed = true;
+                    continue;
+                }
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !changed {
+        return Err(format!("could not find an active repo line for '{name}'."));
+    }
+    Ok(out)
+}
+
+/// `pri-repo PRIORITY NAME` — retune one repo's priority in the `repos` file.
+/// Validates that NAME is an active repo (suggesting the closest on a typo) and
+/// that the new priority is not already taken by another repo (they must stay
+/// distinct), then rewrites just that line.
+fn cmd_pri_repo(cli: &Cli, cfg: &Config, priority: &str, name: &str) -> Result<Outcome, String> {
+    let pri = parse_priority(priority, PRI_REPO_USAGE)?;
+    // 1) the repo must exist and be active.
+    let target = match cfg.repos.iter().find(|r| r.name == name) {
+        Some(r) => r,
+        None => {
+            let names: Vec<&str> = cfg.repos.iter().map(|r| r.name.as_str()).collect();
+            let mut msg = format!("no active repo named '{name}'");
+            match closest(name, names.iter().copied()) {
+                Some(s) => msg.push_str(&format!(" — did you mean '{s}'?")),
+                None if names.is_empty() => msg.push_str("\n  there are no active repos."),
+                None => msg.push_str(&format!("\n  active repos: {}", names.join(", "))),
+            }
+            return Err(msg);
+        }
+    };
+    // Already at this value: nothing to do.
+    if target.priority == pri {
+        println!(
+            "{}",
+            ui::dim(&format!("'{name}' is already at priority {pri} — nothing to change."))
+        );
+        return Ok(Outcome::Ok);
+    }
+    // 2) priorities must be distinct: refuse if another repo already owns it.
+    if let Some(other) = cfg.repos.iter().find(|r| r.name != name && r.priority == pri) {
+        return Err(format!(
+            "priority {pri} is already used by repo '{}' — pick another value \
+             (every repo needs a distinct priority).\n{PRI_REPO_USAGE}",
+            other.name
+        ));
+    }
+    // 3) rewrite just that line, then validate the whole file before writing.
+    let path = cfg.config_dir.join("repos");
+    let current =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let candidate = repos_text_set_priority(&current, name, pri)?;
+    config::validate_repos_text(&cfg.config_dir, &candidate).map_err(|e| strip_repos_prefix(&e))?;
+    let old = target.priority;
+    println!(
+        "{}",
+        ui::blue(&format!("About to change '{name}' priority: {old} → {pri}"))
+    );
+    if !confirm("Write it to the repos file?", cli.yes) {
+        println!("{}", ui::dim("aborted — nothing changed"));
+        return Ok(Outcome::Ok);
+    }
+    std::fs::write(&path, candidate).map_err(|e| format!("write {}: {e}", path.display()))?;
+    println!("{}", ui::green(&format!("Set '{name}' priority: {old} → {pri}.")));
+    println!(
+        "{}",
+        ui::dim("Run `slacker update` then `slacker status` to see the new ordering.")
+    );
+    Ok(Outcome::Ok)
 }
 
 fn cmd_add_repo(
@@ -8551,6 +8661,23 @@ mod freshness_tests {
         assert!(out.contains("#80 conraid")); // not double-commented
         assert!(!out.contains("##80 conraid"));
         assert!(out.ends_with('\n')); // trailing newline preserved
+    }
+
+    #[test]
+    fn repos_text_set_priority_retunes_only_the_named_line() {
+        let text = "100 slackware mirror official\n\
+                    # 80 alienbob https://example.com/a\n\
+                    80 conraid https://example.com/c\n\
+                    100 SBo _SBo\n";
+        let out = super::repos_text_set_priority(text, "conraid", 65).unwrap();
+        // conraid's priority changes; URL + other lines untouched.
+        assert!(out.contains("65 conraid https://example.com/c"));
+        assert!(out.contains("100 slackware mirror official"));
+        assert!(out.contains("100 SBo _SBo")); // a build-tag line of the same shape is left alone
+        assert!(out.contains("# 80 alienbob")); // commented line untouched
+        // A name that is not an active repo line is rejected.
+        assert!(super::repos_text_set_priority(text, "alienbob", 60).is_err());
+        assert!(super::repos_text_set_priority(text, "nope", 60).is_err());
     }
 
     #[test]

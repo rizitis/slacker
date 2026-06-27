@@ -437,6 +437,17 @@ Remove a binary repository (by name) from the
 .I repos
 file.
 .TP
+.B pri-repo \fIPRIORITY NAME\fR
+Change the priority of an existing repository in the
+.I repos
+file.
+.I NAME
+must be an active repo (the closest match is suggested on a typo), and
+.I PRIORITY
+must not already be used by another repo \(em priorities are kept distinct, and
+the offending repo is named if it clashes. Only that line's priority field is
+rewritten; its URL and flags are left untouched.
+.TP
 .B add-tag \fIPRIORITY NAME TAG\fR
 Append a build\-tag priority line (e.g.
 .IR "add-tag 100 SBo _SBo" ).

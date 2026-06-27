@@ -1,6 +1,9 @@
+Add: cdm: slacker pri-repo 65 repo_name (change priority to 65)
 Add: banner.rs
 Fix: varius bugs
 Fix: bug in Multi-match chooser
+Update: Wiki
+Update: man pages
 ---
 
 Version Beta 0.8.1
