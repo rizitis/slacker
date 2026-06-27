@@ -256,7 +256,13 @@ impl Config {
         // its own `distro-upgrade.conf` so the (rare, deliberate) local-mirror /
         // ISO dist setup is separate from everyday config. Absent file or empty
         // value => None => normal remote dist.
-        let du_conf = parse_keyvals(&read_optional(&dir.join("distro-upgrade.conf"))?);
+        //
+        // Read leniently: this file matters ONLY to upgrade-dist (root), so an
+        // unreadable one (e.g. mode 600 read by a non-root `status`/`search`)
+        // must NOT abort — it is treated as absent. root, which is the only user
+        // that can run upgrade-dist, reads it regardless of mode.
+        let du_text = std::fs::read_to_string(dir.join("distro-upgrade.conf")).unwrap_or_default();
+        let du_conf = parse_keyvals(&du_text);
         let distro_upgrade_mirror =
             parse_distro_upgrade_mirror(du_conf.get("DISTRO_UPGRADE_MIRROR").map(String::as_str));
 

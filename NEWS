@@ -1,3 +1,8 @@
+Version Beta 0.8.1
+=====
+Fix: Bug, Command `slacker status` is read-only, runs "as any user and even in broken config" is not allowed to die with exit 1 because an optional file (distro-upgrade.conf) is not read.
+---
+
 Version Beta 0.8.0
 =====
 Update: wiki
