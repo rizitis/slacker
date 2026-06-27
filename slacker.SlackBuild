@@ -82,9 +82,10 @@ cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
 
 # config files — install as .new so an upgrade never clobbers the user's edits
 mkdir -p $PKG/etc/slacker/templates
-for f in slacker.conf mirrors repos blacklist; do
+for f in slacker.conf distro-upgrade.conf mirrors repos blacklist; do
   install -m0644 examples/etc-slacker/"$DIR"/$f $PKG/etc/slacker/$f.new
 done
+chmod 644 /etc/slacker/*
 
 # man page
 mkdir -p $PKG/usr/man/man8
@@ -98,5 +99,5 @@ cat $CWD/doinst.sh > $PKG/install/doinst.sh
 
 cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
-#sleep 1
-#sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+sleep 1
+gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE

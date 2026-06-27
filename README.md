@@ -143,6 +143,22 @@ slackware-current ──► 0.x.x_beta.x ──► 0.x.x_beta.(x+1) ──► �
 
 ---
 
+## Verifying a release
+
+These packages are signed with my GPG key:
+
+    fingerprint: 83A5 99D8 E916 3074 2706  CD0E 1463 A5BD 1FD9 2D7B
+    Ioannis Anagnostakis <rizitis@gmail.com>
+
+Fetch the key once, then verify any release:
+
+    gpg --keyserver hkps://keys.openpgp.org --recv-keys 83A599D8E91630742706CD0E1463A5BD1FD92D7B
+    gpg --verify slacker-0.8.1-x86_64-1_FRG.txz.asc slacker-0.8.1-x86_64-1_FRG.txz
+
+A "Good signature from Ioannis Anagnostakis <rizitis@gmail.com>" line means the
+package is authentic and untampered.
+---
+
 ## How you can help
 
 If you run **slackware-current** (always up to date), you can build slacker from source or install the binary provided in every release, use it, and
