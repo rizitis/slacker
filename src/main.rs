@@ -1,6 +1,7 @@
 //! slacker — a minimal Slackware package manager with full slackpkg parity,
 //! combined with slackpkg+ multi-repo priority resolution.
 
+mod banner;
 mod changelog;
 mod config;
 mod dist;
@@ -591,24 +592,30 @@ fn ask_dep_conflict(
         println!("    {}", ui::blue("(--yes: keeping the installed version)"));
         return DepChoice::Skip;
     }
-    println!("    {}", ui::blue("[s]kip      keep the installed version (default)"));
+    println!("    {}", hilite_keys("[s]kip      keep the installed version (default)"));
     println!(
         "    {}",
-        ui::blue(&format!("[r]eplace   install the {}'s version instead", offered.repo))
+        hilite_keys(&format!("[r]eplace   install the {}'s version instead", offered.repo))
     );
-    println!("    {}", ui::blue("skip-[a]ll  keep installed for this and all later conflicts"));
-    println!("    {}", ui::blue("a[b]ort     cancel the whole operation, change nothing more"));
-    print!("  {} ", ui::blue("Choice [s/r/a/b]:"));
-    std::io::stdout().flush().ok();
-    let mut line = String::new();
-    if std::io::stdin().read_line(&mut line).is_err() {
-        return DepChoice::Skip;
-    }
-    match line.trim() {
-        "r" | "R" => DepChoice::Replace,
-        "a" | "A" => DepChoice::SkipAll,
-        "b" | "B" => DepChoice::Abort,
-        _ => DepChoice::Skip,
+    println!("    {}", hilite_keys("skip-[a]ll  keep installed for this and all later conflicts"));
+    println!("    {}", hilite_keys("a[b]ort     cancel the whole operation, change nothing more"));
+    loop {
+        print!("  {} ", hilite_keys("Choice [s/r/a/b]:"));
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return DepChoice::Skip;
+        }
+        match line.trim() {
+            "" | "s" | "S" => return DepChoice::Skip,
+            "r" | "R" => return DepChoice::Replace,
+            "a" | "A" => return DepChoice::SkipAll,
+            "b" | "B" => return DepChoice::Abort,
+            other => println!(
+                "    {}",
+                ui::blue(&format!("'{other}' is not a choice — type s, r, a, or b (Enter = skip)."))
+            ),
+        }
     }
 }
 
@@ -687,21 +694,27 @@ fn resolve_protected_deps(
 /// Per-dependency prompt for a priority-protected dependency. Default = keep.
 fn ask_protected_dep(p: &ProtectedDep, inst_src: &str, off_src: &str) -> KeepChoice {
     println!("\n  {}", ui::blue(&format!("'{}' (needed by '{}'):", p.dep, p.needed_by)));
-    println!("    {}", ui::blue(&format!("[k]eep      keep the installed {inst_src} (default)")));
-    println!("    {}", ui::blue(&format!("[r]eplace   install {off_src} instead")));
-    println!("    {}", ui::blue("keep-[a]ll  keep this and every remaining one"));
-    println!("    {}", ui::blue("[q]uit      cancel the whole operation, change nothing"));
-    print!("  {} ", ui::blue("Choice [k/r/a/q]:"));
-    std::io::stdout().flush().ok();
-    let mut line = String::new();
-    if std::io::stdin().read_line(&mut line).is_err() {
-        return KeepChoice::Keep;
-    }
-    match line.trim() {
-        "r" | "R" => KeepChoice::Replace,
-        "a" | "A" => KeepChoice::KeepAll,
-        "q" | "Q" => KeepChoice::Quit,
-        _ => KeepChoice::Keep,
+    println!("    {}", hilite_keys(&format!("[k]eep      keep the installed {inst_src} (default)")));
+    println!("    {}", hilite_keys(&format!("[r]eplace   install {off_src} instead")));
+    println!("    {}", hilite_keys("keep-[a]ll  keep this and every remaining one"));
+    println!("    {}", hilite_keys("[q]uit      cancel the whole operation, change nothing"));
+    loop {
+        print!("  {} ", hilite_keys("Choice [k/r/a/q]:"));
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return KeepChoice::Keep;
+        }
+        match line.trim() {
+            "" | "k" | "K" => return KeepChoice::Keep,
+            "r" | "R" => return KeepChoice::Replace,
+            "a" | "A" => return KeepChoice::KeepAll,
+            "q" | "Q" => return KeepChoice::Quit,
+            other => println!(
+                "    {}",
+                ui::blue(&format!("'{other}' is not a choice — type k, r, a, or q (Enter = keep)."))
+            ),
+        }
     }
 }
 
@@ -1766,6 +1779,76 @@ fn closest<'a>(term: &str, candidates: impl Iterator<Item = &'a str>) -> Option<
     best.map(|(_, s)| s)
 }
 
+/// If `m` is a `repo:name` pin whose repo is unknown, return the corrected
+/// `closest_repo:name`; used so a mistyped pin repo (`conrad:vlc`) is caught as
+/// `conraid:vlc`. None when there is no pin, the repo is valid, or nothing close.
+fn fix_pin_repo(db: &PkgDb, m: &str) -> Option<String> {
+    let (r, name) = m.split_once(':')?;
+    let repos = db.all_repos();
+    if repos.iter().any(|x| x == r) {
+        return None; // repo part is fine — the name is the problem
+    }
+    let s = closest(r, repos.iter().map(|x| x.as_str()))?;
+    Some(format!("{s}:{name}"))
+}
+
+/// Report package-name misses with guidance instead of a bare "no match":
+///   * if the database is empty the real problem is missing metadata, so point
+///     at `slacker update` (printed once);
+///   * a `repo:name` pin with a mistyped repo suggests the closest repo;
+///   * otherwise suggest the closest available name (the pin is kept on the
+///     suggestion, so `alienbob:cvlc` -> `alienbob:vlc`).
+/// Printed to stderr, matching the previous "no match for ..." behaviour.
+fn report_pkg_misses(db: &PkgDb, misses: &[String]) {
+    if misses.is_empty() {
+        return;
+    }
+    if db.is_empty() {
+        eprintln!("no repository metadata yet — run `slacker update` first");
+        return;
+    }
+    for m in misses {
+        if let Some(fixed) = fix_pin_repo(db, m) {
+            eprintln!("no match for '{m}' — did you mean '{fixed}'?");
+            continue;
+        }
+        let (pin, name) = match m.split_once(':') {
+            Some((r, n)) => (Some(r), n),
+            None => (None, m.as_str()),
+        };
+        let mut msg = format!("no match for '{m}'");
+        if let Some(s) = closest(name, db.available_names()) {
+            let suggestion = pin.map_or_else(|| s.clone(), |r| format!("{r}:{s}"));
+            msg.push_str(&format!(" — did you mean '{suggestion}'?"));
+        }
+        eprintln!("{msg}");
+    }
+}
+
+/// Report names that name no *installed* package (for upgrade/reinstall/remove):
+///   * a `repo:name` pin with a mistyped repo suggests the closest repo;
+///   * if the name exists in a repo, it simply was not installed — point at
+///     `slacker install`;
+///   * otherwise suggest the closest installed name (typo help).
+fn report_installed_misses(db: &PkgDb, installed: &[pkg::PkgId], misses: &[String]) {
+    for m in misses {
+        if let Some(fixed) = fix_pin_repo(db, m) {
+            eprintln!("'{m}' is not installed — did you mean '{fixed}'?");
+            continue;
+        }
+        let name = m.rsplit(':').next().unwrap_or(m); // strip any repo: pin
+        if !db.candidates(name).is_empty() {
+            eprintln!("'{m}' is not installed — install it first with `slacker install {name}`");
+        } else {
+            let mut msg = format!("'{m}' is not installed");
+            if let Some(s) = closest(name, installed.iter().map(|p| p.name.as_str())) {
+                msg.push_str(&format!(" — did you mean '{s}'?"));
+            }
+            eprintln!("{msg}");
+        }
+    }
+}
+
 /// Validate an `@repo` / `@_tag` selector. Returns a helpful error if it names
 /// neither a known repo nor a build tag actually in use.
 fn validate_selector(db: &PkgDb, pattern: &str) -> Result<(), String> {
@@ -1878,13 +1961,14 @@ fn collect_installed_targets<'a>(
     installed: &[pkg::PkgId],
     tag_prios: &[crate::config::TagPriority],
     patterns: &[String],
-) -> Result<(Vec<&'a repo::AvailPkg>, Vec<String>), String> {
+) -> Result<(Vec<&'a repo::AvailPkg>, Vec<String>, Vec<String>), String> {
     for pat in patterns {
         validate_selector(db, pat)?;
     }
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     let mut protected = Vec::new(); // names kept because their source has priority
+    let mut misses = Vec::new(); // plain names that matched no installed package
     for pat in patterns {
         if let Some(rest) = pat.strip_prefix('@') {
             // @repo -> installed packages whose build tag belongs to that repo
@@ -1918,10 +2002,12 @@ fn collect_installed_targets<'a>(
             // Plain name / substring / series, or an explicit `repo:name` pin.
             // Only the pin bypasses the source-priority guard.
             let pinned = pat.split_once(':').is_some();
+            let mut hit = false;
             for p in db.match_pattern(pat) {
                 let Some(inst) = installed.iter().find(|i| i.name == p.id.name) else {
                     continue;
                 };
+                hit = true;
                 if !seen.insert(p.id.name.clone()) {
                     continue;
                 }
@@ -1931,9 +2017,14 @@ fn collect_installed_targets<'a>(
                 }
                 out.push(p);
             }
+            // A plain name that matched no installed package is a miss — the
+            // caller turns it into a "not installed / did you mean" hint.
+            if !hit {
+                misses.push(pat.clone());
+            }
         }
     }
-    Ok((out, protected))
+    Ok((out, protected, misses))
 }
 
 /// One "kept (priority)" detail line, explaining why an installed package was
@@ -2491,7 +2582,7 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     // ---- selection: update many, one, or none ----
     print!(
         "\n{} ",
-        ui::blue(&format!(
+        hilite_keys(&format!(
             "{} repo(s) have updates. Update [a]ll / numbers (e.g. 1 2) / [n]one? [a]:",
             needing.len()
         ))
@@ -2613,7 +2704,22 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let results = db.search(term);
     if results.is_empty() {
-        println!("No packages match '{term}'.");
+        if db.is_empty() {
+            println!("No package metadata yet — run `slacker update` first.");
+        } else {
+            let mut msg = format!("No package named '{term}'.");
+            if let Some(s) = closest(term, db.available_names()) {
+                msg.push_str(&format!(" Did you mean '{s}'?"));
+            }
+            println!("{msg}");
+            println!(
+                "{}",
+                ui::dim(&format!(
+                    "search matches exact names — try `slacker file-search {term}` for a file, \
+                     or `slacker info {term}`."
+                ))
+            );
+        }
         return Ok(Outcome::NothingFound);
     }
     for p in results {
@@ -2729,7 +2835,15 @@ fn cmd_info(cfg: &Config, name: &str) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let candidates = db.candidates(name);
     if candidates.is_empty() {
-        println!("No package named '{name}' in any repo.");
+        if db.is_empty() {
+            println!("No package metadata yet — run `slacker update` first.");
+        } else {
+            let mut msg = format!("No package named '{name}' in any repo.");
+            if let Some(s) = closest(name, db.available_names()) {
+                msg.push_str(&format!(" Did you mean '{s}'?"));
+            }
+            println!("{msg}");
+        }
         return Ok(Outcome::NothingFound);
     }
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
@@ -4135,9 +4249,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let (matched, misses) = collect(&db, patterns)?;
-    for m in &misses {
-        eprintln!("no match for '{m}'");
-    }
+    report_pkg_misses(&db, &misses);
     // install = only packages that are not already installed and not blacklisted
     let mut frozen = Vec::new();
     let mut already = Vec::new();
@@ -4159,6 +4271,18 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     if todo.is_empty() {
         // Still show why nothing will happen (frozen / already installed).
         show_plan(&[], &frozen, &already);
+        // If the only reason is that they are already installed, nudge toward the
+        // command that actually does something with an installed package.
+        if frozen.is_empty() && !already.is_empty() {
+            let one = &already[0];
+            println!(
+                "{}",
+                ui::dim(&format!(
+                    "already installed — use `slacker upgrade {one}` for a newer build, \
+                     or `slacker reinstall {one}`."
+                ))
+            );
+        }
         println!("Nothing to install.");
         return Ok(Outcome::NothingFound);
     }
@@ -4193,8 +4317,9 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
 fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let (cands, protected) =
+    let (cands, protected, misses) =
         collect_installed_targets(&db, &installed, &cfg.tag_priorities, patterns)?;
+    report_installed_misses(&db, &installed, &misses);
     let mut frozen = Vec::new();
     let todo: Vec<_> = cands
         .into_iter()
@@ -4239,8 +4364,9 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
 fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let (cands, protected) =
+    let (cands, protected, misses) =
         collect_installed_targets(&db, &installed, &cfg.tag_priorities, patterns)?;
+    report_installed_misses(&db, &installed, &misses);
     let mut frozen = Vec::new();
     let todo: Vec<_> = cands
         .into_iter()
@@ -4289,6 +4415,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
 
     let mut todo: Vec<&pkg::PkgId> = Vec::new();
     let mut frozen: Vec<String> = Vec::new();
+    let mut misses: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
 
     for pat in patterns {
@@ -4315,8 +4442,13 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
         }
         // plain name / substring match against installed names
         let term = pat.split_once(':').map(|x| x.1).unwrap_or(pat);
+        let mut hit = false;
         for inst in &installed {
-            if (inst.name == term || inst.name.contains(term)) && seen.insert(inst.name.clone()) {
+            if inst.name == term || inst.name.contains(term) {
+                hit = true;
+                if !seen.insert(inst.name.clone()) {
+                    continue;
+                }
                 if bl_installed(cfg, db.as_ref(), inst) {
                     frozen.push(inst.name.clone());
                     continue;
@@ -4324,6 +4456,18 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
                 todo.push(inst);
             }
         }
+        // Named something that is not installed: say so (with a typo hint over
+        // the installed set) rather than letting it vanish into "Nothing to remove".
+        if !hit {
+            let mut msg = format!("'{pat}' is not installed");
+            if let Some(s) = closest(term, installed.iter().map(|p| p.name.as_str())) {
+                msg.push_str(&format!(" — did you mean '{s}'?"));
+            }
+            misses.push(msg);
+        }
+    }
+    for m in &misses {
+        eprintln!("{m}");
     }
     if todo.is_empty() {
         if !frozen.is_empty() {
@@ -4503,7 +4647,7 @@ fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String
     } else {
         print!(
             "{} ",
-            ui::blue("Enter a number to revert to (or 'n' to cancel):")
+            hilite_keys("Enter a number to revert to (or [n] to cancel):")
         );
         std::io::stdout().flush().ok();
         let mut line = String::new();
@@ -4579,9 +4723,7 @@ fn cmd_download(
 ) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let (matched, misses) = collect(&db, patterns)?;
-    for m in &misses {
-        eprintln!("no match for '{m}'");
-    }
+    report_pkg_misses(&db, &misses);
     if matched.is_empty() {
         println!("Nothing to download.");
         return Ok(Outcome::NothingFound);
@@ -5064,6 +5206,8 @@ fn dist_execute(
 /// the target, take the target's version of every package (priority bypassed),
 /// and install core-first, then install-new, then the rest.
 fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome, String> {
+    // A little ceremony for the distribution-scale operation on the official tree.
+    banner::show();
     // Running side: codename is authoritative for -current; VERSION_ID names a
     // stable. An unrecognisable os-release is a refusal, never a guess.
     let running = dist::parse_release_from_os(
@@ -5105,7 +5249,10 @@ fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome
     // target's everywhere it appears in the mirror/repo URLs (so `mirror` and
     // `mirror/patches` repos auto-follow, and any literal slackware URL is moved).
     let running_seg = slackware_dir(&cfg.arch)
-        .ok_or("cannot determine this system's slackware release directory")?;
+        .ok_or(
+            "cannot determine this system's slackware release directory — \
+             check /etc/os-release and the `arch` line in slacker.conf",
+        )?;
     let prefix = running_seg
         .rsplit_once('-')
         .map(|(p, _)| p)
@@ -5742,6 +5889,14 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
         .collect();
     execute_plan(cfg, &plan, cli.yes)?;
     report_pending_configs(&before_cfgs);
+    // A nod to the official tree when this upgrade actually touched it (a package
+    // from the main slackware repo or one of its subtrees: patches/extra/...).
+    if plan
+        .iter()
+        .any(|it| cfg.repo_by_name(&it.pkg.repo).is_some_and(|r| r.official || r.subtree))
+    {
+        banner::show();
+    }
     if self_upgrade {
         println!("slacker upgraded itself; please re-run.");
         return Ok(Outcome::SelfUpgrade);
@@ -5955,8 +6110,8 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let to_remove: Vec<&pkg::PkgId> = if cli.yes {
         orphans.clone()
     } else {
-        println!("Enter numbers to KEEP (e.g. 1 3 5 or 2-4), 'n' to keep all/cancel,");
-        print!("or press Enter to remove all listed: ");
+        println!("{}", hilite_keys("Enter numbers to KEEP (e.g. 1 3 5 or 2-4), [n] to keep all/cancel,"));
+        print!("{}", hilite_keys("or press [Enter] to remove all listed: "));
         std::io::stdout().flush().ok();
         let mut line = String::new();
         if std::io::stdin().read_line(&mut line).is_err() {
@@ -5968,6 +6123,17 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
             return Ok(Outcome::Ok);
         }
         let keep = parse_selection(trimmed, orphans.len());
+        if !trimmed.is_empty() && keep.is_empty() {
+            // Non-empty but nothing valid parsed (a typo, or a non-Latin key like
+            // Greek 'ν' meant as 'n'). Do NOT fall through to "remove all" — that
+            // is the opposite of a mistyped cancel. Abort safely; only an explicit
+            // Enter removes everything.
+            println!(
+                "{}",
+                ui::blue(&format!("didn't understand {trimmed:?} — nothing removed (run clean-system again)."))
+            );
+            return Ok(Outcome::Ok);
+        }
         let chosen: Vec<&pkg::PkgId> = orphans
             .iter()
             .enumerate()
@@ -6128,8 +6294,8 @@ fn select_packages_pkgid<'a>(
     }
     print!(
         "{} ",
-        ui::blue(&format!(
-            "Enter numbers to {verb} (e.g. 1 3 5 or 2-4), Enter for all, 'n' to cancel:"
+        hilite_keys(&format!(
+            "Enter numbers to {verb} (e.g. 1 3 5 or 2-4), [Enter] for all, [n] to cancel:"
         ))
     );
     std::io::stdout().flush().ok();
@@ -6145,6 +6311,10 @@ fn select_packages_pkgid<'a>(
         return pkgs;
     }
     let sel = parse_selection(t, pkgs.len());
+    if sel.is_empty() {
+        println!("    {}", ui::blue(&format!("didn't understand {t:?} — nothing selected.")));
+        return Vec::new();
+    }
     pkgs.into_iter()
         .enumerate()
         .filter(|(i, _)| sel.contains(&(i + 1)))
@@ -6197,8 +6367,8 @@ fn select_packages<'a>(
     }
     print!(
         "{} ",
-        ui::blue(&format!(
-            "Enter numbers to {verb} (e.g. 1 3 5 or 2-4), Enter for all, 'n' to cancel:"
+        hilite_keys(&format!(
+            "Enter numbers to {verb} (e.g. 1 3 5 or 2-4), [Enter] for all, [n] to cancel:"
         ))
     );
     std::io::stdout().flush().ok();
@@ -6214,6 +6384,10 @@ fn select_packages<'a>(
         return pkgs;
     }
     let sel = parse_selection(t, pkgs.len());
+    if sel.is_empty() {
+        println!("    {}", ui::blue(&format!("didn't understand {t:?} — nothing selected.")));
+        return Vec::new();
+    }
     pkgs.into_iter()
         .enumerate()
         .filter(|(i, _)| sel.contains(&(i + 1)))
@@ -6324,6 +6498,29 @@ fn choice_line(prefix: &str, entries: &[(&str, &str)], default_key: &str) -> Str
     s.push_str(&ui::blue(" ? "));
     s.push_str(&ui::white(&format!("[{default_key}]")));
     s
+}
+
+/// Colour an existing prompt/menu line: every bracketed key — `[s]`, `[a]ll`,
+/// `[k/r/a/q]`, `keep-[a]ll`, `a[b]ort` … — is rendered in WHITE so it stands
+/// out, while the surrounding text stays blue. Use this for the multi-line
+/// option menus and selection prompts (choice_line is for one-line key rows).
+/// With NO_COLOR / no TTY, ui::* are no-ops so the text comes through unchanged.
+fn hilite_keys(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        match rest[open..].find(']') {
+            Some(rel) => {
+                let close = open + rel;
+                out.push_str(&ui::blue(&rest[..open]));
+                out.push_str(&ui::white(&rest[open..=close])); // the [..] in white
+                rest = &rest[close + 1..];
+            }
+            None => break,
+        }
+    }
+    out.push_str(&ui::blue(rest));
+    out
 }
 
 /// Overwrite `target` with the `.new` file, first saving the existing `target`
@@ -7007,6 +7204,7 @@ fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
     let mut rules: Vec<(String, config::BlacklistRule)> = Vec::new();
     let mut syntax_errs: Vec<String> = Vec::new();
     let mut all_warns: Vec<String> = Vec::new();
+    let mut repo_issue = false; // a message referred to an unknown/inactive repo
     for (idx, n) in names.iter().enumerate() {
         let raw = n.trim().to_string();
         match config::parse_blacklist_rule(n) {
@@ -7018,12 +7216,38 @@ fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
             }
             Err(e) => {
                 // Drop the leading "'raw': " the parser prepends so the batched
-                // list stays aligned, then append the unquoted-@repo hint when
-                // a bare `@repo` is followed by another argument.
+                // list stays aligned.
                 let pfx = format!("'{raw}': ");
                 let detail = e.strip_prefix(pfx.as_str()).unwrap_or(e.as_str()).to_string();
+                // First check that the @repo (if any) is even an active repo: a
+                // mistyped/inactive repo is the likelier mistake than a missing
+                // pattern, so lead with it (with a typo hint), and remind that a
+                // not-yet-enabled repo can still be declared with a full rule + --yes.
+                let repo_tok = n
+                    .trim()
+                    .strip_prefix('@')
+                    .and_then(|s| s.split(char::is_whitespace).next())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let detail = match repo_tok {
+                    Some(r) if !active.contains(&r) => {
+                        repo_issue = true;
+                        let mut d = format!("no active repo '{r}'");
+                        if let Some(s) = closest(r, active.iter().copied()) {
+                            d.push_str(&format!(" — did you mean '@{s}'?"));
+                        }
+                        d.push_str(
+                            "; a rule also needs a pattern, e.g. \"@REPO vlc\" \
+                             (add --yes to declare one for a repo you will enable later)",
+                        );
+                        d
+                    }
+                    _ => detail,
+                };
                 let mut msg = format!("{:<22} {detail}", format!("\"{raw}\""));
-                if n.starts_with('@') && !n.contains(char::is_whitespace) {
+                // Bare `@repo` followed by a separate argument => the user likely
+                // forgot to quote them as one rule.
+                if n.starts_with('@') && !n.contains(char::is_whitespace) && repo_tok.map_or(false, |r| active.contains(&r)) {
                     if let Some(next) = names.get(idx + 1) {
                         msg.push_str(&format!("  (did you mean \"{n} {next}\" ?)"));
                     }
@@ -7041,7 +7265,7 @@ fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
         for s in syntax_errs.iter().chain(all_warns.iter()) {
             out.push_str(&format!("  {s}\n"));
         }
-        if !all_warns.is_empty() {
+        if !all_warns.is_empty() || repo_issue {
             out.push_str(&format!("  active repos: {}", active.join(", ")));
         }
         return Err(out.trim_end().to_string());
@@ -7738,6 +7962,24 @@ mod selection_tests {
         assert_eq!(super::closest("gnme", cands.into_iter()), Some("gnome".into()));
         assert_eq!(super::closest("conrad", cands.into_iter()), Some("conraid".into()));
         assert_eq!(super::closest("zzzzzz", cands.into_iter()), None);
+    }
+
+    #[test]
+    fn fix_pin_repo_catches_mistyped_repo() {
+        let db = crate::pkgdb::PkgDb::for_test(
+            Vec::new(),
+            &[("slackware", 100), ("alienbob", 80), ("conraid", 70)],
+            Some(100),
+        );
+        // mistyped repo in a pin -> corrected, name preserved
+        assert_eq!(super::fix_pin_repo(&db, "conrad:vlc"), Some("conraid:vlc".into()));
+        assert_eq!(super::fix_pin_repo(&db, "aleinbob:vlc"), Some("alienbob:vlc".into()));
+        // valid repo -> the repo is fine (name handled elsewhere)
+        assert_eq!(super::fix_pin_repo(&db, "alienbob:cvlc"), None);
+        // no pin at all -> nothing to fix
+        assert_eq!(super::fix_pin_repo(&db, "vlc"), None);
+        // unrecognisable repo -> no suggestion
+        assert_eq!(super::fix_pin_repo(&db, "zzzzzz:vlc"), None);
     }
 
     #[test]

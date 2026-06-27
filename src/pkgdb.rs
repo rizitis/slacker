@@ -130,6 +130,20 @@ impl PkgDb {
         v
     }
 
+    /// Every available package NAME across all (non-quarantined) repos, for
+    /// "did you mean" typo suggestions. May repeat a name shipped by several
+    /// repos — harmless for the closest-match search.
+    pub fn available_names(&self) -> impl Iterator<Item = &str> {
+        self.all.iter().map(|p| p.id.name.as_str())
+    }
+
+    /// True when no package metadata is loaded at all — i.e. `slacker update` was
+    /// never run (or every repo is quarantined). Lets callers say "run update"
+    /// instead of the misleading "no match" when the real problem is no data.
+    pub fn is_empty(&self) -> bool {
+        self.all.is_empty()
+    }
+
     /// Does `term` name a real Slackware *series* (a, ap, l, kde, ... or an
     /// SBo-style category) rather than just a package whose name equals some
     /// repo's per-package directory? A genuine series groups *several* distinct
@@ -490,6 +504,28 @@ mod upgrade_tests {
 
     fn tag(name: &str, t: &str, p: i32) -> TagPriority {
         TagPriority { name: name.into(), tag: t.into(), priority: p }
+    }
+
+    #[test]
+    fn available_names_and_is_empty() {
+        // Empty database => is_empty true, no names (the "run update first" case).
+        let empty = db(vec![], &[], None);
+        assert!(empty.is_empty());
+        assert_eq!(empty.available_names().count(), 0);
+
+        // Populated => names exposed for "did you mean" suggestions.
+        let d = db(
+            vec![
+                avail("emacs-30.1-x86_64-1", "slackware"),
+                avail("vim-9.1-x86_64-1", "slackware"),
+            ],
+            &[("slackware", 100)],
+            Some(100),
+        );
+        assert!(!d.is_empty());
+        let mut names: Vec<&str> = d.available_names().collect();
+        names.sort();
+        assert_eq!(names, vec!["emacs", "vim"]);
     }
 
     #[test]
