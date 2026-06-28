@@ -1,9 +1,21 @@
+Version Beta 0.8.2
+=====
+Update: Wiki, man pages
+Update: find-mirror now works on -current AND stable (and 32-bit)
 Add: cdm: slacker pri-repo 65 repo_name (change priority to 65)
 Add: banner.rs
 Fix: varius bugs
 Fix: bug in Multi-match chooser
 Update: Wiki
 Update: man pages
+Add: cmd slacker pin / unpin — permanent "positive" pin (the opposite of freeze)
+- Save INSIDE the blacklist with @repo 100% pkgname syntax (no new files).
+- Commands: pin repo:package and unpin package (unpin with no argument = list).
+- Semantics: a pinned package is derived ONLY from the pinned repo, ignoring
+priority, in ALL commands (incl. upgrade-all). A package has at most one
+pin (re-pin = replace). thanks to my dear friend and real life neighbor @gcosbug ;)
+Message:
+- Hopefully next release will be 0.9.0 with full i686 support and binary AND no more new feature will be be add in slacker please!!! (it ιs not zypper :D)
 ---
 
 Version Beta 0.8.1

@@ -190,7 +190,8 @@ enum Cmd {
     },
     /// Find the fastest up-to-date Slackware mirror for your location: probes the
     /// official mirror list over HTTP and ranks reachable, fresh mirrors by speed,
-    /// then suggests one. Does not change your configuration. (-current only.)
+    /// lists the 7 fastest and proposes the 3 fastest. Works on -current and stable. Does not change
+    /// your configuration.
     FindMirror,
     /// Snapshot installed packages into a template.
     GenerateTemplate { name: String },
@@ -201,13 +202,24 @@ enum Cmd {
     /// Delete a template file (does not touch installed packages).
     DeleteTemplate { name: String },
     /// Add one or more blacklist rules ("freeze"). Each argument is one rule:
-    /// a regex, a `series/`, or `@repo regex` (quote rules with spaces).
+    /// a regex, a `series/`, or `@repo regex` (quote rules with spaces). Run with
+    /// no argument to list the current frozen rules.
     Frozen { names: Vec<String> },
     /// Remove one or more blacklist rules ("unfreeze"). Each argument must match
     /// an existing rule EXACTLY, as a literal string — special characters like
     /// `.*`, `*`, `-` or `/` are compared verbatim, never as a pattern. Run with
     /// no argument to list the current rules. Quote rules with spaces.
     Unfrozen { names: Vec<String> },
+    /// Pin a package to ONE repo, regardless of priority: `pin repo:package`
+    /// (e.g. `pin alienbob:vlc`). From then on every command (incl. upgrade-all)
+    /// sources that package only from that repo. Stored in the `blacklist` file
+    /// as `@repo 100% package`. A freeze on the same package always wins. Run
+    /// with no argument to list the current pins.
+    Pin { spec: Option<String> },
+    /// Remove a pin: `unpin package` (e.g. `unpin vlc`). The package returns to
+    /// normal priority-based resolution. Run with no argument to list the
+    /// current pins.
+    Unpin { names: Vec<String> },
     /// Add a binary repository to the `repos` file:
     /// `add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=...]`.
     /// URL must be http:// or https:// and unique. Separate words, no quotes
@@ -342,6 +354,8 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::DeleteTemplate { name } => cmd_delete_template(cli, &cfg, name),
         Cmd::Frozen { names } => cmd_frozen(&cli, &cfg, names),
         Cmd::Unfrozen { names } => cmd_unfrozen(&cli, &cfg, names),
+        Cmd::Pin { spec } => cmd_pin(&cli, &cfg, spec.as_deref()),
+        Cmd::Unpin { names } => cmd_unpin(&cli, &cfg, names),
         Cmd::AddRepo { priority, name, url, flags } => {
             cmd_add_repo(cli, &cfg, priority, name, url, flags)
         }
@@ -495,6 +509,8 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::DeleteTemplate { .. } => "delete-template",
         Cmd::Frozen { .. } => "frozen",
         Cmd::Unfrozen { .. } => "unfrozen",
+        Cmd::Pin { .. } => "pin",
+        Cmd::Unpin { .. } => "unpin",
         Cmd::AddRepo { .. } => "add-repo",
         Cmd::DelRepo { .. } => "del-repo",
         Cmd::PriRepo { .. } => "pri-repo",
@@ -989,6 +1005,41 @@ fn show_plan(plan: &[PlanItem], frozen: &[String], protected: &[String]) {
             println!("    {}", ui::white(n));
         }
     }
+}
+
+/// Informational note (mirrors how frozen packages are surfaced): list any plan
+/// package whose name is pinned, so the user sees the pin steered the source.
+/// No-op when nothing in the plan is pinned.
+fn report_pinned_in_plan(cfg: &Config, plan: &[PlanItem]) {
+    let mut seen = HashSet::new();
+    let mut lines = Vec::new();
+    for it in plan {
+        if let Some(repo) = cfg.pinned_repo(&it.pkg.id.name) {
+            if seen.insert(it.pkg.id.name.clone()) {
+                lines.push(format!("{} -> {}", it.pkg.id.name, repo));
+            }
+        }
+    }
+    if !lines.is_empty() {
+        println!(
+            "{}",
+            ui::blue("  pinned (taken only from their repo, ignoring priority):")
+        );
+        for l in &lines {
+            println!("    {}", ui::white(l));
+        }
+    }
+}
+
+/// One-line discoverability tip shown with a plan: how to keep a package from
+/// changing (freeze) or take it only from one repo (pin).
+fn hint_freeze_pin() {
+    println!(
+        "  {}",
+        ui::dim(
+            "tip: keep a package unchanged with `frozen <name>`, or take it from one repo with `pin repo:name`"
+        )
+    );
 }
 
 /// Read-only: for packages in the plan whose *name* is also offered by other
@@ -3591,15 +3642,24 @@ fn host_of(url: &str) -> Option<String> {
     Some(after.split('/').next()?.to_string())
 }
 
+/// How many of the fastest mirrors `find-mirror` lists in the table.
+const FIND_MIRROR_SHOW: usize = 7;
+/// How many of the fastest mirrors `find-mirror` proposes as candidate lines.
+const FIND_MIRROR_PROPOSE: usize = 3;
+
 fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, String> {
-    // -current only, exactly like the freshness check: the upstream reference and
-    // the slackware64-current/ path are -current-specific.
-    if system::version_codename().as_deref() != Some("current") {
-        return Err("find-mirror works only on Slackware -current.".into());
-    }
     // Config is optional here — find-mirror is meant to run before you have set a
-    // mirror. If it loads, it is used only to mark your current mirror in the list.
+    // mirror. If it loads, its arch is used; otherwise x86_64 is assumed.
     let cfg = Config::load_dir(config_dir).ok();
+    // Release + arch directory for THIS system (current, or a stable VERSION_ID;
+    // slackware64 vs slackware for 32-bit). The probe path, the freshness
+    // reference and the suggested line all key off it, so find-mirror now works
+    // on -current AND stable alike.
+    let arch = cfg.as_ref().map(|c| c.arch.as_str()).unwrap_or("x86_64");
+    let dir = slackware_dir(arch).ok_or(
+        "cannot determine your Slackware release/arch — check /etc/os-release and the `arch` line in slacker.conf",
+    )?;
+    let subpath = format!("{dir}/PACKAGES.TXT");
     println!("{}", ui::blue("Finding the fastest up-to-date Slackware mirror"));
 
     let candidates = mirrors::fetch_https_mirrors()?;
@@ -3610,18 +3670,17 @@ fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, String> {
 
     // Upstream reference for freshness; fail-open — if osuosl is unreachable we
     // still rank by speed, just without the freshness filter. Keep the raw line
-    // too, so we can show upstream's own timestamp as proof of the check. arch
-    // comes from the (optional) config; find-mirror is -current only, so the
-    // release resolves to `current` here.
-    let arch = cfg.as_ref().map(|c| c.arch.as_str()).unwrap_or("x86_64");
+    // too, so we can show upstream's own timestamp as proof of the check. The
+    // release/arch are already resolved above (works on -current and stable).
     let upstream_line = upstream_packages_url(arch).and_then(|u| {
         download::first_line(&u, std::time::Duration::from_secs(FRESHNESS_TIMEOUT_SECS)).ok()
     });
     let upstream = upstream_line.as_deref().and_then(parse_packages_date);
 
-    let probed = mirrors::probe_all(&candidates);
+    let probed = mirrors::probe_all(&candidates, &subpath);
     let reachable = probed.len();
-    let ranked = mirrors::rank(probed, upstream, mirrors::TOP_N);
+    // Show the fastest few, fastest first; propose the top FIND_MIRROR_PROPOSE below.
+    let ranked = mirrors::rank(probed, upstream, FIND_MIRROR_SHOW);
     if ranked.is_empty() {
         return Err(format!(
             "probed {} mirror(s) but none returned a usable PACKAGES.TXT",
@@ -3688,16 +3747,31 @@ fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, String> {
     }
 
     // Suggestion — printed only, never written: slacker does not switch mirrors
-    // for you. The line is the one the `mirrors` file expects (the -current root).
-    let best = &ranked[0];
-    let suggested = format!("{}/slackware64-current/", best.base_url.trim_end_matches('/'));
+    // for you. Offer the fastest few; each line is the one the `mirrors` file
+    // expects (the release root for this arch).
     println!();
-    println!(
-        "{}",
-        ui::green(&format!("Fastest: {} ({}ms)", best.base_url, best.latency_ms))
-    );
-    println!("  {}", ui::dim("to use it, make this the single active line in your `mirrors` file:"));
-    println!("    {}", ui::white(&suggested));
+    let propose = FIND_MIRROR_PROPOSE.min(ranked.len());
+    if propose == 1 {
+        let best = &ranked[0];
+        println!(
+            "{}",
+            ui::green(&format!("Fastest: {} ({}ms)", best.base_url, best.latency_ms))
+        );
+        println!("  {}", ui::dim("to use it, make this the single active line in your `mirrors` file:"));
+    } else {
+        println!(
+            "{}",
+            ui::green(&format!(
+                "Fastest {propose} — put ONE of these as the single active line in your `mirrors` file:"
+            ))
+        );
+    }
+    for m in ranked.iter().take(propose) {
+        println!(
+            "    {}",
+            ui::white(&format!("{}/{}/", m.base_url.trim_end_matches('/'), dir))
+        );
+    }
     println!("  {}", ui::dim("(slacker will not change your mirror automatically)"));
     Ok(Outcome::Ok)
 }
@@ -3987,6 +4061,36 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
             "Blacklist",
             &ui::yellow(&format!("{n_bl} valid, {bl_invalid} invalid — check syntax in `blacklist`")),
         );
+    }
+
+    // Pins (`@repo 100% pkg`) — flag any whose repo is not active, since such a
+    // pin has no effect until that repo exists.
+    let pins = cfg.pins();
+    if !pins.is_empty() {
+        let active: HashSet<&str> = cfg.repos.iter().map(|r| r.name.as_str()).collect();
+        let dangling: Vec<String> = pins
+            .iter()
+            .filter(|(_, repo)| !active.contains(repo))
+            .map(|(pkg, repo)| format!("{pkg} -> {repo}"))
+            .collect();
+        if dangling.is_empty() {
+            srow(&ok, "Pins", &ui::dim(&format!("{} pin(s)", pins.len())));
+        } else {
+            srow(
+                &warn,
+                "Pins",
+                &ui::yellow(&format!(
+                    "{} pin(s), {} to an inactive repo (no effect): {}",
+                    pins.len(),
+                    dangling.len(),
+                    dangling.join(", ")
+                )),
+            );
+            println!(
+                "             {}",
+                ui::dim("activate the repo, re-pin elsewhere, or `slacker unpin <pkg>`")
+            );
+        }
     }
 
     // Leftover `*.new` config files from past upgrades, waiting to be reconciled.
@@ -4303,6 +4407,8 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     // `already` is shown via the same blue "kept" line as priority skips — both
     // mean "installed, leaving it alone".
     show_plan(&plan, &frozen, &already);
+    report_pinned_in_plan(cfg, &plan);
+    hint_freeze_pin();
     show_plan_alternatives(cfg, &db, &plan, resolve);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
@@ -4351,6 +4457,8 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Upgrade)).collect();
     let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
     show_plan(&plan, &frozen, &protected);
+    report_pinned_in_plan(cfg, &plan);
+    hint_freeze_pin();
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -4398,6 +4506,8 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Reinstall)).collect();
     let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
     show_plan(&plan, &frozen, &protected);
+    report_pinned_in_plan(cfg, &plan);
+    hint_freeze_pin();
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -5881,6 +5991,8 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
 
     print_plan(&plan);
+    report_pinned_in_plan(cfg, &plan);
+    hint_freeze_pin();
 
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
@@ -5985,6 +6097,8 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     // before we ask to proceed (dry-run keeps installed versions, no prompts).
     let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
     show_plan(&plan, &frozen, &[]);
+    report_pinned_in_plan(cfg, &plan);
+    hint_freeze_pin();
     show_plan_alternatives(cfg, &db, &plan, resolve);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
@@ -7088,6 +7202,8 @@ fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, 
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
     let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
     print_plan(&plan);
+    report_pinned_in_plan(cfg, &plan);
+    hint_freeze_pin();
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -7197,10 +7313,30 @@ fn frozen_warn(raw: &str, rule: &config::BlacklistRule, active: &[&str]) -> Opti
 
 fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
     if names.is_empty() {
-        return Err(
-            "frozen: give one or more rules, e.g. \"vlc\", \"kde/\", \"xf86-.*-202.*\", \"@alienbob vlc\""
-                .into(),
+        // No argument: show the current freeze rules (pins are listed by `pin`).
+        let text =
+            std::fs::read_to_string(cfg.config_dir.join("blacklist")).unwrap_or_default();
+        let rules: Vec<&str> = text
+            .lines()
+            .map(config::strip_comment)
+            .filter(|r| !r.is_empty())
+            .filter(|r| parse_pin_line(r).is_none())
+            .collect();
+        if rules.is_empty() {
+            println!("No frozen rules set.");
+        } else {
+            println!("{}", ui::blue("Current frozen rules:"));
+            for r in &rules {
+                println!("  {}", ui::white(r));
+            }
+        }
+        println!(
+            "  {}",
+            ui::dim(
+                "to add a rule: `frozen <rule>`, e.g. `frozen vlc`, `frozen kde/`, `frozen \"@alienbob vlc\"`"
+            )
         );
+        return Ok(Outcome::Ok);
     }
     let active: Vec<&str> = cfg.repos.iter().map(|r| r.name.as_str()).collect();
 
@@ -7450,7 +7586,215 @@ fn cmd_unfrozen(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, S
     Ok(Outcome::Ok)
 }
 
-// ---- repos-file editors (add-repo / del-repo / add-tag / del-tag) ----------
+/// If `rule` is a pin line `@repo 100% pkg`, return (repo, pkg). Mirrors the
+/// parser in config::parse_blacklist_rule so the two never disagree.
+fn parse_pin_line(rule: &str) -> Option<(&str, &str)> {
+    let after = rule.strip_prefix('@')?;
+    let mut it = after.splitn(2, char::is_whitespace);
+    let repo = it.next()?.trim();
+    let rest = it.next()?.trim();
+    let pkg = rest.strip_prefix("100%")?.trim();
+    if repo.is_empty() || pkg.is_empty() || pkg.contains(char::is_whitespace) {
+        return None;
+    }
+    Some((repo, pkg))
+}
+
+/// Drop every pin line (`@repo 100% name`) whose package is in `names`, keeping
+/// all other lines (freezes, comments, blanks) verbatim. Returns the new text
+/// and the removed (package, repo) pairs.
+fn blacklist_remove_pins(text: &str, names: &[&str]) -> (String, Vec<(String, String)>) {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut removed: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        let rule = config::strip_comment(line);
+        if let Some((repo, pkg)) = parse_pin_line(rule) {
+            if names.contains(&pkg) {
+                removed.push((pkg.to_string(), repo.to_string()));
+                continue;
+            }
+        }
+        kept.push(line);
+    }
+    let mut body = kept.join("\n");
+    if !body.is_empty() {
+        body.push('\n');
+    }
+    (body, removed)
+}
+
+/// Pin a package to one repo regardless of priority. Writes `@repo 100% package`
+/// into the `blacklist` file; the counterpart is `unpin`. A package has at most
+/// one pin, so pinning to a new repo replaces any existing pin for it.
+fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Outcome, String> {
+    // No argument: show the current pins (like `unpin`) and how to add one.
+    let spec = match spec {
+        Some(s) => s,
+        None => {
+            let pins = cfg.pins();
+            if pins.is_empty() {
+                println!("No pins set.");
+            } else {
+                println!("{}", ui::blue("Current pins (package -> repo):"));
+                for (pkg, repo) in pins {
+                    println!("  {} {} {}", ui::white(pkg), ui::dim("->"), ui::cyan(repo));
+                }
+            }
+            println!(
+                "  {}",
+                ui::dim("to add a pin: `pin repo:package`, e.g. `pin alienbob:vlc`")
+            );
+            return Ok(Outcome::Ok);
+        }
+    };
+    let (repo, name) = spec.split_once(':').ok_or_else(|| {
+        format!("pin takes repo:package, e.g. \"pin alienbob:vlc\" (got \"{spec}\")")
+    })?;
+    let (repo, name) = (repo.trim(), name.trim());
+    if repo.is_empty() || name.is_empty() {
+        return Err(format!("pin takes repo:package, e.g. \"pin alienbob:vlc\" (got \"{spec}\")"));
+    }
+    if name.contains(char::is_whitespace) {
+        return Err(format!("pin takes a single package name, not \"{name}\""));
+    }
+    if config::name_has_pattern_chars(name) {
+        return Err(format!(
+            "pin uses an EXACT package name, not a pattern (got \"{name}\"). \
+             To freeze a pattern, use `slacker frozen` instead."
+        ));
+    }
+    if name.starts_with('-') || name.ends_with('-') {
+        let fixed = name.trim_matches('-');
+        return Err(format!(
+            "\"{name}\" is not a valid package name (a name does not start or end with '-'){}",
+            if fixed.is_empty() {
+                ".".to_string()
+            } else {
+                format!(" — did you mean \"{fixed}\"?")
+            }
+        ));
+    }
+
+    // The target repo must be active (with a did-you-mean for a typo).
+    let active: Vec<&str> = cfg.repos.iter().map(|r| r.name.as_str()).collect();
+    if !active.contains(&repo) {
+        let mut msg = format!("no active repo '{repo}'");
+        if let Some(s) = closest(repo, active.iter().copied()) {
+            msg.push_str(&format!(" — did you mean '{s}'?"));
+        }
+        msg.push_str(&format!("\n  active repos: {}", active.join(", ")));
+        return Err(msg);
+    }
+
+    // Tolerant load: a pin may be set before `update` (or for a repo not yet
+    // fetched). Missing metadata just means we cannot confirm the package yet.
+    let (db, _missing) = PkgDb::load_available(cfg);
+
+    // Warn (but allow) if the repo does not currently provide the package — repos
+    // change, and a pin may be set ahead of time. Offer a name typo hint.
+    if db.resolve(&format!("{repo}:{name}")).is_none() {
+        println!(
+            "{}",
+            ui::purple(&format!(
+                "note: '{repo}' does not currently provide '{name}' — pin recorded anyway; \
+                 it takes effect once the repo offers it"
+            ))
+        );
+        if let Some(s) = closest(name, db.available_names()) {
+            println!("  {}", ui::dim(&format!("did you mean '{repo}:{s}'?")));
+        }
+    }
+
+    // A freeze on the same package overrides the pin (frozen is absolute) — say so.
+    let frozen_here = cfg.blacklist_hit(name, db.series_of(name), Some(repo));
+    if frozen_here {
+        println!(
+            "{}",
+            ui::purple(&format!(
+                "warning: '{name}' is also frozen (blacklisted) — the freeze wins, so the pin \
+                 will have no effect until you `unfrozen` it"
+            ))
+        );
+    }
+
+    let line = format!("@{repo} 100% {name}");
+    let path = cfg.config_dir.join("blacklist");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+
+    // Already pinned exactly here? Nothing to do.
+    if existing.lines().any(|l| config::strip_comment(l) == line) {
+        println!("Already pinned: {name} -> {repo}");
+        return Ok(Outcome::Ok);
+    }
+
+    // Pinned to a DIFFERENT repo? A package has one pin, so replace it.
+    let prior = cfg.pinned_repo(name).map(str::to_string);
+    let (mut text, _) = blacklist_remove_pins(&existing, &[name]);
+    if let Some(p) = &prior {
+        println!("{}", ui::dim(&format!("replacing existing pin: {name} -> {p}")));
+    }
+
+    println!("About to pin (only source for '{name}', ignoring priority):");
+    println!("  {}", ui::white(&line));
+    if !confirm("write it to the blacklist?", cli.yes) {
+        println!("{}", ui::blue("aborted — nothing changed"));
+        return Ok(Outcome::Ok);
+    }
+
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&line);
+    text.push('\n');
+    std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
+    println!("{}", ui::green(&format!("Pinned: {name} -> {repo}")));
+    Ok(Outcome::Ok)
+}
+
+/// Remove a package's pin, returning it to normal priority-based resolution. The
+/// counterpart to `pin`. With no argument, lists the current pins.
+fn cmd_unpin(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
+    let path = cfg.config_dir.join("blacklist");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+
+    if names.is_empty() {
+        let pins = cfg.pins();
+        if pins.is_empty() {
+            println!("No pins set.");
+            println!(
+                "  {}",
+                ui::dim("to add a pin: `pin repo:package`, e.g. `pin alienbob:vlc`")
+            );
+            return Ok(Outcome::Ok);
+        }
+        println!("{}", ui::blue("Current pins (package -> repo):"));
+        for (pkg, repo) in pins {
+            println!("  {} {} {}", ui::white(pkg), ui::dim("->"), ui::cyan(repo));
+        }
+        println!(
+            "  {}",
+            ui::dim("to remove a pin: `unpin package`, e.g. `unpin vlc`")
+        );
+        return Ok(Outcome::Ok);
+    }
+
+    let wanted: Vec<&str> = names.iter().map(|s| s.trim()).collect();
+    let (new_text, removed) = blacklist_remove_pins(&text, &wanted);
+    if removed.is_empty() {
+        return Err(format!(
+            "no pin found for: {}\n  (run `slacker unpin` with no argument to list pins)",
+            wanted.join(", ")
+        ));
+    }
+    std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let summary: Vec<String> =
+        removed.iter().map(|(p, r)| format!("{p} (was -> {r})")).collect();
+    println!("{}", ui::green(&format!("Unpinned: {}", summary.join(", "))));
+    Ok(Outcome::Ok)
+}
+
+
 
 /// What a `repos` line declares, for matching during removal. Mirrors the
 /// classification in config::parse_repos: a third field that is a URL or the
@@ -7769,6 +8113,31 @@ fn cmd_del_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String> 
             )
         );
     }
+    // Warn about pins that point at the repo being removed: they become inert
+    // (the pinned package just stays put until the repo returns or is re-pinned).
+    let orphaned_pins: Vec<&str> = cfg
+        .pins()
+        .into_iter()
+        .filter(|(_, repo)| *repo == name)
+        .map(|(pkg, _)| pkg)
+        .collect();
+    if !orphaned_pins.is_empty() {
+        println!(
+            "{}",
+            ui::yellow(&format!(
+                "note: {} package(s) are pinned to '{name}': {}",
+                orphaned_pins.len(),
+                orphaned_pins.join(", ")
+            ))
+        );
+        println!(
+            "  {}",
+            ui::dim(
+                "their pins will have no effect once it is removed — \
+                 `slacker unpin <pkg>` or re-pin elsewhere."
+            )
+        );
+    }
     if !confirm("Remove it from the repos file?", cli.yes) {
         println!("{}", ui::dim("aborted — nothing changed"));
         return Ok(Outcome::Ok);
@@ -7998,6 +8367,30 @@ mod parallel_download_tests {
 #[cfg(test)]
 mod unfreeze_tests {
     use super::blacklist_remove;
+    use super::{blacklist_remove_pins, parse_pin_line};
+
+    #[test]
+    fn parse_pin_line_recognizes_pins_only() {
+        assert_eq!(parse_pin_line("@alienbob 100% vlc"), Some(("alienbob", "vlc")));
+        // Not pins:
+        assert_eq!(parse_pin_line("@alienbob vlc"), None); // freeze
+        assert_eq!(parse_pin_line("vlc"), None); // bare freeze
+        assert_eq!(parse_pin_line("@alienbob 100%"), None); // no package
+        assert_eq!(parse_pin_line("@alienbob 100% a b"), None); // two names
+    }
+
+    #[test]
+    fn remove_pins_drops_only_matching_pins() {
+        // Freezes (plain + scoped) and comments must survive; only the named pins go.
+        let text = "# head\nfirefox\n@alienbob 100% vlc\n@conraid 100% mpv\n@alienbob kde/\n";
+        let (out, removed) = blacklist_remove_pins(text, &["vlc"]);
+        assert_eq!(removed, vec![("vlc".to_string(), "alienbob".to_string())]);
+        assert_eq!(out, "# head\nfirefox\n@conraid 100% mpv\n@alienbob kde/\n");
+        // Removing a name with no pin removes nothing.
+        let (out2, removed2) = blacklist_remove_pins(&out, &["firefox"]);
+        assert!(removed2.is_empty());
+        assert_eq!(out2, out);
+    }
 
     #[test]
     fn removes_exact_rule_only_no_glob() {

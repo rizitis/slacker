@@ -20,9 +20,6 @@ use std::time::{Duration, Instant};
 /// proposed over a secure one).
 const MIRRORLIST_URL: &str = "https://mirrors.slackware.com/mirrorlist/";
 
-/// Path appended to a mirror's base URL to reach the -current package index.
-const CURRENT_PACKAGES_SUBPATH: &str = "slackware64-current/PACKAGES.TXT";
-
 /// How many mirrors to probe concurrently. Each probe is a tiny Range request,
 /// so this is far higher than MAX_PARALLEL (which is tuned for big downloads).
 const PROBE_POOL: usize = 24;
@@ -30,9 +27,6 @@ const PROBE_POOL: usize = 24;
 /// Per-mirror probe timeout. A mirror that does not return its first line within
 /// this is treated as unreachable and dropped.
 const PROBE_TIMEOUT_SECS: u64 = 5;
-
-/// How many ranked mirrors to present.
-pub const TOP_N: usize = 7;
 
 /// A mirror that answered, with its measured latency and index timestamp.
 pub struct MirrorResult {
@@ -82,15 +76,17 @@ fn extract_https(line: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-/// Build a mirror's -current PACKAGES.TXT URL from its base URL.
-fn candidate_url(base: &str) -> String {
-    format!("{}/{}", base.trim_end_matches('/'), CURRENT_PACKAGES_SUBPATH)
+/// Build a mirror's PACKAGES.TXT URL from its base URL and the release/arch
+/// `subpath` (e.g. `slackware64-current/PACKAGES.TXT`, or `slackware64-15.0/...`
+/// on stable, or `slackware-current/...` on 32-bit).
+fn candidate_url(base: &str, subpath: &str) -> String {
+    format!("{}/{}", base.trim_end_matches('/'), subpath.trim_start_matches('/'))
 }
 
 /// Probe every candidate concurrently: for each, time a single Range read of its
 /// PACKAGES.TXT first line and parse the timestamp. Unreachable or unparseable
 /// mirrors are silently dropped — so a wrong base path simply self-eliminates.
-pub fn probe_all(mirrors: &[(String, String)]) -> Vec<MirrorResult> {
+pub fn probe_all(mirrors: &[(String, String)], subpath: &str) -> Vec<MirrorResult> {
     let timeout = Duration::from_secs(PROBE_TIMEOUT_SECS);
     let next = AtomicUsize::new(0);
     let results: Mutex<Vec<MirrorResult>> = Mutex::new(Vec::new());
@@ -103,7 +99,7 @@ pub fn probe_all(mirrors: &[(String, String)]) -> Vec<MirrorResult> {
                     break;
                 }
                 let (country, base) = &mirrors[i];
-                let url = candidate_url(base);
+                let url = candidate_url(base, subpath);
                 let start = Instant::now();
                 if let Ok(line) = download::first_line(&url, timeout) {
                     let ms = start.elapsed().as_millis();
@@ -184,14 +180,20 @@ us\t\t <rsync://rsync.example.us/slackware/>
     }
 
     #[test]
-    fn candidate_url_appends_current_index() {
+    fn candidate_url_appends_index() {
+        let sub = "slackware64-current/PACKAGES.TXT";
         assert_eq!(
-            candidate_url("https://m/slackware/"),
+            candidate_url("https://m/slackware/", sub),
             "https://m/slackware/slackware64-current/PACKAGES.TXT"
         );
         assert_eq!(
-            candidate_url("https://m/slackware"),
+            candidate_url("https://m/slackware", sub),
             "https://m/slackware/slackware64-current/PACKAGES.TXT"
+        );
+        // A stable / 32-bit subpath flows through unchanged.
+        assert_eq!(
+            candidate_url("https://m/slackware/", "slackware-15.0/PACKAGES.TXT"),
+            "https://m/slackware/slackware-15.0/PACKAGES.TXT"
         );
     }
 
@@ -204,7 +206,7 @@ us\t\t <rsync://rsync.example.us/slackware/>
         let up = 2_000_000i64;
         // lag in seconds: 0 (fresh), 100_000 (<48h, fresh), 200_000 (>48h, stale)
         let results = vec![mk(300, up), mk(50, up - 100_000), mk(10, up - 200_000)];
-        let ranked = rank(results, Some(up), TOP_N);
+        let ranked = rank(results, Some(up), 7);
         assert_eq!(ranked.len(), 2); // stale one dropped
         assert_eq!(ranked[0].latency_ms, 50); // fastest fresh first
         assert_eq!(ranked[1].latency_ms, 300);
@@ -214,7 +216,7 @@ us\t\t <rsync://rsync.example.us/slackware/>
     fn rank_without_upstream_keeps_all_by_latency() {
         let up = 2_000_000i64;
         let results = vec![mk(300, up), mk(50, up - 100_000), mk(10, up - 200_000)];
-        let ranked = rank(results, None, TOP_N);
+        let ranked = rank(results, None, 7);
         assert_eq!(ranked.len(), 3); // no freshness filter
         assert_eq!(ranked[0].latency_ms, 10);
     }

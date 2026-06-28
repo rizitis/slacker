@@ -11,6 +11,10 @@ pub struct PkgDb {
     all: Vec<AvailPkg>,
     priority: HashMap<String, i32>,
     official_priority: Option<i32>,
+    /// Persistent source pins: package name -> repo it is pinned to
+    /// (`@repo 100% name` in the blacklist). A pinned name resolves only from
+    /// that repo, ignoring priority. Empty for test-built DBs.
+    pins: HashMap<String, String>,
 }
 
 impl PkgDb {
@@ -26,7 +30,12 @@ impl PkgDb {
             all.extend(repo::load_repo(r, &cfg.cache_dir, &cfg.arch)?);
         }
         let official_priority = cfg.repos.iter().find(|r| r.official).map(|r| r.priority);
-        Ok(PkgDb { all, priority, official_priority })
+        let pins = cfg
+            .pins()
+            .into_iter()
+            .map(|(n, r)| (n.to_string(), r.to_string()))
+            .collect();
+        Ok(PkgDb { all, priority, official_priority, pins })
     }
 
     /// Like `load`, but tolerant: a repo whose metadata is missing (never
@@ -52,7 +61,12 @@ impl PkgDb {
             }
         }
         let official_priority = cfg.repos.iter().find(|r| r.official).map(|r| r.priority);
-        (PkgDb { all, priority, official_priority }, missing)
+        let pins = cfg
+            .pins()
+            .into_iter()
+            .map(|(n, r)| (n.to_string(), r.to_string()))
+            .collect();
+        (PkgDb { all, priority, official_priority, pins }, missing)
     }
 
     pub fn repo_priority(&self, repo: &str) -> i32 {
@@ -115,11 +129,15 @@ impl PkgDb {
 
     /// Resolve a single name (or `repo:name`) to the winning candidate.
     pub fn resolve(&self, query: &str) -> Option<&AvailPkg> {
-        let (pinned, name) = split_pin(query);
+        let (explicit, name) = split_pin(query);
+        // An explicit `repo:name` (transient) wins; otherwise a persistent pin
+        // (`@repo 100% name`) forces the source. Either restricts candidates to
+        // that one repo, ignoring priority.
+        let forced = explicit.or_else(|| self.pins.get(name).map(String::as_str));
         self.all
             .iter()
             .filter(|p| p.id.name == name)
-            .filter(|p| pinned.map_or(true, |r| p.repo == r))
+            .filter(|p| forced.map_or(true, |r| p.repo == r))
             .max_by(|a, b| self.repo_priority(&a.repo).cmp(&self.repo_priority(&b.repo)))
     }
 
@@ -207,8 +225,15 @@ impl PkgDb {
 
         let mut winners: HashMap<&str, &AvailPkg> = HashMap::new();
         for p in &self.all {
+            // Explicit `repo:name` (transient) restricts to that repo; otherwise
+            // a persistent pin (`@repo 100% name`) makes a pinned name visible
+            // only from its repo, so it can never resolve from anywhere else.
             if let Some(r) = pinned {
                 if p.repo != r {
+                    continue;
+                }
+            } else if let Some(pin) = self.pins.get(p.id.name.as_str()) {
+                if &p.repo != pin {
                     continue;
                 }
             }
@@ -361,14 +386,23 @@ impl PkgDb {
             if avail.id.version == inst.version && avail.id.build == inst.build {
                 continue;
             }
-            let inst_prio = self.installed_priority(inst, tag_prios);
-            let cand_prio = self.repo_priority(&avail.repo);
-            let propose = if cand_prio > inst_prio {
-                true // higher-priority source wins (even same version)
-            } else if cand_prio == inst_prio {
-                avail.id.is_other_revision_of(inst) // genuine self-upgrade
+            let propose = if self.pins.contains_key(&inst.name) {
+                // A pin forces its repo as the source regardless of priority or
+                // migration direction. resolve() already returned the pinned
+                // repo's candidate, and it differs from what's installed (exact
+                // matches were skipped above), so the package now tracks the
+                // pinned repo.
+                avail.id.is_other_revision_of(inst)
             } else {
-                false // lower-priority source: never migrate down
+                let inst_prio = self.installed_priority(inst, tag_prios);
+                let cand_prio = self.repo_priority(&avail.repo);
+                if cand_prio > inst_prio {
+                    true // higher-priority source wins (even same version)
+                } else if cand_prio == inst_prio {
+                    avail.id.is_other_revision_of(inst) // genuine self-upgrade
+                } else {
+                    false // lower-priority source: never migrate down
+                }
             };
             if propose {
                 out.push(Upgrade { installed: inst.clone(), available: avail });
@@ -467,7 +501,7 @@ impl PkgDb {
         for (n, p) in prios {
             priority.insert(n.to_string(), *p);
         }
-        PkgDb { all, priority, official_priority: official }
+        PkgDb { all, priority, official_priority: official, pins: HashMap::new() }
     }
 }
 
@@ -499,11 +533,47 @@ mod upgrade_tests {
         for (n, p) in prios {
             priority.insert(n.to_string(), *p);
         }
-        PkgDb { all: pkgs, priority, official_priority: official }
+        PkgDb { all: pkgs, priority, official_priority: official, pins: HashMap::new() }
     }
 
     fn tag(name: &str, t: &str, p: i32) -> TagPriority {
         TagPriority { name: name.into(), tag: t.into(), priority: p }
+    }
+
+    #[test]
+    fn pin_forces_repo_and_bypasses_priority() {
+        let pkgs = vec![
+            avail("vlc-3.0.21-x86_64-1", "conraid"),
+            avail("vlc-3.0.20-x86_64-1", "alienbob"),
+        ];
+        let mut d = db(pkgs, &[("conraid", 80), ("alienbob", 60)], None);
+
+        // No pin: the priority winner (conraid) resolves.
+        assert_eq!(d.resolve("vlc").unwrap().repo, "conraid");
+
+        // Pin vlc -> alienbob: resolve now forces the LOWER-priority repo.
+        d.pins.insert("vlc".into(), "alienbob".into());
+        assert_eq!(d.resolve("vlc").unwrap().repo, "alienbob");
+        // match_pattern (install / upgrade <name>) honors the pin too.
+        let m = d.match_pattern("vlc");
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].repo, "alienbob");
+        // An explicit transient `repo:name` still overrides the persistent pin.
+        assert_eq!(d.resolve("conraid:vlc").unwrap().repo, "conraid");
+
+        // upgrades_for: installed vlc is conraid's build (higher priority). Without
+        // the pin, alienbob's lower-priority build would never be proposed ("never
+        // migrate down"); the pin bypasses that guard and proposes alienbob.
+        let installed = vec![PkgId::parse("vlc-3.0.21-x86_64-1").unwrap()];
+        let ups = d.upgrades_for(&installed, &[]);
+        assert_eq!(ups.len(), 1);
+        assert_eq!(ups[0].available.repo, "alienbob");
+        assert_eq!(ups[0].available.id.version, "3.0.20");
+
+        // Pin to a repo that does not offer the package -> no candidate (stays put).
+        d.pins.insert("vlc".into(), "nosuch".into());
+        assert!(d.resolve("vlc").is_none());
+        assert!(d.upgrades_for(&installed, &[]).is_empty());
     }
 
     #[test]
@@ -819,7 +889,7 @@ mod series_match_tests {
         for (n, p) in prios {
             priority.insert(n.to_string(), *p);
         }
-        PkgDb { all: pkgs, priority, official_priority: None }
+        PkgDb { all: pkgs, priority, official_priority: None, pins: HashMap::new() }
     }
 
     // Official slackware ships ffmpeg in the *real* series `l` (many distinct

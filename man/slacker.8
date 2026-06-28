@@ -367,7 +367,7 @@ anything is written,
 .B frozen
 prints what each rule will freeze and asks for confirmation;
 .B \-\-yes
-skips the prompts.
+skips the prompts. Run with no argument to list the current frozen rules.
 .TP
 .BI unfrozen " RULE..."
 Remove one or more rules from the blacklist \(em the counterpart to
@@ -382,6 +382,35 @@ are compared verbatim, never interpreted as a pattern, so a partial name can
 never match a longer rule and the wrong line is never removed. Run with no
 argument to list the current rules. Comment lines, blank lines, and any rule you
 did not name are left untouched; a rule that is not found is reported.
+.TP
+.BI pin " REPO:PACKAGE"
+Pin a package to a single repository, ignoring priority \(em the positive
+counterpart to
+.BR frozen .
+After
+.RB ` "pin alienbob:vlc" `
+every command (including
+.BR upgrade-all )
+takes
+.I vlc
+only from
+.IR alienbob ,
+even when a higher\-priority repo offers a different build. The pin is stored
+in the blacklist file as
+.RB ` "@alienbob 100% vlc" `.
+The repository must be active (a typo is reported with a suggestion); a package
+has at most one pin, so pinning it elsewhere replaces the old pin. Pins use an
+.I exact
+package name, never a pattern. A
+.B frozen
+rule on the same package always wins over its pin. Run with no argument to list
+the current pins.
+.TP
+.BI unpin " PACKAGE..."
+Remove a package's pin, returning it to normal priority\-based resolution \(em
+the counterpart to
+.BR pin .
+Run with no argument to list the current pins.
 .SS Repositories
 .TP
 .B list-repos
@@ -411,15 +440,15 @@ mirror for your location. Each https mirror's
 is fetched with one timed range request \(em which measures real HTTP latency and
 reads the mirror's own timestamp at the same time \(em so mirrors more than 48
 hours behind the upstream master are dropped as stale, and the reachable, fresh
-ones are ranked by speed. The fastest is printed as the line to make active in
-your
+ones are ranked by speed. The 7 fastest are listed and the 3 fastest are proposed
+as lines to make active in your
 .I mirrors
 file; slacker never changes your mirror for you. Like
 .BR status ,
 this runs before any mirror is configured, so it can be used for the very first
-setup.
+setup. It works on
 .B \-current
-only.
+and on a stable release (and on 32\-bit).
 .SS Managing repositories
 .TP
 .B add-repo \fIPRIORITY NAME URL\fR [\fIflags\fR]
@@ -694,6 +723,18 @@ and
 .B info
 marked
 .IR [blacklisted] .
+The same file also holds
+.IR pins .
+A line of the form
+.RI @repo \" 100% \" PACKAGE
+(written by
+.BR pin )
+is the opposite of a freeze: it forces
+.I PACKAGE
+to be taken only from
+.IR repo ,
+ignoring priority, for every command. A freeze on a package always wins over a
+pin on it.
 .TP
 .I /etc/slacker/distro-upgrade.conf
 Optional. Sets

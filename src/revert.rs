@@ -224,4 +224,19 @@ plasma-activities: ...
             Some("https://x/y/slackware64/e/emacs-30.2-x86_64-4.txz")
         );
     }
+
+    #[test]
+    fn builds_32bit_url_from_slackware_tree() {
+        // On the 32-bit archive the base is `slackware-current` and the cumulative
+        // PACKAGES.TXT gives `./slackware/...` LOCATIONs; the URL must follow the
+        // location verbatim, so the path auto-adapts to the 32-bit tree.
+        let mut m = HashMap::new();
+        m.insert("vlc".to_string(), "./slackware/xap".to_string());
+        let id = PkgId::parse("vlc-3.0.20-i586-1").unwrap();
+        let url = cumulative_url_for("https://slackware.uk/cumulative/slackware-current", &m, &id);
+        assert_eq!(
+            url.as_deref(),
+            Some("https://slackware.uk/cumulative/slackware-current/slackware/xap/vlc-3.0.20-i586-1.txz")
+        );
+    }
 }

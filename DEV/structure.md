@@ -22,23 +22,24 @@ slacker/
 │   ├── repos                       <- binary repos + tag-priority lines
 │   ├── blacklist                   <- blacklist rules: [@repo] REGEX | [@repo] series/
 │   └── distro-upgrade.conf         <- optional DISTRO_UPGRADE_MIRROR (local source for upgrade-dist)
-└── src/                            <- 17 modules
-    ├── main.rs        CLI + commands (35 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, quarantine, history, distribution upgrade)
-    ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs + DISTRO_UPGRADE_MIRROR (distro-upgrade.conf)
+└── src/                            <- 18 modules
+    ├── main.rs        CLI + commands (38 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, blacklist freeze + pin/unpin, quarantine, history, distribution upgrade)
+    ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + pins (@repo 100% name) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs + DISTRO_UPGRADE_MIRROR (distro-upgrade.conf)
     ├── dist.rs        distribution-upgrade engine: Release/Route types, parse_release_from_os (os-release) + parse_release_from_url, the fail-closed route whitelist (dist_route), release suffix/target parsing (used by upgrade-dist and the release-mismatch guard)
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
     ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch, quarantine/trust markers
     ├── revert.rs      revert-pkg rollback helpers: previous official versions from removed_packages (strip -upgraded- suffix), cumulative PACKAGES.TXT location parse + .txz URL build
-    ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, baseline names (clean-system), blacklist source lookups
+    ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, baseline names (clean-system), blacklist source lookups + pin resolution
     ├── download.rs    https/http (ureq+rustls) + file:// + md5 + sha256 (sha256sum); parallel batch downloads (std::thread::scope, MAX_PARALLEL, best-effort)
     ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path + version_codename/version_id (os-release, for revert-pkg's -current guard and the release-mismatch check)
     ├── history.rs     package-change timeline reconstructed from the pkgtools admin dirs (ADM_DIR: packages/ + removed_packages/), local-time calibration, upgrade/reinstall inference
     ├── manifest.rs    file-search (decompressed MANIFEST)
-    ├── mirrors.rs     find-mirror engine: fetch the official https mirror list, probe each with one timed range request (latency + the mirror's own timestamp), rank by speed dropping stale ones
+    ├── mirrors.rs     find-mirror engine: fetch the official https mirror list, probe each with one timed range request (latency + the mirror's own timestamp), rank by speed dropping stale ones (top-N; -current, stable and 32-bit)
     ├── changelog.rs   check-updates / show-changelog (pager when on a TTY)
     ├── gpg.rs         GPG import + TOFU key pinning + verify (captured output, fail-closed)
     ├── template.rs    templates (generate/load/delete, includes)
     ├── newconfig.rs   .new config file handling
+    ├── banner.rs      SLACKWARE block-art banner (include_str! .nfo, TTY-gated, 256-colour, NO_COLOR aware) for upgrade-dist/upgrade-all
     └── ui.rs           minimal ANSI colouring (TTY + NO_COLOR aware), plan tables
 ```
 
@@ -78,7 +79,7 @@ slacker/
     carrying a build tag a priority on the same scale, so SBo/local/source
     packages are never silently migrated to another repo or downgraded by
     `upgrade-all`. Tag-priority lines may share priority values.
-- **blacklist** - one rule per line: `[@repo] PATTERN`. `PATTERN` is a
+- **blacklist** - one rule per line: `[@repo] PATTERN` (freeze), or `@repo 100% NAME` (pin: take that package only from that repo, exact name). `PATTERN` is a
   Slackware series when it ends in `/` (e.g. `kde/`), otherwise an unanchored
   **regex** matched against the full package id `name-version-arch-build`
   (slackpkg-style, so `xf86-.*-202.*` works; anchor with `^...$` for exact). An
@@ -87,7 +88,7 @@ slacker/
   **frozen** (never installed/upgraded/reinstalled/removed, and never listed by
   `clean-system`); an uninstalled match is **hidden** from `install-new`,
   upgrades and `check-updates`, but still shown by `search`/`info` marked
-  `[blacklisted]`. The `frozen` and `unfrozen` commands add and remove rules in
+  `[blacklisted]`. The `frozen`/`unfrozen` commands add and remove freeze rules, and `pin`/`unpin` add and remove pins, in
   this file for you (`unfrozen` matches literally, never as a regex).
 - **distro-upgrade.conf** (optional) - a single `DISTRO_UPGRADE_MIRROR=` key
   pointing `upgrade-dist` at a local source instead of the network: a local copy
@@ -269,7 +270,7 @@ reinstall, upgrade-all, install-new, install-template.
 ### Build_and_Tests
 
 > NO root needed for build & tests (only the mutating actions need root).
-> 150 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
+> 159 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
 
 ```
 cargo build --release

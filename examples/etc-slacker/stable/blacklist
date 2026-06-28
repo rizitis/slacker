@@ -1,4 +1,40 @@
-# blacklist — frozen packages, slacker must never install, upgrade or remove.
-# One name per line.
-
-#foo
+# ============================================================================
+#  slacker — package source policy   (freezes + pins)
+# ============================================================================
+#
+#  One rule per line. This file controls two opposite things:
+#
+#  1) FREEZE — slacker must never install, upgrade or remove the package.
+#       name           freeze by exact name or substring/regex (matched on the
+#                      package id, e.g.  firefox  or  xf86-.*-202.*)
+#       series/        freeze a whole series — note the trailing slash (kde/, ap/)
+#       @repo name     freeze only while the package's source IS that repo; it
+#                      still accepts updates from OTHER repos per priority
+#     Examples:
+#       firefox
+#       xf86-.*-202.*
+#       kde/
+#       @alienbob vlc
+#
+#  2) PIN — take a package ONLY from one repo, ignoring priority (the opposite
+#     of a freeze). Easiest via the commands:
+#       slacker pin alienbob:vlc      # vlc now comes only from alienbob
+#       slacker unpin vlc             # back to normal priority resolution
+#     ...or write it by hand with the 100% marker:
+#       @repo 100% name
+#     Example — vlc always from alienbob, even if a higher-priority repo has it:
+#       @alienbob 100% vlc
+#
+#  Notes
+#    * A FREEZE on a package always WINS over a PIN on the same package.
+#    * Comments start with '#'; blank lines are ignored.
+#    * Manage freezes with:  slacker frozen RULE...  /  slacker unfrozen RULE...
+#    * Manage pins with:     slacker pin repo:pkg    /  slacker unpin pkg
+#
+# ----------------------------------------------------------------------------
+#  Examples (commented out — uncomment or use the commands above)
+# ----------------------------------------------------------------------------
+#firefox
+#kde/
+#@alienbob vlc
+#@alienbob 100% vlc

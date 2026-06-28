@@ -1,0 +1,575 @@
+================================================================================
+slacker — source code map
+================================================================================
+
+A guide to src/ for anyone forking, fixing, or extending slacker. For each
+module: what it owns, the key items, and where to look first for a given change.
+Read this top-to-bottom once; after that use it as an index.
+
+The mental model: config.rs reads your /etc/slacker files -> repo.rs fetches and
+parses each repo's metadata into AvailPkg records -> pkgdb.rs unifies them into
+one priority-ordered database and answers "what wins / what upgrades / what
+matches" -> main.rs turns a CLI command into a plan and calls system.rs to run
+the real pkgtools. download.rs, gpg.rs, manifest.rs, changelog.rs, history.rs,
+template.rs, newconfig.rs, revert.rs are focused helpers used along the way.
+
+Everything is synchronous. Errors are String (Result<_, String>) on purpose —
+simple, greppable messages, no error crates.
+
+--------------------------------------------------------------------------------
+pkg.rs            (~192 lines)   Slackware package-name parsing
+--------------------------------------------------------------------------------
+Owns the PkgId type: a parsed "name-version-arch-build" 4-tuple, the atom the
+whole program passes around.
+
+  PkgId            struct { name, version, arch, build }
+  PkgId::parse     split a filename/dirname into the 4 fields
+  PkgId::tag()     full "name-version-arch-build" string
+  PkgId::build_tag()  the build field minus leading digits
+                      (1_SBo -> _SBo, 7cf -> cf, 1 -> "")
+
+WHY build_tag MATTERS: it is how slacker tells "which source built this" without
+a database. The whole priority-protection model keys off it. If you change how
+tags are derived, expect upgrade-all and the @_tag selector to shift.
+
+LOOK HERE IF: package names parse wrong (epoch, odd arch like fw/x86, names with
+dashes). Parsing is positional from the right, so unusual names are the risk.
+
+--------------------------------------------------------------------------------
+config.rs         (~1230 lines)  read & model /etc/slacker
+--------------------------------------------------------------------------------
+Parses the plain-text config files into typed structs. No network, no side
+effects beyond reading files.
+
+  Config           struct: arch, cache_dir, pkg_db_dir, adm_dir, resolve_deps,
+                   ignore_tags, repos, tag_priorities, blacklist
+                   (Vec<BlacklistRule>), config_dir, verify, max_parallel, revert_enabled,
+                   cumulative_url, + helpers
+                   (repo_by_name, repos_by_priority, blacklist_hit,
+                   official_repo_name, is_ignored_tag, pinned_repo, pins)
+  ADM_DIR/PKG_DB_DIR  ADM_DIR (slacker.conf, default /var/adm) is the pkgtools
+                   admin root; pkg_db_dir is an explicit PKG_DB_DIR when set
+                   (back-compat override), else adm_dir.join("packages"). adm_dir
+                   itself is what history.rs walks (packages/ + removed_packages/).
+  BlacklistRule    struct: optional @repo scope, optional series, optional
+                   compiled regex (matched against the full package id), + a
+                   `pin` flag. matches() EARLY-RETURNS false when pin is set, so
+                   a pin (`@repo 100% name`) never freezes. With
+                   matches(id, series, repo) + repo()/pattern()/describe()
+  parse_blacklist_rule  parse one `[@repo] REGEX|series/` freeze line OR a
+                   `@repo 100% NAME` pin (exact name; name_has_pattern_chars
+                   rejects a pattern). pub: the `frozen`/`pin` commands reuse it.
+  pinned_repo/pins  the pin lookups: name -> its pinned repo / all (name,repo)
+  Repo             struct: priority, name, url, official, immutable, subtree,
+                   verify (per-repo override) + verify_policy(global) resolver +
+                   download_base()/join_download_url() (subtree -> parent/root
+                   URL for packages & GPG-KEY; metadata still from the repo URL)
+  TagPriority      struct: priority, name, tag   (the `priority name tag` lines)
+  Check            enum: Gpg | Md5 | Sha — one verification method
+  VerifyPolicy     enum: All | Required(list) | None, with wants()/requires();
+                   parsed from `VERIFY=` (slacker.conf) or `verify=` (repos)
+  MAX_PARALLEL / REVERT / CUMULATIVE_URL   newer slacker.conf keys: the
+                   parallel-download count (default 4, clamped 1-16), the
+                   revert-pkg on/off switch (default on), and the cumulative
+                   -current archive URL revert-pkg pulls superseded official
+                   packages from (a revert-only source, never used elsewhere)
+  Config::load     the entry point; ties all files together
+  detect_arch      reads ARCH from the installed aaa_base package
+  parse_repos      splits binary-repo lines from tag-priority lines: the 3rd
+                   field is a URL / "mirror" / "mirror/<subpath>" -> binary repo;
+                   otherwise -> tag line. The url keyword resolves to the active
+                   mirror (bare `mirror`) or the active mirror plus a subpath
+                   (`mirror/extra`, `mirror/testing`). Also parses `official`,
+                   `immutable`, `subtree` and `verify=` flags (any order; an
+                   unknown flag is a fail-fast error)
+  parse_mirrors    enforces "exactly one uncommented mirror"
+
+KEY RULES ENFORCED HERE:
+  - binary-repo priorities must be DISTINCT (duplicate -> fail-fast error)
+  - tag-priority lines MAY share a priority
+  - two-or-more active mirrors -> error; zero -> the official URL is empty
+
+LOOK HERE IF: a config line is misread, you want a new slacker.conf KEY, a new
+repos-line form, or to change arch detection. Add a KEY in Config::load's
+key/val handling; add a struct field alongside.
+
+--------------------------------------------------------------------------------
+repo.rs           (~690 lines)   fetch + parse a repo's metadata
+--------------------------------------------------------------------------------
+Turns a Repo's remote files into AvailPkg records and keeps the cache fresh.
+
+  AvailPkg         struct: id (PkgId), repo, filename, location/series, summary,
+                   md5, sha, url helpers — one available package in one repo
+  update_repo      download PACKAGES.TXT (required) + CHECKSUMS.md5 / .asc /
+                   .sha256 / ChangeLog (best-effort) into CACHE_DIR/repos/<name>/
+  ensure_manifest  lazily fetch+decompress MANIFEST.bz2 on first file-search
+  load_repo        read cached metadata -> Vec<AvailPkg>, arch-filtered
+  parse_packages_txt / parse_checksums   the actual format parsers
+  arch_compatible  keep native arch + noarch + fw (firmware) + x86 (32-bit
+                   headers); this mirrors slackpkg, do not narrow casually
+  read_text_lossy  pub(crate): UTF-8-lossy reads — some repos (extras) have
+                   non-UTF-8 bytes; use this for every metadata read
+  fetch_dep / parse_dep   pull and parse a package's `.dep` file (slackpkg+)
+  previous_names          the .prev snapshot install-new diffs against (by
+                          package NAME, so a version/build bump is not "new")
+  fetch_changelog_text    on-demand ChangeLog fetch for show-changelog
+  invalidate_metadata     drop a repo's cached PACKAGES.TXT/CHECKSUMS after a
+                          failed GPG verification, so unverified data is unused
+  quarantine_dir / trusted_dir / *_marker   cache markers under CACHE_DIR:
+                          quarantine/<name> (frozen, inert) | trusted/<name>
+                          (vetted-pass or user-trusted) | neither (untrusted ->
+                          light-vetted on next update). is_quarantined /
+                          is_hard_quarantined / mark/clear helpers back the
+                          vet-repo / trust-repo / distrust-repo commands; load
+                          skips a quarantined repo entirely
+
+LOOK HERE IF: a repo's PACKAGES.TXT/CHECKSUMS parses wrong, a package is wrongly
+filtered out by arch, MANIFEST handling misbehaves, or .dep contents are
+misread. bzip2 (MANIFEST) and gpg are shelled out, not Rust deps.
+
+GOTCHA: always route new metadata reads through read_text_lossy, or a single
+non-UTF-8 byte will crash a command (this was a real bug on the extras repo).
+
+--------------------------------------------------------------------------------
+revert.rs         (~227 lines)   rollback helpers for revert-pkg
+--------------------------------------------------------------------------------
+Pure functions (no network, no side effects) behind the `revert-pkg` command.
+Heavily unit-tested; the command wiring + the guards live in main.rs.
+
+  strip_upgraded_suffix    drop pkgtools' "-upgraded-<timestamp>" tail from a
+                   removed_packages record name
+  previous_official_versions   from one name's removed_packages records, the
+                   earlier OFFICIAL builds only (exact name match, deduped,
+                   newest-first, capped) — the candidates the user picks from
+  parse_locations  parse a cumulative PACKAGES.TXT ("PACKAGE NAME:" / "PACKAGE
+                   LOCATION:") into base-name -> series-location (the location is
+                   stable across versions, so a superseded build's path is known)
+  cumulative_url_for   build the .txz URL for an exact version in the cumulative
+                   archive; None if the name is absent (an honest "not found")
+
+LOOK HERE IF: revert-pkg picks the wrong previous build or the cumulative-archive
+URL is wrong. Data correctness lives here; the REVERT / -current / archive guards
+and the GPG verification live in main.rs (cmd_revert_pkg / revert_fetch_and_gpg_verify).
+
+--------------------------------------------------------------------------------
+pkgdb.rs          (~950 lines)   the unified, priority-ordered brain
+--------------------------------------------------------------------------------
+Merges every repo's AvailPkg list into one DB and answers the hard questions.
+This is where most behavioural bugs live — read carefully before changing.
+
+  PkgDb            struct: all (Vec<AvailPkg>) + priority map (name->i32)
+  PkgDb::load      build from Config (calls repo::load_repo per repo)
+  search           EXACT package name, case-insensitive (one row per name,
+                   highest-priority repo winning); info/file-search do substrings
+  resolve          one name -> the winning candidate; honours a transient
+                   `repo:name` pin OR a persistent pin (pins map), each forcing
+                   that repo regardless of priority. upgrades_for bypasses the
+                   priority guard for a pinned name; match_pattern drops a
+                   pinned name's candidates from other repos
+  match_pattern    THE pattern resolver. Order matters:
+                     1. @repo / @_tag  -> set selector (returns early)
+                     2. series name    -> that series only (no substring)
+                     3. exact name / substring
+                   pinning (repo:name) is handled via split_pin
+  installed_priority   given an installed PkgId, decide its "owning" priority:
+                     1. user tag-priority line for its build_tag
+                     2. else highest-priority binary repo that ships that tag
+                        (cf->conraid, alien->alienbob auto-detected)
+                     3. else official priority for an empty tag
+                     4. else i32::MAX (unknown -> protect, never touch)
+  upgrades_for     produce the upgrade-all plan: a candidate is proposed only
+                   from a repo of HIGHER or EQUAL priority; equal-priority needs
+                   a genuine revision change; lower priority is skipped (this is
+                   what prevents cross-repo migration and downgrades)
+  upgrade_respects_priority / installed_outranks   the same rule as two
+                   booleans, reused by the upgrade/reinstall/@selector targeting
+                   and the dependency resolver (candidate >= installed source ->
+                   may replace; installed >= candidate -> keep installed)
+  series_of / repo_for_tag   look up an installed package's series and source
+                   repo (used to evaluate `series/` and `@repo` blacklist rules
+                   against installed packages, which carry no series themselves)
+  newly_added      install-new: names present now but absent from .prev and not
+                   installed
+  names_provided_by  clean-system baseline: the set of package names provided
+                   by a given set of repos (official + every immutable repo),
+                   or all repos when no baseline is given. has_repo_packages
+                   reports whether a repo's metadata is loaded (the safety guard
+                   that makes clean-system refuse to run on missing baseline data)
+  repo_for_tag     which repo owns a build tag (first AvailPkg carrying it) ->
+                   used by clean-system's immutable rule and installed_attribution
+  orphans          installed names found in NO repo (now used by
+                   generate-template; clean-system uses the baseline rule above,
+                   not this)
+  is_repo / tag_in_use / repo_build_tags / all_repos / all_build_tags
+                   helpers for @-selectors and the "did you mean" diagnostics
+
+LOOK HERE IF: upgrade-all proposes something wrong (migration, downgrade, a
+missed upgrade) -> upgrades_for + installed_priority. A pattern matches too much
+or too little -> match_pattern. clean-system lists the wrong things ->
+names_provided_by + the baseline/immutable/IGNORE_TAGS/blacklist logic in
+cmd_clean_system.
+
+THE SUBTLEST CODE IN THE PROJECT is installed_priority + upgrades_for. The
+"distinct, high priority locks a repo's packages" guarantee depends on them.
+There are unit tests pinning this (sbo_not_migrated, no_downgrade,
+genuine_self_upgrade, higher_priority_same_version) — keep them green.
+
+--------------------------------------------------------------------------------
+download.rs       (~345 lines)   bytes over http/https/file
+--------------------------------------------------------------------------------
+The only module that talks to the network (via ureq + rustls).
+
+  get_bytes        fetch a URL into memory (used for keys, .dep, small files)
+  download_to      stream a URL to a destination path
+  md5_file         md5 of a local file (md-5 crate) for CHECKSUMS verification
+  sha256_file      sha-256 of a local file, via the `sha256sum` command (no
+                   hashing crate; shelled out like gpg/bzip2)
+  file_url_to_path + percent_decode   file:// support, reads the FS directly
+
+NOTE: download.rs itself is per-file and synchronous; the concurrency lives in
+main.rs (execute_plan and cmd_download run get_bytes/download_to for many
+packages at once via std::thread::scope, bounded by MAX_PARALLEL).
+
+LOOK HERE IF: TLS/proxy/timeout issues, file:// URLs, or md5 mismatches. TLS is
+NO system OpenSSL (ureq's rustls TLS); a CA/proxy problem surfaces here.
+
+--------------------------------------------------------------------------------
+system.rs         (~117 lines)    the bridge to real pkgtools
+--------------------------------------------------------------------------------
+Reads the installed-package DB and shells out to the Slackware tools. This is
+the only module that mutates the system.
+
+  installed_packages   parse PKG_DB_DIR (default ADM_DIR/packages, i.e.
+                   /var/adm/packages)
+  is_installed / installed_by_name   lookups over that list
+  install / upgrade_only / reinstall / remove_package
+                   thin wrappers over installpkg/upgradepkg/removepkg
+  cached_pkg_path  CACHE_DIR/packages/<repo>/<filename> — the download target
+  version_codename  read VERSION_CODENAME from /etc/os-release (None if absent);
+                   revert-pkg's -current-only guard uses it (fail-closed)
+
+LOOK HERE IF: install/upgrade/remove behaves differently from the native tools,
+or the installed-DB parse is wrong. slacker is intentionally a THIN layer here:
+it does not reimplement pkgtools, it calls them. Keep it that way.
+
+--------------------------------------------------------------------------------
+history.rs        (~420 lines)   package-change timeline from the admin dirs
+--------------------------------------------------------------------------------
+Reconstructs a chronological log of every package change on the box from the
+pkgtools admin dirs under ADM_DIR — so it sees changes from any tool (slacker,
+slackpkg, sbopkg, installpkg/upgradepkg/removepkg), not just slacker's own. Pure
+logic, unit-tested, no network. Shells out to nothing (uses std MetadataExt for
+mtime/ctime).
+
+  collect(adm_dir)     the entry point -> Timeline { events, clock, current }.
+                       Reads packages/ (current installs; mtime = install time)
+                       and removed_packages/ (departures).
+  RawRecord            one admin-dir entry: pkg (PkgId), installed_at (mtime),
+                       departure: Removed(ctime) | Upgraded(ctime) | None.
+                       A plain removed_packages/<id> = removepkg (ctime = removal,
+                       mtime preserved = its install). An <id>-upgraded-<TS> =
+                       the OLD version replaced by upgradepkg.
+  build_events         PURE core: per-NAME chronological chaining. Each name's
+                       records are successive tenures sorted by install time; an
+                       Upgraded-away tenure pairs with the very next tenure (within
+                       ~2 days = real in-place successor, consumed). If that
+                       successor's record was LOST to a removed_packages name
+                       collision, the target VERSION is inferred from the next
+                       known tenure (display only, not consumed) — so an upgrade
+                       reads "old -> new", never "old -> ?". Reinstall = the same
+                       id departed before this install.
+  Event / EventKind    Event { when, pkg, kind }; kind = Installed{reinstall} |
+                       Removed | Upgraded{ to: Option<PkgId> }
+  LocalClock           self-calibrating UTC->local offset from (upgraded-filename
+                       local time, that file's ctime) pairs, nearest sample per
+                       event (DST-correct, no tz crate; falls back to UTC). format
+                       / local_date for display + --since filtering.
+  days_from_civil / civil_from_days   Hinnant date math (no chrono).
+
+WHY removed_packages IS LOSSY: plain removepkg records collide on the package id
+(a later removal overwrites an earlier one); only -upgraded-<timestamp> records
+are unique. That is the structural reason build_events sometimes has to infer an
+upgrade target instead of reading it.
+
+LOOK HERE IF: a date is off (clock calibration), an upgrade shows the wrong target
+or "?", or a reinstall is misclassified. The render (colour, columns, the
+"reinstalled" same-version case) and the single-package source attribution live in
+main.rs (render_history / source_of), not here.
+
+--------------------------------------------------------------------------------
+manifest.rs       (~111 lines)   file-search
+--------------------------------------------------------------------------------
+  FileHit          struct: repo, package, path
+  file_search      search the decompressed MANIFEST for a file/basename
+LOOK HERE IF: file-search misses or over-matches. The MANIFEST is large and
+fetched lazily by repo::ensure_manifest; this module only searches it.
+
+--------------------------------------------------------------------------------
+changelog.rs      (~77 lines)    check-updates / show-changelog
+--------------------------------------------------------------------------------
+  changelog_repo       which repo's ChangeLog to track (the official one)
+  cached_changelog     read a repo's cached ChangeLog, if present
+  check_repo_updates   official repo: compare cached vs remote ChangeLog;
+                       every other repo: compare cached vs remote CHECKSUMS.md5
+                       (smaller than PACKAGES.TXT, changes on any package change)
+                       -> UpdateStatus
+  UpdateStatus         enum used for the exit-100 "pending" signal
+LOOK HERE IF: check-updates gives the wrong pending/exit status. show-changelog
+takes an optional repo name; the on-demand fetch for an uncached repo lives in
+repo::fetch_changelog_text.
+
+--------------------------------------------------------------------------------
+gpg.rs            (~280 lines)   key import + signature verify (fail-closed)
+--------------------------------------------------------------------------------
+  import_key           `update gpg`: fetch GPG-KEY (from the repo's download
+                       base -> the root for a subtree repo) + gpg --import into
+                       a per-cache keyring, then PIN its fingerprint on first
+                       contact (TOFU). A later key whose fingerprint differs from
+                       the pin is refused as a possible key-substitution attack.
+                       Returns ImportOutcome / ImportError(KeyChanged | Other)
+  read_pin / pin       per-repo fingerprint pin under cache/gpg/<name>.fpr
+  verify_checksums     verify CHECKSUMS.md5.asc against the pinned key; FAIL-CLOSED
+  verify_detached      verify any file against a detached .asc (per-package
+                       .txz.asc at install); same pinned-key, fail-closed contract
+  verify_against_pin   the shared check: GOODSIG + the signer must be the PINNED
+                       key, else Tampered (key substitution) / Unverifiable
+  Verify               enum result: NoSignature | Good(signer) | Tampered(msg) |
+                       Unverifiable(msg)
+  set_mode_700         lock down the keyring dir (unix)
+LOOK HERE IF: GPG verification rejects a good repo or you need different key
+handling. Note: this is intentionally strict — do not make verification
+best-effort without a very good reason. gpg is shelled out.
+
+--------------------------------------------------------------------------------
+template.rs       (~156 lines)   package-set snapshots
+--------------------------------------------------------------------------------
+  generate     snapshot installed names -> <name>.template
+  load         resolve a template (follows `include` lines), de-duplicated
+  delete       remove ONLY the template file (used by delete-template)
+  templates_dir / template_path   path helpers (normalise a trailing .template)
+LOOK HERE IF: template include-resolution or file naming is off. Remember the
+split: remove-template (in main.rs) uninstalls packages; template::delete just
+removes the file.
+
+--------------------------------------------------------------------------------
+newconfig.rs      (~71 lines)    leftover *.new handling
+--------------------------------------------------------------------------------
+  NewConfig        struct: the .new file and the target it would replace
+  find_new_configs walk /etc (and /usr/share/vim) for *.new files
+LOOK HERE IF: new-config misses a location or mishandles a .new pair. The
+interactive prompt itself is in main.rs (cmd_new_config).
+
+--------------------------------------------------------------------------------
+ui.rs             (~70 lines)    minimal ANSI colouring
+--------------------------------------------------------------------------------
+  blue/green/red/purple/yellow/white/cyan/dim   owned-String colour helpers
+  enabled          colour only when stdout is a TTY and NO_COLOR is unset
+Used by the plan tables, search/info output, and prompts. Piped/redirected
+output and `NO_COLOR` stay plain text.
+
+--------------------------------------------------------------------------------
+dist.rs           (~304 lines)   distribution-upgrade engine
+--------------------------------------------------------------------------------
+Release / Route types; parse_release_from_os (os-release) + parse_release_from_url;
+the fail-closed route whitelist (dist_route: only 15.0->current / 15.0->N). Pure +
+unit-tested; the orchestration, transform and disk gates live in main.rs
+(cmd_upgrade_dist).
+
+--------------------------------------------------------------------------------
+mirrors.rs        (~233 lines)   the find-mirror engine
+--------------------------------------------------------------------------------
+Fetch the official https mirror list, probe each with one timed range request
+(latency + the mirror's own PACKAGES.TXT timestamp), rank by speed dropping mirrors
+>48h behind upstream, return the fastest few. Release/arch-agnostic: works on
+-current, stable and 32-bit (the subpath is passed in). The command + freshness
+check live in main.rs (cmd_find_mirror).
+
+--------------------------------------------------------------------------------
+banner.rs         (~62 lines)    the SLACKWARE block-art banner
+--------------------------------------------------------------------------------
+ART = include_str!("slackware.nfo"); show() is TTY-gated (never to a pipe/log) and
+prints a 256-colour blue gradient by shade, NO_COLOR-aware. Called at the start of
+upgrade-dist and the end of upgrade-all (when an official/subtree package upgraded).
+
+--------------------------------------------------------------------------------
+main.rs           (~9050 lines)  CLI, planning, and every command
+--------------------------------------------------------------------------------
+The orchestrator. clap definitions, the command dispatch, the install/upgrade
+PLAN builder, and one cmd_* function per action.
+
+  Cli / Cmd        clap structs/enums — the CLI surface. ADD A COMMAND HERE
+                   (enum variant + match arm in run()); kebab-case is automatic.
+  Outcome          exit-code enum (0 ok / 1 err / 20 none / 50 self / 100 pending)
+  run              dispatch a parsed Cmd to its cmd_* function
+  confirm          the y/N prompt (honours --yes)
+
+  PLAN BUILDING (the core install/upgrade machinery):
+    InstallAction  Install / Upgrade / Reinstall
+    PlanItem       one package + action + optional dep_for (parent) + optional
+                   from (installed version, so upgrades show old -> new)
+    expand_with_deps / add_with_deps   recursively pull .dep dependencies,
+                     dedup, and attach dep_for so new deps can be shown up front
+    ask_dep_conflict  the skip/replace/skip-all/abort prompt when an installed
+                     dep from a LOWER-priority source differs from the repo
+    resolve_protected_deps / ask_protected_dep   when an installed dep comes
+                     from a HIGHER-or-equal-priority source it is kept by the
+                     priority rule, but surfaced in a table with keep / replace /
+                     keep-all (kept_detail formats the "installed X (pri) — repo
+                     (pri) not applied" lines)
+    PlanRow / print_table   render the coloured Action|Package|Version|Repo
+                     plan tables (used by every plan-producing command —
+                     install/upgrade/reinstall/remove/upgrade-all/install-new/
+                     clean-system)
+    print_plan / execute_plan   show the plan, then run it via system.rs;
+                     execute_plan downloads the packages concurrently via
+                     std::thread::scope bounded by MAX_PARALLEL (clamped 1-16,
+                     best-effort: a failed download is collected and reported,
+                     never aborting the batch — a failed GPG/checksum still
+                     blocks that package). cmd_download fetches the same way.
+    fetch_and_verify  download + verify, gated by the repo's VerifyPolicy:
+                     GPG (at update, in cmd_update) + per-package integrity here
+                     (md5 and/or sha — at least one must pass; none available =>
+                     stop). REFUSES to write through a pre-existing symlink.
+    verify_unavailable_error   the "required method missing, here's how to relax
+                     it" message (points at repos / slacker.conf)
+    warn_unverified_repos   visible warning for repos whose policy does no checks
+    report_pending_configs  after install/upgrade/upgrade-all, list any new *.new
+                     files so the user can run `new-config`
+
+  BLACKLIST HELPERS (thin wrappers over Config::blacklist_hit):
+    bl_avail / bl_installed / bl_frozen   does a rule match an available
+                     candidate / an installed package / either (freeze)? These
+                     resolve the series + source repo a rule needs.
+    frozen_warn      the `frozen` validator's soft-warning builder: unknown
+                     @repo, or a regex containing whitespace (a package id never
+                     does — a forgotten @ or quoting slip)
+    blacklist_remove  the `unfrozen` core: removes rules by EXACT-LITERAL
+                     string match (each line canonicalised via
+                     config::strip_comment so it matches the parser), NEVER as
+                     a regex — so a blacklist full of metacharacters can never
+                     lose the wrong line; comments/blanks/untouched rules are
+                     preserved and not-found args reported. Pure + unit-tested.
+    parse_pin_line / blacklist_remove_pins   the `pin`/`unpin` core: recognise
+                     a `@repo 100% name` line and remove pins by package name
+                     (pure + unit-tested).
+    report_pinned_in_plan   surfaces pinned packages in a plan, the way frozen
+                     ones are listed (install/upgrade/reinstall/upgrade-all/
+                     install-new/install-template).
+
+  SELECTORS / MATCHING HELPERS:
+    collect          expand patterns -> winning packages (+ validates selectors)
+    validate_selector  the @repo/@_tag check with the "did you mean" suggestion
+    edit_distance / closest   Levenshtein for suggestions
+    select_packages / select_packages_pkgid / parse_selection
+                     the numbered multi-match chooser (Enter=all, ranges, n)
+
+  COMMANDS: cmd_update, cmd_search, cmd_file_search, cmd_info, cmd_install,
+  cmd_upgrade, cmd_reinstall, cmd_remove, cmd_download, cmd_upgrade_all,
+  cmd_install_new, cmd_clean_system, cmd_clean_cache, cmd_new_config,
+  cmd_check_updates, cmd_show_changelog, cmd_history, cmd_generate_template,
+  cmd_install_template, cmd_remove_template, cmd_delete_template, cmd_frozen,
+  cmd_unfrozen, cmd_pin, cmd_unpin, cmd_revert_pkg
+
+  ROLLBACK (cmd_revert_pkg):  THREE fail-closed guards run FIRST — REVERT must
+    be on; system::version_codename() must be exactly "current" (REFUSES on a
+    stable release, since the cumulative archive holds -current packages that
+    would break it); and CUMULATIVE_URL must point at a -current tree. Only
+    then does it list a package's previous OFFICIAL builds (via revert.rs),
+    fetch the chosen one from the cumulative archive, GPG-verify it against the
+    pinned official Slackware key (revert_fetch_and_gpg_verify — GPG-only,
+    since the cumulative CHECKSUMS lacks superseded versions; anything but a
+    good signature is refused), downgrade via upgradepkg --reinstall, and
+    offer to freeze it. Official packages only.
+
+  REPO / TAG / STATUS / SAFETY COMMANDS:
+    cmd_list_repos    repos with priority, verify, flags, and per-repo installed
+                      counts (from installed_attribution)
+    cmd_status        whole-setup health check (mirror, repos, keys, freshness,
+                      reachability, pending) with "what to do next"
+    cmd_add_repo / cmd_del_repo / cmd_add_tag / cmd_del_tag   edit the `repos`
+                      file (validated via config::validate_repos_text, confirmed)
+    cmd_vet_repo / cmd_trust_repo / cmd_distrust_repo   the quarantine model:
+                      re-vet on demand, lift a quarantine (override), or freeze
+    installed_attribution / attribute_tags   tag-based source mapping with a pure,
+                      testable core attribute_tags(official, tag_priorities,
+                      resolve_repo, installed) -> (per_repo, per_rule, per_other).
+                      Precedence: official (empty tag) -> binary repo (repo_for_tag)
+                      -> declared tag-rule name -> raw tag. There is NO "untracked"
+                      bucket: an installed package's own build tag is always a
+                      legitimate source. Feeds list-repos (the Inst column + the
+                      "(declared, no installed package)" / "Installed under other
+                      build tags" lines) and status's by-source view.
+    cmd_history / render_history / source_of   the `history` command: read the
+                      timeline via history::collect(adm_dir), filter
+                      (--installed reads tl.current directly; --removed = Removed |
+                      Upgraded; --upgraded = Upgraded; name exact-match; --since;
+                      --last N), then render newest-first as a colour table.
+                      source_of attributes a single PkgId (same precedence as
+                      attribute_tags). render_history shows a same-version upgrade
+                      as "reinstalled".
+    cmd_clean_system  the baseline rule: foreign = not provided by official +
+                      immutable repos; kept via blacklist / IGNORE_TAGS /
+                      immutable attribution; refuses on missing baseline metadata
+  page_output   pipe long output (history, show-changelog) through $PAGER /
+                `less -FRX` when stdout is a TTY. The text is written from a scoped
+                thread while the main thread waits on the pager, so a body larger
+                than the pipe buffer cannot deadlock and `q` always quits cleanly;
+                short output prints inline (less -F) and the terminal is left clean
+                (less -X).
+
+LOOK HERE IF: anything about how a command behaves end-to-end, prompts, dry-run
+wiring, exit codes, or adding a new command/flag. The per-command logic is small
+and self-contained; the shared complexity is in expand_with_deps/add_with_deps
+and in pkgdb.rs.
+
+================================================================================
+General hints for a forker
+================================================================================
+
+- START by reading config.rs (what the tool consumes), then pkgdb.rs (how it
+  decides), then the relevant cmd_* in main.rs. That path explains almost any
+  behaviour.
+
+- ADDING A COMMAND: add a Cmd variant + a match arm in run() + a cmd_* fn. If it
+  takes patterns, reuse collect() so it gets @-selector validation and the
+  multi-match chooser for free. Update three docs by hand: slacker.8,
+  structure.md, CODE_MAP.txt (clap --help updates itself).
+
+- THE PRIORITY MODEL is the heart and the easiest thing to break. Any change
+  near installed_priority / upgrades_for (pkgdb.rs) should be checked against
+  the upgrade tests. The invariant users rely on: a distinct high priority locks
+  a repo's tagged packages against any lower repo, even a newer version.
+
+- TAGS CARRY MEANING. build_tag() is load-bearing for upgrade protection,
+  @_tag, IGNORE_TAGS, and clean-system. Treat it as a stable contract.
+
+- KEEP IT A THIN LAYER. installpkg/upgradepkg/removepkg, gpg, and bzip2 are
+  shelled out on purpose. Don't reimplement them in Rust; Slackware ships them.
+
+- FAIL-CLOSED on GPG and on checksums. The verification model: GPG is checked at
+  `update` (signs the CHECKSUMS file); per-package md5/sha is checked at install
+  in fetch_and_verify. Policy lives in config.rs (VerifyPolicy/Check), parsed
+  from VERIFY= (global) and verify= (per-repo). Default `all` = GPG when present
+  + at least one integrity hash mandatory. Security checks stop the run, never
+  warn-and-continue. The official repo gets NO exemption — `official` only
+  affects install-new scope and ChangeLog tracking. GPG keys are pinned on first
+  use (TOFU): a changed fingerprint is refused as key substitution. A repo that
+  fails vetting is auto-quarantined (markers under CACHE_DIR; see repo.rs) and
+  provides no packages until trust-repo/vet-repo clears it.
+
+- ERRORS ARE STRINGS by design. Keep messages short, specific, and actionable
+  (the user sees them prefixed with "slacker: error:").
+
+- TESTS: `cargo test` needs no root and no network (they use in-memory/temp
+  fixtures). Add a unit test next to any matching/priority change — that family
+  of tests is the project's safety net. Live bare-metal testing still catches
+  things sandboxes miss (encoding, paging, arch edge cases): build debug,
+  reinstall, test on a real -current box.
+
+- edition 2021 on purpose (broad Rust compatibility). The crate's own edition is
+  2021, but the EFFECTIVE MSRV is 1.85.1: a transitive dep (clap_lex 1.1.0) is
+  edition 2024, which only stabilised in Rust 1.85. `cargo msrv find` confirms
+  this; declare it as `rust-version` and freeze deps (Cargo.lock + cargo vendor)
+  before shipping to a distro. Direct deps: clap, ureq (rustls TLS — no system
+  OpenSSL), md-5, and regex; think hard before adding a fifth.
+================================================================================

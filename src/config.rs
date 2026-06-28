@@ -248,9 +248,19 @@ impl Config {
         // makes the command refuse outright, before touching anything.
         let revert_enabled = parse_revert_enabled(conf.get("REVERT").map(String::as_str));
 
+        // ARCH is normally auto-detected from the installed system, the way
+        // slackpkg does. It is only set in slacker.conf to force a specific
+        // architecture (e.g. cross/ARM setups). Resolved here, before the
+        // cumulative archive, so revert-pkg's default tree matches the arch.
+        let arch = match conf.get("ARCH") {
+            Some(a) if !a.is_empty() => a.clone(),
+            _ => detect_arch(&pkg_db_dir),
+        };
+
         // CUMULATIVE_URL: where revert-pkg looks for superseded -current
         // packages. Revert-only source; never used by update/upgrade/install.
-        let cumulative_url = parse_cumulative_url(conf.get("CUMULATIVE_URL").map(String::as_str));
+        let cumulative_url =
+            parse_cumulative_url(conf.get("CUMULATIVE_URL").map(String::as_str), &arch);
 
         // DISTRO_UPGRADE_MIRROR: optional local source for upgrade-dist, kept in
         // its own `distro-upgrade.conf` so the (rare, deliberate) local-mirror /
@@ -266,13 +276,6 @@ impl Config {
         let distro_upgrade_mirror =
             parse_distro_upgrade_mirror(du_conf.get("DISTRO_UPGRADE_MIRROR").map(String::as_str));
 
-        // ARCH is normally auto-detected from the installed system, the way
-        // slackpkg does. It is only set in slacker.conf to force a specific
-        // architecture (e.g. cross/ARM setups).
-        let arch = match conf.get("ARCH") {
-            Some(a) if !a.is_empty() => a.clone(),
-            _ => detect_arch(&pkg_db_dir),
-        };
         // The official mirror URL comes from the slackpkg-style `mirrors`
         // catalogue (uncomment exactly one). A repo line whose URL is the
         // keyword `mirror` is filled in from it, so priority/name/placement of
@@ -337,6 +340,26 @@ impl Config {
     /// be None when unknown, in which case series/`@repo` rules don't match.
     pub fn blacklist_hit(&self, id: &str, series: Option<&str>, repo: Option<&str>) -> bool {
         self.blacklist.iter().any(|r| r.matches(id, series, repo))
+    }
+
+    /// The repo a package NAME is pinned to (`@repo 100% name`), if any. A pin
+    /// forces that repo as the source and bypasses priority, for every command.
+    /// Exact-name match — pins are written for one specific package.
+    pub fn pinned_repo(&self, name: &str) -> Option<&str> {
+        self.blacklist
+            .iter()
+            .filter(|r| r.pin)
+            .find(|r| r.name.as_ref().map_or(false, |re| re.as_str() == name))
+            .and_then(|r| r.repo.as_deref())
+    }
+
+    /// All active pins as (package name, repo) pairs, for display.
+    pub fn pins(&self) -> Vec<(&str, &str)> {
+        self.blacklist
+            .iter()
+            .filter(|r| r.pin)
+            .filter_map(|r| Some((r.name.as_ref()?.as_str(), r.repo.as_deref()?)))
+            .collect()
     }
 
     /// Name of the official repository, if one is configured.
@@ -494,12 +517,22 @@ pub struct BlacklistRule {
     repo: Option<String>,
     series: Option<String>,
     name: Option<Regex>,
+    /// True for a positive PIN (`@repo 100% pkg`): "only ever take pkg from this
+    /// repo, ignoring priority". A pin is the opposite of a freeze, so it must
+    /// NOT match in the freeze path (`matches` early-returns false on it); it is
+    /// consulted only by `pinned_repo`.
+    pin: bool,
 }
 
 impl BlacklistRule {
     /// Match a package given its full id, series and source repo. `series`/`repo`
     /// may be None (then series/`@repo` rules simply do not match).
     pub fn matches(&self, id: &str, series: Option<&str>, repo: Option<&str>) -> bool {
+        // A pin is a positive rule ("only from this repo"), never a freeze, so it
+        // must never make a package look blacklisted. The freeze path stops here.
+        if self.pin {
+            return false;
+        }
         if let Some(want) = &self.repo {
             if repo != Some(want.as_str()) {
                 return false;
@@ -540,6 +573,14 @@ impl BlacklistRule {
 
 /// Parse one blacklist line into a rule, returning a human-readable error on an
 /// empty pattern or an invalid regex so callers (e.g. `frozen`) can reject it.
+/// Characters that make a name a pattern (regex/glob) rather than an exact
+/// package name. Pins are EXACT, so a pin name containing any of these is
+/// rejected. `+ - _` are allowed because real names use them (e.g. gtk+).
+pub fn name_has_pattern_chars(s: &str) -> bool {
+    const PATTERN_CHARS: &str = "*?[](){}|^$\\.";
+    s.chars().any(|c| PATTERN_CHARS.contains(c))
+}
+
 pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
     let raw = line.trim().to_string();
     let mut rest = raw.as_str();
@@ -557,15 +598,53 @@ pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
         repo = Some(r.to_string());
         rest = pat;
     }
+    // Positive PIN marker: `@repo 100% pkg` means "only ever take pkg from this
+    // repo, ignoring priority" — the opposite of a freeze. `100%` must be a
+    // standalone token (a leading `100%foo` is just an odd pattern, left alone).
+    let mut pin = false;
+    if let Some(after_marker) = rest.strip_prefix("100%") {
+        if after_marker.is_empty() || after_marker.starts_with(char::is_whitespace) {
+            if repo.is_none() {
+                return Err(format!(
+                    "'{raw}': a '100%' pin needs a repo, e.g. '@reponame 100% pkgname'"
+                ));
+            }
+            let name = after_marker.trim();
+            if name.is_empty() {
+                return Err(format!("'{raw}': '100%' pin needs a package name after it"));
+            }
+            if name.contains(char::is_whitespace) {
+                return Err(format!("'{raw}': a pin takes a single package name, not '{name}'"));
+            }
+            if name_has_pattern_chars(name) {
+                return Err(format!(
+                    "'{raw}': a pin uses an EXACT package name, not a pattern ('{name}'); \
+                     to freeze a pattern use `frozen` instead"
+                ));
+            }
+            if name.starts_with('-') || name.ends_with('-') {
+                return Err(format!(
+                    "'{raw}': '{name}' is not a valid package name (no leading/trailing '-')"
+                ));
+            }
+            pin = true;
+            rest = name;
+        }
+    }
     if let Some(series) = rest.strip_suffix('/') {
         let series = series.trim();
         if series.is_empty() {
             return Err(format!("'{raw}': empty series name before '/'"));
         }
-        return Ok(BlacklistRule { repo, series: Some(series.to_string()), name: None });
+        return Ok(BlacklistRule {
+            repo,
+            series: Some(series.to_string()),
+            name: None,
+            pin: false,
+        });
     }
     let re = Regex::new(rest).map_err(|e| format!("'{raw}': invalid pattern: {e}"))?;
-    Ok(BlacklistRule { repo, series: None, name: Some(re) })
+    Ok(BlacklistRule { repo, series: None, name: Some(re), pin })
 }
 
 /// Parse the whole `blacklist` file, warning about and skipping any malformed
@@ -786,11 +865,17 @@ fn parse_revert_enabled(raw: Option<&str>) -> bool {
 
 /// Parse a `CUMULATIVE_URL` value: a non-empty URL with any trailing slash
 /// trimmed, falling back to the default Slackware-UK cumulative archive for
-/// -current. Pure, for unit testing.
-fn parse_cumulative_url(raw: Option<&str>) -> String {
+/// -current. The default's arch segment follows `arch`: `slackware64-current`
+/// on x86_64, `slackware-current` on the 32-bit tree. Pure, for unit testing.
+fn parse_cumulative_url(raw: Option<&str>, arch: &str) -> String {
+    let default = if arch == "x86_64" {
+        "https://slackware.uk/cumulative/slackware64-current"
+    } else {
+        "https://slackware.uk/cumulative/slackware-current"
+    };
     raw.map(|s| s.trim().trim_end_matches('/'))
         .filter(|s| !s.is_empty())
-        .unwrap_or("https://slackware.uk/cumulative/slackware64-current")
+        .unwrap_or(default)
         .to_string()
 }
 
@@ -857,19 +942,24 @@ mod tests {
     #[test]
     fn cumulative_url_default_and_override() {
         assert_eq!(
-            parse_cumulative_url(None),
+            parse_cumulative_url(None, "x86_64"),
             "https://slackware.uk/cumulative/slackware64-current"
         );
+        // 32-bit default drops the "64": slackware-current.
         assert_eq!(
-            parse_cumulative_url(Some("")),
+            parse_cumulative_url(None, "i586"),
+            "https://slackware.uk/cumulative/slackware-current"
+        );
+        assert_eq!(
+            parse_cumulative_url(Some(""), "x86_64"),
             "https://slackware.uk/cumulative/slackware64-current"
         ); // empty -> default
         assert_eq!(
-            parse_cumulative_url(Some("https://my.mirror/cumulative/slackware64-current/")),
+            parse_cumulative_url(Some("https://my.mirror/cumulative/slackware64-current/"), "x86_64"),
             "https://my.mirror/cumulative/slackware64-current"
-        ); // trailing slash trimmed
+        ); // trailing slash trimmed; explicit value wins regardless of arch
         assert_eq!(
-            parse_cumulative_url(Some("  https://x/y  ")),
+            parse_cumulative_url(Some("  https://x/y  "), "i586"),
             "https://x/y"
         ); // trimmed
     }
@@ -1082,5 +1172,71 @@ mod tests {
 
         assert!(parse_blacklist_rule("@alienbob").is_err());
         assert!(parse_blacklist_rule("a[b").is_err());
+    }
+
+    #[test]
+    fn pin_rule_parses_and_never_freezes() {
+        // `@repo 100% pkg` is a positive PIN, not a freeze: matches() (the freeze
+        // path) must always be false for it, so it can never look blacklisted.
+        let pin = parse_blacklist_rule("@alienbob 100% vlc").unwrap();
+        assert!(!pin.matches("vlc-3-x86_64-1", None, Some("alienbob")));
+        assert!(!pin.matches("vlc-3-x86_64-1", None, Some("conraid")));
+
+        // A pin needs a repo and a package name.
+        assert!(parse_blacklist_rule("100% vlc").is_err()); // no @repo
+        assert!(parse_blacklist_rule("@alienbob 100%").is_err()); // no package
+        assert!(parse_blacklist_rule("@alienbob 100% vlc mpv").is_err()); // one name only
+
+        // `100%foo` (no space) is NOT the marker — it stays an ordinary (no-op)
+        // freeze pattern, so it still parses as a freeze, not a pin.
+        let not_a_pin = parse_blacklist_rule("@alienbob 100%foo").unwrap();
+        assert!(!not_a_pin.matches("100%foo-1-x86_64-1", None, Some("conraid"))); // repo mismatch
+
+        // A pin name must be EXACT — regex/glob metachars are rejected.
+        assert!(parse_blacklist_rule("@alienbob 100% vlc*").is_err());
+        assert!(parse_blacklist_rule("@alienbob 100% vlc.*").is_err());
+        assert!(name_has_pattern_chars("vlc*"));
+        assert!(name_has_pattern_chars("xf86-.*"));
+        assert!(!name_has_pattern_chars("gtk+")); // + and - are real name chars
+        assert!(!name_has_pattern_chars("vlc-plugin"));
+
+        // A pin name must be a valid package name: no leading/trailing '-'
+        // (a real name never does), but internal dashes are fine.
+        assert!(parse_blacklist_rule("@alienbob 100% vlc-").is_err());
+        assert!(parse_blacklist_rule("@alienbob 100% -vlc").is_err());
+        assert!(parse_blacklist_rule("@alienbob 100% vlc-plugin").is_ok());
+    }
+
+    #[test]
+    fn pinned_repo_and_pins_read_back() {
+        let bl = parse_blacklist("@alienbob 100% vlc\n@conraid 100% mpv\nfirefox\n@alienbob kde/\n");
+        let cfg = Config {
+            arch: "x86_64".into(),
+            cache_dir: std::path::PathBuf::new(),
+            pkg_db_dir: std::path::PathBuf::new(),
+            adm_dir: std::path::PathBuf::new(),
+            blacklist: bl,
+            repos: vec![],
+            resolve_deps: true,
+            ignore_tags: vec![],
+            tag_priorities: vec![],
+            config_dir: std::path::PathBuf::new(),
+            verify: VerifyPolicy::All,
+            max_parallel: 1,
+            revert_enabled: true,
+            cumulative_url: String::new(),
+            distro_upgrade_mirror: None,
+        };
+        assert_eq!(cfg.pinned_repo("vlc"), Some("alienbob"));
+        assert_eq!(cfg.pinned_repo("mpv"), Some("conraid"));
+        assert_eq!(cfg.pinned_repo("firefox"), None); // a freeze, not a pin
+        // A freeze rule must NOT leak into pins(); only the two pins do.
+        let mut pins = cfg.pins();
+        pins.sort();
+        assert_eq!(pins, vec![("mpv", "conraid"), ("vlc", "alienbob")]);
+        // The freeze still freezes (pins didn't disturb it).
+        assert!(cfg.blacklist_hit("firefox-1-x86_64-1", Some("xap"), Some("slackware")));
+        // ...and the pinned packages are NOT frozen.
+        assert!(!cfg.blacklist_hit("vlc-3-x86_64-1", Some("xap"), Some("alienbob")));
     }
 }
