@@ -109,6 +109,13 @@ impl VerifyPolicy {
 pub struct Config {
     pub arch: String,
     pub cache_dir: PathBuf,
+    /// Directory holding persistent SECURITY STATE (GPG keyring + TOFU
+    /// fingerprint pins, repo quarantine and trust markers). Separate from
+    /// `cache_dir` on purpose: /var/cache is FHS-disposable (an admin or cron
+    /// or systemd-tmpfiles sweep may wipe it), and losing the trust anchors
+    /// would silently re-pin whatever key a repo serves on next contact. Trust
+    /// state therefore lives under /var/lib, which FHS defines as persistent.
+    pub state_dir: PathBuf,
     /// Directory holding the installed-package database.
     pub pkg_db_dir: PathBuf,
     /// Slackware pkgtools admin root (holds packages/, removed_packages/,
@@ -202,6 +209,13 @@ impl Config {
             .get("CACHE_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/var/cache/slacker"));
+        // Persistent security state (GPG keyring + .fpr pins, quarantine/ and
+        // trusted/ markers). Kept OUT of CACHE_DIR because /var/cache is
+        // FHS-disposable; /var/lib is the persistent home for application state.
+        let state_dir = conf
+            .get("STATE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/var/lib/slacker"));
         // Slackware pkgtools admin root: holds packages/, removed_packages/,
         // scripts/, setup/ (some are symlinks resolving to different physical
         // locations, so /var/adm is the only dir that exposes the whole set by
@@ -289,6 +303,7 @@ impl Config {
         let cfg = Config {
             arch,
             cache_dir,
+            state_dir,
             pkg_db_dir,
             adm_dir,
             blacklist,
@@ -426,6 +441,31 @@ fn read_optional(path: &Path) -> Result<String, String> {
 
 /// Architecture tokens we recognise in Slackware package names / os-release.
 const KNOWN_ARCHES: &[&str] = &["x86_64", "aarch64", "i586", "i686", "arm", "noarch"];
+
+/// Resolve the system architecture WITHOUT requiring a fully valid config.
+/// `find-mirror` runs precisely when the mirror config is still broken (so the
+/// full `load_dir` fails its mirror check), yet it must know the real arch to
+/// suggest the correct `slackware{64}` tree. Reads a forced `ARCH` from
+/// slacker.conf if present, else detects from the installed base — identical
+/// resolution to `load_dir`, just without the validation that would reject it.
+pub fn system_arch(dir: &Path) -> String {
+    let text = read_optional(&dir.join("slacker.conf")).unwrap_or_default();
+    let conf = parse_keyvals(&text);
+    if let Some(a) = conf.get("ARCH") {
+        if !a.is_empty() {
+            return a.clone();
+        }
+    }
+    let adm_dir = conf
+        .get("ADM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/adm"));
+    let pkg_db_dir = conf
+        .get("PKG_DB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| adm_dir.join("packages"));
+    detect_arch(&pkg_db_dir)
+}
 
 /// Detect the system architecture the way slackpkg does: from the installed
 /// base packages, since that reflects the actual install rather than the
@@ -769,7 +809,9 @@ fn parse_repos(
         let url = if third == "mirror" || third.starts_with("mirror/") {
             let m = active_mirror.ok_or_else(|| {
                 format!(
-                    "repos:{}: '{name}' uses 'mirror' but no mirror is uncommented in 'mirrors'",
+                    "repos:{}: '{name}' uses 'mirror' but no mirror is uncommented in 'mirrors'.\n\
+                     Please set up a mirror: uncomment ONE line in your 'mirrors' file \
+                     (run `slacker find-mirror` to pick the fastest), then retry.",
                     lineno + 1
                 )
             })?;
@@ -893,6 +935,15 @@ fn parse_distro_upgrade_mirror(raw: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_arch_reads_forced_arch_from_conf() {
+        let dir = std::env::temp_dir().join(format!("slacker-arch-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("slacker.conf"), "ARCH=i586\n").unwrap();
+        assert_eq!(system_arch(&dir), "i586");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn distro_upgrade_mirror_parse() {
@@ -1213,6 +1264,7 @@ mod tests {
         let cfg = Config {
             arch: "x86_64".into(),
             cache_dir: std::path::PathBuf::new(),
+            state_dir: std::path::PathBuf::new(),
             pkg_db_dir: std::path::PathBuf::new(),
             adm_dir: std::path::PathBuf::new(),
             blacklist: bl,

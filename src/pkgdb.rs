@@ -23,7 +23,7 @@ impl PkgDb {
         let mut priority = HashMap::new();
         for r in &cfg.repos {
             // A quarantined repo (failed safety vetting) is an inert source.
-            if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+            if repo::is_quarantined(&cfg.state_dir, &r.name) {
                 continue;
             }
             priority.insert(r.name.clone(), r.priority);
@@ -50,7 +50,7 @@ impl PkgDb {
         let mut missing = Vec::new();
         for r in &cfg.repos {
             priority.insert(r.name.clone(), r.priority);
-            if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+            if repo::is_quarantined(&cfg.state_dir, &r.name) {
                 // Inert source: contributes nothing. Reporting commands surface
                 // the quarantine separately.
                 continue;
@@ -81,6 +81,18 @@ impl PkgDb {
     /// True if any available package carries this build tag.
     pub fn tag_in_use(&self, tag: &str) -> bool {
         self.all.iter().any(|p| p.id.build_tag() == tag)
+    }
+
+    /// The distinct package arch tokens a repo provides (e.g. {"x86_64"},
+    /// {"i586"}, {"noarch"}). Empty when the repo provides nothing (no/again
+    /// missing metadata). `status` uses it to flag a repo whose packages are all
+    /// built for a foreign architecture.
+    pub fn repo_archs(&self, repo: &str) -> HashSet<&str> {
+        self.all
+            .iter()
+            .filter(|p| p.repo == repo)
+            .map(|p| p.id.arch.as_str())
+            .collect()
     }
 
     /// Sorted list of configured repo names (for diagnostics).
@@ -266,6 +278,45 @@ impl PkgDb {
                 .cmp(&self.repo_priority(&a.repo))
                 .then(a.id.name.cmp(&b.id.name))
         });
+        out
+    }
+
+    /// Installed packages whose name matches `pattern` but that resolve to
+    /// nothing because a persistent pin points them at a repo which does not
+    /// (yet) provide the package. Such a package is silently absent from
+    /// `match_pattern` (the pin filters it out), so `upgrade`/`reinstall`
+    /// surface it here instead of letting it vanish without a word. Returns
+    /// (name, pinned_repo) pairs.
+    ///
+    /// Only plain selectors (name / substring / series) are considered; an
+    /// `@set` selector and an explicit `repo:name` selector are not affected
+    /// this way.
+    pub fn pin_excluded(&self, pattern: &str, installed: &[PkgId]) -> Vec<(String, String)> {
+        if pattern.starts_with('@') || pattern.contains(':') {
+            return Vec::new();
+        }
+        let is_series = self.is_real_series(pattern);
+        let mut out = Vec::new();
+        for inst in installed {
+            let Some(pin) = self.pins.get(&inst.name) else {
+                continue;
+            };
+            let name_hit = if is_series {
+                self.series_of(&inst.name) == Some(pattern)
+            } else {
+                inst.name == pattern || inst.name.contains(pattern)
+            };
+            if !name_hit {
+                continue;
+            }
+            // The pinned repo offers no available package of this name, so the
+            // pin cannot be satisfied and the package fell out of the match.
+            let satisfiable =
+                self.all.iter().any(|p| &p.repo == pin && p.id.name == inst.name);
+            if !satisfiable {
+                out.push((inst.name.clone(), pin.clone()));
+            }
+        }
         out
     }
 
@@ -524,6 +575,7 @@ mod upgrade_tests {
             description: String::new(),
             md5: None,
             sha: None,
+            required: Vec::new(),
             repo: repo.into(),
         }
     }
@@ -574,6 +626,45 @@ mod upgrade_tests {
         d.pins.insert("vlc".into(), "nosuch".into());
         assert!(d.resolve("vlc").is_none());
         assert!(d.upgrades_for(&installed, &[]).is_empty());
+    }
+
+    #[test]
+    fn pin_excluded_flags_unsatisfiable_pins() {
+        let pkgs = vec![
+            avail("kernel-generic-6.12.94-i686-1", "slackware"),
+            avail("kernel-headers-6.12.94-x86-1", "slackware"),
+            avail("mac-4.73-i586-1", "alienbob"),
+        ];
+        let mut d = db(pkgs, &[("slackware", 100), ("alienbob", 60)], Some(100));
+        let installed = vec![
+            PkgId::parse("kernel-generic-6.12.94-i686-1").unwrap(),
+            PkgId::parse("kernel-headers-6.12.94-x86-1").unwrap(),
+        ];
+
+        // No pins -> nothing excluded.
+        assert!(d.pin_excluded("kernel", &installed).is_empty());
+
+        // Pin kernel-generic -> alienbob, which has no kernel-generic: it falls
+        // out of the match and is reported (this was the silent-vanish bug).
+        d.pins.insert("kernel-generic".into(), "alienbob".into());
+        assert_eq!(
+            d.pin_excluded("kernel", &installed),
+            vec![("kernel-generic".to_string(), "alienbob".to_string())]
+        );
+        // The unpinned kernel-headers is never reported.
+        assert!(!d
+            .pin_excluded("kernel", &installed)
+            .iter()
+            .any(|(n, _)| n == "kernel-headers"));
+
+        // A pin to a repo that DOES provide it is satisfiable -> not excluded.
+        d.pins.insert("kernel-generic".into(), "slackware".into());
+        assert!(d.pin_excluded("kernel", &installed).is_empty());
+
+        // @set and explicit repo:name selectors are not affected this way.
+        d.pins.insert("kernel-generic".into(), "alienbob".into());
+        assert!(d.pin_excluded("@slackware", &installed).is_empty());
+        assert!(d.pin_excluded("alienbob:kernel-generic", &installed).is_empty());
     }
 
     #[test]
@@ -880,6 +971,7 @@ mod series_match_tests {
             description: String::new(),
             md5: None,
             sha: None,
+            required: Vec::new(),
             repo: repo.into(),
         }
     }

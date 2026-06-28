@@ -288,7 +288,7 @@ fn main() -> ExitCode {
         Ok(Outcome::SelfUpgrade) => ExitCode::from(50),
         Ok(Outcome::Pending) => ExitCode::from(100),
         Err(e) => {
-            eprintln!("slacker: error: {e}");
+            eprintln!("slacker: {} {e}", ui::err_label());
             ExitCode::FAILURE
         }
     }
@@ -309,6 +309,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         return cmd_find_mirror(&cli.config_dir);
     }
     let cfg = Config::load_dir(&cli.config_dir)?;
+    migrate_state(&cfg);
     let privileged = requires_privilege(&cli.command);
     if privileged {
         ensure_privileged(&cli.command)?;
@@ -989,6 +990,97 @@ fn plan_row(it: &PlanItem) -> PlanRow {
 /// left untouched (purple); `protected` are names kept because an installed
 /// source of higher-or-equal priority already owns them (blue). Version is
 /// never compared — only source priority decides.
+/// Heads-up at match time: how many packages matched the pattern(s) but were
+/// left out because they are frozen (blacklisted), and which. Keeps the picker's
+/// "matched N" count from being confusing. Prints nothing when none were frozen.
+fn note_frozen_excluded(frozen: &[String]) {
+    if frozen.is_empty() {
+        return;
+    }
+    println!(
+        "{}",
+        ui::purple(&format!(
+            "  {} also matched but {} frozen (skipped): {}",
+            frozen.len(),
+            if frozen.len() == 1 { "is" } else { "are" },
+            frozen.join(", ")
+        ))
+    );
+    println!("{}", ui::dim("    run `unfrozen <name>` to include"));
+}
+
+/// Heads-up at match time: installed packages that matched the pattern but were
+/// left out because a pin points them at a repo that does not (yet) provide
+/// them — so they don't just vanish from the list without explanation.
+fn note_pin_excluded(pins: &[(String, String)]) {
+    for (name, repo) in pins {
+        println!(
+            "{}",
+            ui::purple(&format!(
+                "  {name} matched but is pinned to '{repo}', which does not provide it (skipped)"
+            ))
+        );
+    }
+    if !pins.is_empty() {
+        println!(
+            "{}",
+            ui::dim("    re-pin elsewhere, or `unpin <name>` to use its normal source")
+        );
+    }
+}
+
+/// One-time migration of persistent security state from the old CACHE_DIR home
+/// to STATE_DIR. Earlier versions kept the GPG keyring + TOFU `.fpr` pins and
+/// the quarantine/ + trusted/ markers under CACHE_DIR; those now live under
+/// STATE_DIR so an FHS-disposable /var/cache sweep cannot wipe the trust
+/// anchors. Runs only when STATE_DIR does not yet hold a given subdir AND the
+/// old cache location does — so an established install is never disturbed, and
+/// re-pinning (the first-contact event we must avoid) never happens on upgrade.
+fn migrate_state(cfg: &Config) {
+    migrate_state_dirs(&cfg.cache_dir, &cfg.state_dir);
+}
+
+fn migrate_state_dirs(cache_dir: &Path, state_dir: &Path) {
+    if cache_dir == state_dir {
+        return;
+    }
+    for sub in ["gpg", "quarantine", "trusted"] {
+        let old = cache_dir.join(sub);
+        let new = state_dir.join(sub);
+        if !old.is_dir() || new.exists() {
+            continue;
+        }
+        if let Some(parent) = new.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Atomic rename when on one filesystem; copy+remove across devices
+        // (/var/cache and /var/lib may be separate mounts).
+        let moved = std::fs::rename(&old, &new).is_ok()
+            || (copy_dir_recursive(&old, &new).is_ok() && std::fs::remove_dir_all(&old).is_ok());
+        // The GPG keyring must stay private (gpg refuses a world-readable home);
+        // a cross-device copy would otherwise create it with default perms.
+        if moved && sub == "gpg" {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
 fn show_plan(plan: &[PlanItem], frozen: &[String], protected: &[String]) {
     let rows: Vec<PlanRow> = plan.iter().map(plan_row).collect();
     print_table(&rows);
@@ -1543,6 +1635,66 @@ fn enforce_release_match(cfg: &Config, plan: &[PlanItem], allow: bool) -> Result
     ))
 }
 
+/// The architecture *family* of a Slackware arch token. All 32-bit x86 variants
+/// (i386/i486/i586/i686/x86) are one family — they are mutually runnable, and the
+/// distro base, our own build and third-party repos may each pick a different one
+/// (e.g. the base is i586 while slacker is labelled i686). Every other token is
+/// compared as-is (x86_64, aarch64, arm, ...). `noarch` is handled by the caller.
+fn arch_family(a: &str) -> &str {
+    match a {
+        "i386" | "i486" | "i586" | "i686" | "x86" => "x86",
+        other => other,
+    }
+}
+
+/// Is a package built for `pkg_arch` safe to install on a `sys_arch` system?
+/// `noarch` always is; otherwise the families must match. (Note: multilib does
+/// NOT need an exception — compat32 packages carry an `x86_64` arch field, with
+/// `compat32` only in the name/build, so they pass trivially on x86_64.)
+fn arch_compatible(sys_arch: &str, pkg_arch: &str) -> bool {
+    pkg_arch == "noarch" || arch_family(sys_arch) == arch_family(pkg_arch)
+}
+
+/// Refuse a plan that would install packages built for a DIFFERENT CPU
+/// architecture than the running system (e.g. an `x86_64` mirror left active on
+/// a 32-bit box, or the reverse). Such a package simply cannot run. Like the
+/// release guard this is fail-closed; `allow` (from --yes) is a deliberately
+/// quiet escape hatch and is not surfaced in the refusal message.
+fn enforce_arch_match(cfg: &Config, plan: &[PlanItem], allow: bool) -> Result<(), String> {
+    let sys = &cfg.arch;
+    let mut bad: Vec<(String, String, String)> = Vec::new(); // (pkg, repo, pkg_arch)
+    for it in plan {
+        if !arch_compatible(sys, &it.pkg.id.arch) {
+            bad.push((it.pkg.id.name.clone(), it.pkg.repo.clone(), it.pkg.id.arch.clone()));
+        }
+    }
+    if bad.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "{}",
+        ui::red(&format!(
+            "architecture mismatch: this system is {sys}, but these packages are built for a \
+             different architecture:"
+        ))
+    );
+    for (pkg, repo, a) in &bad {
+        println!("  {}  {}  {}", ui::white(pkg), ui::cyan(repo), ui::red(&format!("({a})")));
+    }
+    if allow {
+        println!(
+            "{}",
+            ui::yellow("proceeding despite the architecture mismatch (at your own risk).")
+        );
+        return Ok(());
+    }
+    Err(format!(
+        "refusing: installing {}-architecture packages on a {sys} system cannot work. \
+         Check that the repo/mirror points at the right Slackware tree for this arch.",
+        bad.first().map(|b| b.2.as_str()).unwrap_or("another"),
+    ))
+}
+
 fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -> Result<(), String> {
     if plan.is_empty() {
         return Ok(());
@@ -1551,6 +1703,9 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
     // Release-mismatch guard (fail-closed unless --yes). Runs before any download
     // or install. upgrade-dist does NOT use execute_plan, so it is unaffected.
     enforce_release_match(cfg, plan, allow_release_mismatch)?;
+
+    // Architecture-mismatch guard (fail-closed; the same --yes is a quiet override).
+    enforce_arch_match(cfg, plan, allow_release_mismatch)?;
 
     // Resolve repo + safe destination for every item first. A repo-lookup miss
     // or an unsafe (path-traversal) filename is a hard error, not a transient
@@ -1686,7 +1841,7 @@ fn fetch_and_verify(
         asc.push(".asc");
         let asc = std::path::PathBuf::from(asc);
         let _ = download::download_to(&asc_url, &asc);
-        match gpg::verify_detached(repo, &cfg.cache_dir, dest, &asc) {
+        match gpg::verify_detached(repo, &cfg.state_dir, dest, &asc) {
             Ok(gpg::Verify::Good(signer)) => checks.push(format!("gpg ({signer})")),
             Ok(gpg::Verify::Tampered(m)) => {
                 // A bad or key-substituted package signature is always fatal.
@@ -2218,7 +2373,7 @@ fn update_one_repo(
     // Has this repo already been accepted (vetted, or trusted by the user)? An
     // established repo is not re-vetted here and a transient fetch failure does
     // NOT freeze it; an untrusted one (newly added / never vetted) is vetted now.
-    let trusted = repo::is_trusted(&cfg.cache_dir, &r.name);
+    let trusted = repo::is_trusted(&cfg.state_dir, &r.name);
 
     if let Err(e) = repo::update_repo(r, &cfg.cache_dir, track_changelog) {
         if trusted {
@@ -2231,6 +2386,7 @@ fn update_one_repo(
             let _ = repo::quarantine(
                 r,
                 &cfg.cache_dir,
+                &cfg.state_dir,
                 repo::QuarantineKind::Soft,
                 &format!("could not fetch metadata: {e}"),
             );
@@ -2254,6 +2410,7 @@ fn update_one_repo(
         let _ = repo::quarantine(
             r,
             &cfg.cache_dir,
+            &cfg.state_dir,
             repo::QuarantineKind::Hard,
             &format!("advertises {bad} unsafe/path-traversal filename(s) — malicious"),
         );
@@ -2270,9 +2427,9 @@ fn update_one_repo(
 
     // Reachable and not malicious: clear any prior (soft) quarantine and trust
     // it, so a recovered repo comes back and isn't re-vetted next time.
-    repo::clear_quarantine(&cfg.cache_dir, &r.name);
+    repo::clear_quarantine(&cfg.state_dir, &r.name);
     if !trusted {
-        repo::mark_trusted(&cfg.cache_dir, &r.name);
+        repo::mark_trusted(&cfg.state_dir, &r.name);
     }
 
     let policy = r.verify_policy(&cfg.verify);
@@ -2282,7 +2439,7 @@ fn update_one_repo(
         // contact): if a repo ever serves a different key than the pinned one,
         // that is caught here as KeyChanged and the repo is frozen. On first
         // contact the key is pinned (TOFU) and its fingerprint shown.
-        match gpg::import_key(r, &cfg.cache_dir) {
+        match gpg::import_key(r, &cfg.state_dir) {
             Ok(gpg::ImportOutcome::NewlyPinned(fpr)) => {
                 println!("  {}", ui::green("GPG: pinned key (first contact)"));
                 println!("    {}", ui::white(&format!("fingerprint: {fpr}")));
@@ -2294,6 +2451,7 @@ fn update_one_repo(
                 let _ = repo::quarantine(
                     r,
                     &cfg.cache_dir,
+                    &cfg.state_dir,
                     repo::QuarantineKind::Hard,
                     &format!("GPG key changed: {m}"),
                 );
@@ -2315,7 +2473,7 @@ fn update_one_repo(
                 println!("  {}", ui::dim(&format!("GPG: key unavailable ({m}) — using md5")));
             }
         }
-        match gpg::verify_checksums(r, &cfg.cache_dir) {
+        match gpg::verify_checksums(r, &cfg.cache_dir, &cfg.state_dir) {
             Ok(gpg::Verify::Good(signer)) => {
                 println!("  {}", ui::green(&format!("GPG: good signature ({signer})")))
             }
@@ -2333,6 +2491,7 @@ fn update_one_repo(
                 let _ = repo::quarantine(
                     r,
                     &cfg.cache_dir,
+                    &cfg.state_dir,
                     repo::QuarantineKind::Hard,
                     &format!("GPG verification failed: {m}"),
                 );
@@ -2427,10 +2586,10 @@ fn vet_repo(cfg: &Config, r: &config::Repo) -> Vec<String> {
                     .into(),
             );
         } else {
-            if let Err(e) = gpg::import_key(r, &cfg.cache_dir) {
+            if let Err(e) = gpg::import_key(r, &cfg.state_dir) {
                 issues.push(format!("GPG key problem: {}", e.message()));
             }
-            match gpg::verify_checksums(r, &cfg.cache_dir) {
+            match gpg::verify_checksums(r, &cfg.cache_dir, &cfg.state_dir) {
                 Ok(gpg::Verify::Good(_)) => {}
                 Ok(gpg::Verify::NoSignature) => {
                     issues.push("signature file is present but empty or unreadable".into())
@@ -2459,8 +2618,8 @@ fn apply_vet(cfg: &Config, r: &config::Repo) -> bool {
     );
     let issues = vet_repo(cfg, r);
     if issues.is_empty() {
-        repo::clear_quarantine(&cfg.cache_dir, &r.name);
-        repo::mark_trusted(&cfg.cache_dir, &r.name);
+        repo::clear_quarantine(&cfg.state_dir, &r.name);
+        repo::mark_trusted(&cfg.state_dir, &r.name);
         println!(
             "  {}",
             ui::green("passed: metadata looks safe and verification is in order.")
@@ -2477,7 +2636,7 @@ fn apply_vet(cfg: &Config, r: &config::Repo) -> bool {
         repo::QuarantineKind::Hard
     };
     let reason = issues.join("; ");
-    let _ = repo::quarantine(r, &cfg.cache_dir, kind, &reason);
+    let _ = repo::quarantine(r, &cfg.cache_dir, &cfg.state_dir, kind, &reason);
     let bar = "=".repeat(66);
     println!("{}", ui::red(&bar));
     println!("{}", ui::red(&format!("I do NOT trust repo '{}' — it has been FROZEN (quarantined).", r.name)));
@@ -2519,13 +2678,13 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     if mode == Some("gpg") {
         let mut newly = 0;
         for r in cfg.repos_by_priority() {
-            if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+            if repo::is_quarantined(&cfg.state_dir, &r.name) {
                 println!("{}", ui::dim(&format!("Skipping '{}' (quarantined).", r.name)));
                 continue;
             }
             print!("Importing GPG key for '{}' ... ", r.name);
             std::io::stdout().flush().ok();
-            match gpg::import_key(r, &cfg.cache_dir) {
+            match gpg::import_key(r, &cfg.state_dir) {
                 Ok(gpg::ImportOutcome::NewlyPinned(fpr)) => {
                     newly += 1;
                     println!("{}", ui::green("pinned (first time)"));
@@ -2558,16 +2717,16 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     // network failure on the first update; only genuinely new/unreachable repos
     // get vetted below.
     for r in &all_repos {
-        if !repo::is_quarantined(&cfg.cache_dir, &r.name)
-            && !repo::is_trusted(&cfg.cache_dir, &r.name)
+        if !repo::is_quarantined(&cfg.state_dir, &r.name)
+            && !repo::is_trusted(&cfg.state_dir, &r.name)
             && repo::meta_path(r, &cfg.cache_dir, repo::PACKAGES_TXT).exists()
         {
-            repo::mark_trusted(&cfg.cache_dir, &r.name);
+            repo::mark_trusted(&cfg.state_dir, &r.name);
         }
     }
 
     for r in &all_repos {
-        if repo::is_hard_quarantined(&cfg.cache_dir, &r.name) {
+        if repo::is_hard_quarantined(&cfg.state_dir, &r.name) {
             println!(
                 "{}",
                 ui::yellow(&format!(
@@ -2575,7 +2734,7 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
                     r.name, r.name, r.name
                 ))
             );
-        } else if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+        } else if repo::is_quarantined(&cfg.state_dir, &r.name) {
             // Soft (was unreachable): retried below, not skipped.
             println!(
                 "{}",
@@ -2587,7 +2746,7 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     // them (and they recover on their own if they come up clean).
     let repos: Vec<&config::Repo> = all_repos
         .into_iter()
-        .filter(|r| !repo::is_hard_quarantined(&cfg.cache_dir, &r.name))
+        .filter(|r| !repo::is_hard_quarantined(&cfg.state_dir, &r.name))
         .collect();
     println!("Checking repositories for updates ...");
     let statuses: Vec<changelog::UpdateStatus> = repos
@@ -3100,9 +3259,9 @@ fn cmd_list_repos(cfg: &Config) -> Result<Outcome, String> {
         if r.subtree {
             line.push_str(&ui::cyan("  (subtree)"));
         }
-        if repo::is_hard_quarantined(&cfg.cache_dir, &r.name) {
+        if repo::is_hard_quarantined(&cfg.state_dir, &r.name) {
             line.push_str(&ui::red("  [FROZEN]"));
-        } else if repo::is_quarantined(&cfg.cache_dir, &r.name) {
+        } else if repo::is_quarantined(&cfg.state_dir, &r.name) {
             line.push_str(&ui::yellow("  [unreachable — retrying]"));
         }
         println!("{line}");
@@ -3295,7 +3454,7 @@ fn check_perms(a: &mut PathAudit, path: &Path, meta: &std::fs::Metadata) {
 #[cfg(not(unix))]
 fn check_perms(_a: &mut PathAudit, _path: &Path, _meta: &std::fs::Metadata) {}
 
-/// Audit slacker's OWN files (config + cache) for tampering and unsafe
+/// Audit slacker's OWN files (config + cache + state) for tampering and unsafe
 /// permissions. On Slackware these are all owned by root and not writable by
 /// anyone else; the trust state in the cache (pinned GPG fingerprints,
 /// trusted/quarantine markers) is security-critical, so a world-writable file
@@ -3449,6 +3608,7 @@ fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
 
     // Everything needed to load is present and valid — run the full report.
     let cfg = Config::load_dir(config_dir)?;
+    migrate_state(&cfg);
     println!();
     status_full(&cfg)
 }
@@ -3655,7 +3815,14 @@ fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, String> {
     // slackware64 vs slackware for 32-bit). The probe path, the freshness
     // reference and the suggested line all key off it, so find-mirror now works
     // on -current AND stable alike.
-    let arch = cfg.as_ref().map(|c| c.arch.as_str()).unwrap_or("x86_64");
+    // find-mirror runs precisely when the mirror config is still broken, so the
+    // full Config may not load. Fall back to standalone arch detection (NOT a
+    // blind x86_64) — otherwise a 32-bit box gets a slackware64-current line.
+    let detected = cfg
+        .as_ref()
+        .map(|c| c.arch.clone())
+        .unwrap_or_else(|| config::system_arch(config_dir));
+    let arch = detected.as_str();
     let dir = slackware_dir(arch).ok_or(
         "cannot determine your Slackware release/arch — check /etc/os-release and the `arch` line in slacker.conf",
     )?;
@@ -3896,18 +4063,55 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         }
     }
 
+    // Arch match: a repo whose packages are ALL built for a foreign architecture
+    // (ignoring noarch) is the wrong tree for this system — installs from it are
+    // refused. Judged from the package arch field, never the URL (folder names
+    // lie: alienbob uses /x86_64/, conraid slackware64-current, SBo none).
+    {
+        let sys_fam = arch_family(&cfg.arch);
+        let foreign: Vec<String> = cfg
+            .repos
+            .iter()
+            .filter_map(|r| {
+                let archs = db.repo_archs(&r.name);
+                let non_noarch: Vec<&str> =
+                    archs.iter().copied().filter(|a| *a != "noarch").collect();
+                if non_noarch.is_empty() {
+                    return None; // only noarch, or no metadata — nothing to judge
+                }
+                if non_noarch.iter().any(|a| arch_family(a) == sys_fam) {
+                    return None; // provides at least some packages for this arch
+                }
+                Some(format!("{} ({})", r.name, non_noarch.join("/")))
+            })
+            .collect();
+        if foreign.is_empty() {
+            srow(&ok, "Repo arch", &ui::dim(&format!("all match this system ({})", cfg.arch)));
+        } else {
+            srow(
+                &warn,
+                "Repo arch",
+                &ui::yellow(&format!(
+                    "MISMATCH (installs refused): {} — system is {}",
+                    foreign.join(", "),
+                    cfg.arch
+                )),
+            );
+        }
+    }
+
     // Frozen repos: hard (needs trust-repo) vs soft (unreachable, auto-retried)
     let hard: Vec<&config::Repo> = cfg
         .repos
         .iter()
-        .filter(|r| repo::is_hard_quarantined(&cfg.cache_dir, &r.name))
+        .filter(|r| repo::is_hard_quarantined(&cfg.state_dir, &r.name))
         .collect();
     let soft: Vec<&config::Repo> = cfg
         .repos
         .iter()
         .filter(|r| {
-            repo::is_quarantined(&cfg.cache_dir, &r.name)
-                && !repo::is_hard_quarantined(&cfg.cache_dir, &r.name)
+            repo::is_quarantined(&cfg.state_dir, &r.name)
+                && !repo::is_hard_quarantined(&cfg.state_dir, &r.name)
         })
         .collect();
     if hard.is_empty() && soft.is_empty() {
@@ -3924,7 +4128,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
                 )),
             );
             for r in &hard {
-                if let Some(reason) = repo::quarantine_reason(&cfg.cache_dir, &r.name) {
+                if let Some(reason) = repo::quarantine_reason(&cfg.state_dir, &r.name) {
                     println!("             {}", ui::dim(&format!("{}: {reason}", r.name)));
                 }
             }
@@ -3953,7 +4157,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         .copied()
         .collect();
     if !need_gpg.is_empty() {
-        let keyring = cfg.cache_dir.join("gpg");
+        let keyring = cfg.state_dir.join("gpg");
         let keyring_has_keys = std::fs::read_dir(&keyring)
             .map(|d| {
                 d.flatten().any(|e| e.file_name().to_string_lossy().ends_with("-GPG-KEY"))
@@ -3980,7 +4184,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
                 if missing_meta.iter().any(|m| m == &r.name) {
                     continue;
                 }
-                match gpg::verify_checksums(r, &cfg.cache_dir) {
+                match gpg::verify_checksums(r, &cfg.cache_dir, &cfg.state_dir) {
                     Ok(gpg::Verify::Good(_)) => verified.push(r.name.as_str()),
                     Ok(gpg::Verify::NoSignature) => nosig.push(r.name.as_str()),
                     Ok(gpg::Verify::Tampered(_)) => tampered.push(r.name.clone()),
@@ -4104,10 +4308,14 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     }
 
     // Integrity of slacker's OWN files: ownership, write-exposure, stray symlinks.
-    // Scoped strictly to config + cache (NOT the system package DB, which the
-    // pkgtools own). A compromise here defeats GPG pinning and the trust markers,
-    // so it is reported prominently with the exact fix.
-    let audit = audit_owned_paths(&[cfg.config_dir.as_path(), cfg.cache_dir.as_path()]);
+    // Scoped strictly to config + cache + state (NOT the system package DB, which
+    // the pkgtools own). A compromise of the state dir defeats GPG pinning and the
+    // trust markers, so it is reported prominently with the exact fix.
+    let mut audit_roots: Vec<&Path> = vec![cfg.config_dir.as_path(), cfg.cache_dir.as_path()];
+    if cfg.state_dir != cfg.cache_dir {
+        audit_roots.push(cfg.state_dir.as_path());
+    }
+    let audit = audit_owned_paths(&audit_roots);
     if audit.severe() {
         security_problem = true;
     }
@@ -4125,7 +4333,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         srow(
             if audit.unreadable > 0 { &info } else { &ok },
             "Integrity",
-            &ui::dim(&format!("config + cache root-owned, no world-writable paths, no stray symlinks{tail}")),
+            &ui::dim(&format!("config + cache + state root-owned, no world-writable paths, no stray symlinks{tail}")),
         );
     } else {
         if audit.symlinks > 0 {
@@ -4396,6 +4604,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
         println!("Nothing to install.");
         return Ok(Outcome::NothingFound);
     }
+    note_frozen_excluded(&frozen);
     let todo = select_packages(todo, "install", cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
@@ -4448,6 +4657,14 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
         println!("Nothing to upgrade.");
         return Ok(Outcome::NothingFound);
     }
+    let mut pin_excluded: Vec<(String, String)> = patterns
+        .iter()
+        .flat_map(|pat| db.pin_excluded(pat, &installed))
+        .collect();
+    pin_excluded.sort();
+    pin_excluded.dedup();
+    note_pin_excluded(&pin_excluded);
+    note_frozen_excluded(&frozen);
     let todo = select_packages(todo, "upgrade", cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
@@ -4497,6 +4714,14 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
         println!("Nothing to reinstall.");
         return Ok(Outcome::NothingFound);
     }
+    let mut pin_excluded: Vec<(String, String)> = patterns
+        .iter()
+        .flat_map(|pat| db.pin_excluded(pat, &installed))
+        .collect();
+    pin_excluded.sort();
+    pin_excluded.dedup();
+    note_pin_excluded(&pin_excluded);
+    note_frozen_excluded(&frozen);
     let todo = select_packages(todo, "reinstall", cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
@@ -4595,6 +4820,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
         println!("Nothing to remove.");
         return Ok(Outcome::NothingFound);
     }
+    note_frozen_excluded(&frozen);
     let todo = select_packages_pkgid(todo, "remove", cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
@@ -4663,7 +4889,7 @@ fn revert_fetch_and_gpg_verify(
     download::download_to(&asc_url, &asc)
         .map_err(|e| format!("fetch signature {asc_url}: {e}"))?;
 
-    match gpg::verify_detached(official, &cfg.cache_dir, dest, &asc)? {
+    match gpg::verify_detached(official, &cfg.state_dir, dest, &asc)? {
         gpg::Verify::Good(signer) => {
             println!("  {}", ui::green(&format!("verified: gpg ({signer})")));
             Ok(())
@@ -6086,6 +6312,7 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     }
     // Let the user deselect before resolving deps (same select-before-resolve
     // step the other install paths use; skipped under --yes/--dry-run/single).
+    note_frozen_excluded(&frozen);
     let todo = select_packages(todo, "install", cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
@@ -8250,7 +8477,7 @@ fn cmd_vet_repo(cfg: &Config, name: &str) -> Result<Outcome, String> {
         .ok_or_else(|| format!("no repo named '{name}' in {}", cfg.config_dir.join("repos").display()))?
         .clone();
     // Force a fresh verdict: drop any prior "trusted" mark so the checks run.
-    repo::unmark_trusted(&cfg.cache_dir, name);
+    repo::unmark_trusted(&cfg.state_dir, name);
     apply_vet(cfg, &r);
     Ok(Outcome::Ok)
 }
@@ -8264,11 +8491,11 @@ fn cmd_trust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String
             cfg.config_dir.join("repos").display()
         ));
     }
-    if !repo::is_quarantined(&cfg.cache_dir, name) {
+    if !repo::is_quarantined(&cfg.state_dir, name) {
         println!("{}", ui::dim(&format!("repo '{name}' is not quarantined — nothing to do.")));
         return Ok(Outcome::Ok);
     }
-    if let Some(reason) = repo::quarantine_reason(&cfg.cache_dir, name) {
+    if let Some(reason) = repo::quarantine_reason(&cfg.state_dir, name) {
         println!("{}", ui::yellow(&format!("'{name}' was frozen because: {reason}")));
     }
     println!(
@@ -8279,8 +8506,8 @@ fn cmd_trust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String
         println!("{}", ui::dim("aborted — repo stays quarantined"));
         return Ok(Outcome::Ok);
     }
-    repo::clear_quarantine(&cfg.cache_dir, name);
-    repo::mark_trusted(&cfg.cache_dir, name);
+    repo::clear_quarantine(&cfg.state_dir, name);
+    repo::mark_trusted(&cfg.state_dir, name);
     println!(
         "{}",
         ui::green(&format!("Repo '{name}' is now trusted. Run `slacker update` to fetch it."))
@@ -8293,7 +8520,7 @@ fn cmd_distrust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, Str
         .repo_by_name(name)
         .ok_or_else(|| format!("no repo named '{name}' in {}", cfg.config_dir.join("repos").display()))?
         .clone();
-    if repo::is_quarantined(&cfg.cache_dir, name) {
+    if repo::is_quarantined(&cfg.state_dir, name) {
         println!("{}", ui::dim(&format!("repo '{name}' is already quarantined.")));
         return Ok(Outcome::Ok);
     }
@@ -8304,7 +8531,7 @@ fn cmd_distrust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, Str
         println!("{}", ui::dim("aborted — nothing changed"));
         return Ok(Outcome::Ok);
     }
-    repo::quarantine(&r, &cfg.cache_dir, repo::QuarantineKind::Hard, "manually distrusted by the user")?;
+    repo::quarantine(&r, &cfg.cache_dir, &cfg.state_dir, repo::QuarantineKind::Hard, "manually distrusted by the user")?;
     println!(
         "{}",
         ui::green(&format!(
@@ -8367,7 +8594,26 @@ mod parallel_download_tests {
 #[cfg(test)]
 mod unfreeze_tests {
     use super::blacklist_remove;
-    use super::{blacklist_remove_pins, parse_pin_line};
+    use super::{arch_compatible, blacklist_remove_pins, parse_pin_line};
+
+    #[test]
+    fn arch_family_compatibility() {
+        // 32-bit x86 is one family: i586 base, i686 build, etc. interchangeable.
+        assert!(arch_compatible("i586", "i686"));
+        assert!(arch_compatible("i686", "i586"));
+        assert!(arch_compatible("i586", "i486"));
+        assert!(arch_compatible("x86_64", "x86_64"));
+        // noarch always fits.
+        assert!(arch_compatible("x86_64", "noarch"));
+        assert!(arch_compatible("i686", "noarch"));
+        // Cross-family is refused, both directions.
+        assert!(!arch_compatible("x86_64", "i686"));
+        assert!(!arch_compatible("i586", "x86_64"));
+        assert!(!arch_compatible("x86_64", "aarch64"));
+        // multilib compat32 packages carry an x86_64 arch field -> fine on x86_64.
+        // (the `compat32` token lives in the name/build, not the arch field)
+        assert!(arch_compatible("x86_64", "x86_64"));
+    }
 
     #[test]
     fn parse_pin_line_recognizes_pins_only() {
@@ -8580,6 +8826,7 @@ mod collect_tests {
             description: String::new(),
             md5: None,
             sha: None,
+            required: Vec::new(),
             repo: repo_.into(),
         }
     }
@@ -8744,6 +8991,52 @@ mod collect_tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrate_state_moves_trust_anchors_once_and_never_clobbers() {
+        let base = std::env::temp_dir().join("slacker_migrate_state_test");
+        let _ = std::fs::remove_dir_all(&base);
+        let cache = base.join("cache");
+        let state = base.join("state");
+        // Old layout: trust anchors live under the (disposable) cache dir.
+        std::fs::create_dir_all(cache.join("gpg")).unwrap();
+        std::fs::write(cache.join("gpg").join("alienbob.fpr"), "ABC\n").unwrap();
+        std::fs::create_dir_all(cache.join("quarantine")).unwrap();
+        std::fs::write(cache.join("quarantine").join("badrepo"), "hard\nreason").unwrap();
+        std::fs::create_dir_all(cache.join("trusted")).unwrap();
+        std::fs::write(cache.join("trusted").join("slackware"), "").unwrap();
+        // Re-downloadable cache data must stay put.
+        std::fs::create_dir_all(cache.join("packages")).unwrap();
+
+        migrate_state_dirs(&cache, &state);
+
+        // Anchors moved to state, content preserved.
+        assert_eq!(
+            std::fs::read_to_string(state.join("gpg").join("alienbob.fpr")).unwrap(),
+            "ABC\n"
+        );
+        assert!(state.join("quarantine").join("badrepo").exists());
+        assert!(state.join("trusted").join("slackware").exists());
+        // ...and gone from cache.
+        assert!(!cache.join("gpg").exists());
+        assert!(!cache.join("quarantine").exists());
+        assert!(!cache.join("trusted").exists());
+        // Cache-only data untouched.
+        assert!(cache.join("packages").is_dir());
+
+        // Established-install safety: if state already holds the anchors, a
+        // stale cache copy must NEVER clobber them (that would re-pin = the
+        // first-contact event the whole change exists to avoid).
+        std::fs::create_dir_all(cache.join("gpg")).unwrap();
+        std::fs::write(cache.join("gpg").join("evil.fpr"), "EVIL\n").unwrap();
+        migrate_state_dirs(&cache, &state);
+        assert!(state.join("gpg").join("alienbob.fpr").exists());
+        assert!(!state.join("gpg").join("evil.fpr").exists());
+        // The stale cache dir is left as-is (skipped because state existed).
+        assert!(cache.join("gpg").join("evil.fpr").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[cfg(unix)]

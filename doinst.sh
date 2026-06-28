@@ -10,3 +10,4 @@ config etc/slacker/slacker.conf.new
 config etc/slacker/mirrors.new
 config etc/slacker/repos.new
 config etc/slacker/blacklist.new
+config etc/slacker/distro-upgrade.conf

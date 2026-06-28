@@ -23,6 +23,14 @@ fn paint(code: &str, s: &str) -> String {
     paint_when(enabled(), code, s)
 }
 
+/// A red `error:` label for the top-level diagnostic on stderr. Gated on STDERR
+/// being a TTY (not stdout, since the error goes to stderr) so redirected error
+/// streams and logs stay plain text.
+pub fn err_label() -> String {
+    let on = std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal();
+    paint_when(on, "31", "error:")
+}
+
 /// The pure colour gate: wrap `s` in the escape for `code` when `on`, else
 /// return it unchanged. Kept separate from [`enabled`] so the painting logic can
 /// be tested deterministically, without depending on whether the test runner's

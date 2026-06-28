@@ -1,0 +1,7 @@
+# Keep the forge's language stats honest. These are packaging, config examples
+# and docs — not source — and the linguist/go-enry classifier mislabels the
+# extension-less ones (e.g. as "Starlark"). Exclude them from the language bar.
+examples/**        linguist-vendored
+slack-desc         linguist-detectable=false
+*.SlackBuild       linguist-language=Shell
+doinst.sh          linguist-language=Shell

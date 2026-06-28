@@ -56,17 +56,17 @@ fn parse_fpr_colons(text: &str) -> Vec<String> {
     fprs
 }
 
-fn keyring_dir(cache_root: &Path) -> PathBuf {
-    cache_root.join("gpg")
+fn keyring_dir(state_root: &Path) -> PathBuf {
+    state_root.join("gpg")
 }
 
 /// Where the pinned fingerprint(s) for a repo are stored.
-fn pin_path(cache_root: &Path, repo_name: &str) -> PathBuf {
-    keyring_dir(cache_root).join(format!("{repo_name}.fpr"))
+fn pin_path(state_root: &Path, repo_name: &str) -> PathBuf {
+    keyring_dir(state_root).join(format!("{repo_name}.fpr"))
 }
 
-fn read_pin(cache_root: &Path, repo_name: &str) -> Vec<String> {
-    match std::fs::read_to_string(pin_path(cache_root, repo_name)) {
+fn read_pin(state_root: &Path, repo_name: &str) -> Vec<String> {
+    match std::fs::read_to_string(pin_path(state_root, repo_name)) {
         Ok(s) => s
             .lines()
             .map(|l| l.trim().to_uppercase())
@@ -151,8 +151,8 @@ fn fingerprints_in_keyfile(dir: &Path, key_path: &Path) -> Result<Vec<String>, S
 /// first use). The key is also imported into our private keyring so gpg can
 /// later verify signatures with it. fail-closed: if a pin already exists and
 /// the fetched key's fingerprint differs, this is refused as a possible attack.
-pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, ImportError> {
-    let dir = keyring_dir(cache_root);
+pub fn import_key(repo_: &Repo, state_root: &Path) -> Result<ImportOutcome, ImportError> {
+    let dir = keyring_dir(state_root);
     std::fs::create_dir_all(&dir)
         .map_err(|e| ImportError::Other(format!("mkdir {}: {e}", dir.display())))?;
     set_mode_700(&dir);
@@ -167,7 +167,7 @@ pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, Impo
     std::fs::write(&key_path, &key).map_err(|e| ImportError::Other(format!("write key: {e}")))?;
 
     let fetched = fingerprints_in_keyfile(&dir, &key_path).map_err(ImportError::Other)?;
-    let pinned = read_pin(cache_root, &repo_.name);
+    let pinned = read_pin(state_root, &repo_.name);
 
     // If we already pinned a fingerprint, the fetched key MUST match it.
     if !pinned.is_empty() && pinned != fetched {
@@ -179,7 +179,7 @@ pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, Impo
             repo_.name,
             pinned.join(", "),
             fetched.join(", "),
-            pin_path(cache_root, &repo_.name).display(),
+            pin_path(state_root, &repo_.name).display(),
         )));
     }
 
@@ -195,7 +195,7 @@ pub fn import_key(repo_: &Repo, cache_root: &Path) -> Result<ImportOutcome, Impo
 
     if pinned.is_empty() {
         // Trust on first use: record the pin.
-        let _ = std::fs::write(pin_path(cache_root, &repo_.name), format!("{}\n", fetched.join("\n")));
+        let _ = std::fs::write(pin_path(state_root, &repo_.name), format!("{}\n", fetched.join("\n")));
         Ok(ImportOutcome::NewlyPinned(fetched.join(", ")))
     } else {
         Ok(ImportOutcome::AlreadyTrusted)
@@ -228,7 +228,7 @@ fn validsig_fprs(status: &str) -> Vec<String> {
 /// the caller may fall back (e.g. to md5) when policy allows.
 fn verify_against_pin(
     repo_: &Repo,
-    cache_root: &Path,
+    state_root: &Path,
     data: &Path,
     sig: &Path,
     what: &str,
@@ -236,7 +236,7 @@ fn verify_against_pin(
     if !sig.exists() {
         return Ok(Verify::NoSignature);
     }
-    let dir = keyring_dir(cache_root);
+    let dir = keyring_dir(state_root);
     let out = Command::new(gpg_bin())
         .args(["--homedir", &dir.to_string_lossy(), "--batch", "--status-fd", "1", "--verify"])
         .arg(sig)
@@ -266,7 +266,7 @@ fn verify_against_pin(
     }
 
     // GOODSIG alone is not enough: the signing key must be the PINNED key.
-    let pinned = read_pin(cache_root, &repo_.name);
+    let pinned = read_pin(state_root, &repo_.name);
     if pinned.is_empty() {
         return Ok(Verify::Unverifiable(format!(
             "repo '{}' has a signature but no pinned key yet — run `slacker update gpg`",
@@ -294,21 +294,21 @@ fn verify_against_pin(
 }
 
 /// Verify CHECKSUMS.md5 against CHECKSUMS.md5.asc using the pinned key.
-pub fn verify_checksums(repo_: &Repo, cache_root: &Path) -> Result<Verify, String> {
+pub fn verify_checksums(repo_: &Repo, cache_root: &Path, state_root: &Path) -> Result<Verify, String> {
     let sig = repo::meta_path(repo_, cache_root, repo::CHECKSUMS_ASC);
     let data = repo::meta_path(repo_, cache_root, repo::CHECKSUMS);
-    verify_against_pin(repo_, cache_root, &data, &sig, "CHECKSUMS.md5")
+    verify_against_pin(repo_, state_root, &data, &sig, "CHECKSUMS.md5")
 }
 
 /// Verify an arbitrary file against a detached `.asc` using the pinned key.
 pub fn verify_detached(
     repo_: &Repo,
-    cache_root: &Path,
+    state_root: &Path,
     data: &Path,
     sig: &Path,
 ) -> Result<Verify, String> {
     let what = data.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    verify_against_pin(repo_, cache_root, data, sig, &what)
+    verify_against_pin(repo_, state_root, data, sig, &what)
 }
 
 #[cfg(unix)]

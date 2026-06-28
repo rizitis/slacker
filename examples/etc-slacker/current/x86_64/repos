@@ -1,0 +1,78 @@
+# ============================================================================
+#  slacker — repository priorities & sources          (slackware64-current)
+# ============================================================================
+#
+#  Format — one repo per line:
+#        [priority]   [name]   [url]   [flags]
+#
+#    * Higher priority WINS when the same package name exists in several repos.
+#    * To pull from a LOWER-priority repo on purpose, use   name:package
+#      (e.g.  alienbob:vlc).
+#    * An installed package is never silently migrated to another repo nor
+#      downgraded — only a repo of HIGHER OR EQUAL priority may replace it.
+#    * Every repo needs a DISTINCT priority (tag lines at the bottom may share).
+#
+#  The official repo's url is the keyword  mirror  — slacker fills it in from
+#  the active line in the 'mirrors' file. Change your mirror in
+#  /etc/slacker/mirrors;  here you set only its priority / placement.
+#
+#  Flags:  official | immutable | subtree | verify=...   (reference below)
+#
+# ----------------------------------------------------------------------------
+#  Active repositories
+# [priority]  [name]      [url]              [flags]
+# ----------------------------------------------------------------------------
+100         slackware   mirror              official
+200         patches     mirror/patches      subtree immutable
+90          extras      mirror/extra        subtree immutable
+85          testing     mirror/testing      subtree immutable
+#
+# ----------------------------------------------------------------------------
+#  More repos — uncomment, tune the priority to your needs, or add your own.
+#  (Append flags at the end if needed, e.g. immutable / verify=...)
+# ----------------------------------------------------------------------------
+#60         alienbob    https://slackware.nl/people/alien/sbrepos/current/x86_64
+#80         conraid     https://slackers.it/repository/slackware64-current
+#50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/current/x86_64
+#10         multilib    https://slackware.nl/people/alien/multilib/current
+#
+# ----------------------------------------------------------------------------
+#  Flags reference
+# ----------------------------------------------------------------------------
+#  official    The tracked distro repo: powers show-changelog and is the
+#              default for install-new. Placement is still by priority only.
+#  immutable   clean-system never removes packages attributed to this repo —
+#              use it for extra / testing / patches you keep installed.
+#  subtree     The url is a Slackware distribution subtree (extra, patches,
+#              testing, pasture): metadata is read FROM the url, but packages
+#              and GPG-KEY are fetched from the parent (root). The four subtrees
+#              MUST carry this flag, or their packages 404.
+#  verify=...  Per-repo override of the global VERIFY (slacker.conf) for THAT
+#              repo only. Values:  all | none | a comma list of gpg,md5,sha.
+#              Order relative to 'official' does not matter. Use it when one
+#              repo ships a broken/missing checksum or signature, so you relax
+#              only that repo instead of weakening everything. Examples:
+#                100  slackware  mirror                                                   official  verify=gpg,md5
+#                80   conraid    https://slackers.it/repository/slackware64-current                 verify=gpg,md5
+#                60   alienbob   https://slackware.nl/people/alien/sbrepos/current/x86_64           verify=md5
+#
+# ============================================================================
+#  Source / build-tag priorities
+#       [priority]   [name]   [tag]
+# ============================================================================
+#  Packages built from NON-repository sources (SlackBuilds.org, your own local
+#  builds) carry a build tag after the build number — e.g.  _SBo, _rtz.  Give
+#  those tags a priority on the SAME scale as the repos above, so upgrade-all
+#  treats them as a prioritised source: a tagged package is only replaced by a
+#  candidate from a repo of HIGHER OR EQUAL priority.
+#
+#  Keep them HIGH so your SBo / local packages are never silently migrated to
+#  conraid / alienbob / etc. or downgraded — upgrade those via sbopkg / sbotools
+#  / slpkg instead.  (Tag lines, unlike repos, MAY share a priority.)
+#
+#  Format:  [priority]  [name]   [tag]
+#
+#100        SBo         _SBo
+#100        local       YOURTAG
+#
+# ============================================================================

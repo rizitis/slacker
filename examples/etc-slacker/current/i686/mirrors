@@ -1,0 +1,172 @@
+# ============================================================================
+#  slacker — official Slackware mirror list            (slackware-current)
+# ============================================================================
+#
+#  Quick start
+#  -----------
+#  Uncomment EXACTLY ONE mirror line in this file (delete its leading "# ").
+#  By default none is active on purpose — slacker refuses to run with zero
+#  active lines, and also refuses if you uncomment two.
+#
+#  Not sure which mirror to pick?  Let slacker measure it for you:
+#
+#        slacker find-mirror
+#
+#  It probes the official mirrors in parallel, checks each is in sync with
+#  upstream, ranks the fastest for your location, and prints a suggestion.
+#  You then paste that URL here as the single active line — slacker never
+#  edits this file for you.
+#
+#  Architecture  (auto-detected — just match the directory in the line you pick)
+#  ----------------------------------------------------------------------------
+#        x86_64   ->   .../slackware64-current/
+#        32-bit   ->   .../slackware-current/
+#
+#  The few rules
+#  -------------
+#    * One active (uncommented) line — never two.
+#    * http / https / file only.  ftp is NOT supported (and plain http often
+#      resolves to a nearer mirror than ftp anyway).
+#    * The trailing slash is optional.
+#    * The official repo's priority and name are set in the 'repos' file; its
+#      line there uses the keyword  mirror  to read the URL from HERE.
+#
+#  A full, always-current list of official mirrors lives at:
+#        https://mirrors.slackware.com/mirrorlist/
+#
+# ----------------------------------------------------------------------------
+#  What  slacker find-mirror  looks like
+# ----------------------------------------------------------------------------
+#    Finding the fastest up-to-date Slackware mirror
+#     probing 64 https mirrors in parallel ...
+#
+#     ✓ freshness validated against upstream osuosl (Sun Jun 28 00:17:57 UTC 2026)
+#     Top mirrors: (50 of 64 reachable)
+#      1. rs   151ms  1d 1h behind   https://mirror1.sox.rs/slackware/
+#      2. bg   203ms  1d 1h behind   https://mirror.telepoint.bg/slackware/
+#      3. sa   205ms  in sync        https://mirror.lyrahosting.com/slackware/
+#      ...
+#
+#    Fastest: https://mirror1.sox.rs/slackware/ — to use it, make this the
+#    single active line in your `mirrors` file:
+#        https://mirror1.sox.rs/slackware/slackware-current/
+#
+#
+# ============================================================================
+#  RECOMMENDED  —  the redirector (auto-picks a mirror near you)
+# ============================================================================
+#  Best default for most people. Use http/https, not ftp: only http resolves
+#  you to a nearby mirror.
+#
+# https://mirrors.slackware.com/slackware/slackware-current/
+#
+#
+# ============================================================================
+#  LOCAL  —  a CD/DVD drive, mounted media, or an on-disk mirror
+# ============================================================================
+#  An absolute path needs THREE slashes (file://  +  /path), so:
+#        file:///path        and    file://localhost/path     are equivalent.
+#  A remote host  (file://otherhost/path)  is NOT supported — local only.
+#
+# file:///mnt/cdrom/
+# file:///var/cache/slackware-mirror/slackware-current/
+# file://localhost/var/cache/slackware-mirror/slackware-current/
+#
+#
+# ============================================================================
+#  INDIVIDUAL MIRRORS  (by country)
+# ============================================================================
+#  Hand-picked alternatives to the redirector above. This list is not
+#  guaranteed to be up to date — when in doubt, use the redirector or run
+#  `slacker find-mirror`. Countries are sorted alphabetically by code.
+#
+#  --- AUSTRALIA (AU) --------------------------------------------------------
+# http://ftp.cc.swin.edu.au/slackware/slackware-current/
+# http://mirror.aarnet.edu.au/pub/slackware/slackware-current/
+#
+#  --- BELARUS (BY) ----------------------------------------------------------
+# http://mirror.datacenter.by/pub/slackware/slackware-current/
+#
+#  --- BRAZIL (BR) -----------------------------------------------------------
+# http://ftp.slackware-brasil.com.br/slackware-current/
+#
+#  --- BULGARIA (BG) ---------------------------------------------------------
+# http://mirrors.unixsol.org/slackware/slackware-current/
+#
+#  --- CANADA (CA) -----------------------------------------------------------
+# http://mirror.csclub.uwaterloo.ca/slackware/slackware-current/
+#
+#  --- CHINA (CN) ------------------------------------------------------------
+# http://mirrors.163.com/slackware/slackware-current/
+# http://mirrors.ustc.edu.cn/slackware/slackware-current/
+#
+#  --- COSTA RICA (CR) -------------------------------------------------------
+# http://mirrors.ucr.ac.cr/slackware/slackware-current/
+#
+#  --- CZECH REPUBLIC (CZ) ---------------------------------------------------
+# http://odysseus.linux.cz/pub/linux/slackware/slackware-current/
+#
+#  --- FRANCE (FR) -----------------------------------------------------------
+# http://nephtys.lip6.fr/pub/linux/distributions/slackware/slackware-current/
+#
+#  --- GERMANY (DE) ----------------------------------------------------------
+# http://ftp.gwdg.de/pub/linux/slackware/slackware-current/
+# http://ftp.tu-chemnitz.de/pub/linux/slackware/slackware-current/
+#
+#  --- GREECE (GR) -----------------------------------------------------------
+# http://ftp.cc.uoc.gr/mirrors/linux/slackware/slackware-current/
+#
+#  --- INDONESIA (ID) --------------------------------------------------------
+# https://repo.ukdw.ac.id/slackware/slackware-current/
+#
+#  --- JAPAN (JP) ------------------------------------------------------------
+# http://ftp.nara.wide.ad.jp/pub/Linux/slackware/slackware-current/
+#
+#  --- LITHUANIA (LT) --------------------------------------------------------
+# http://mirrors.atviras.lt/slackware/slackware-current/
+# https://mirrors.atviras.lt/slackware/slackware-current/
+#
+#  --- NETHERLANDS (NL) ------------------------------------------------------
+# http://ftp.nluug.nl/os/Linux/distr/slackware/slackware-current/
+# http://mirror.nl.leaseweb.net/slackware/slackware-current/
+#
+#  --- POLAND (PL) -----------------------------------------------------------
+# http://ftp.slackware.pl/pub/slackware/slackware-current/
+# http://sunsite.icm.edu.pl/packages/linux-slackware/slackware-current/
+#
+#  --- RUSSIA (RU) -----------------------------------------------------------
+# http://mirror.rol.ru/slackware/slackware-current/
+# http://mirror.yandex.ru/slackware/slackware-current/
+#
+#  --- SOUTH AFRICA (ZA) -----------------------------------------------------
+# http://ftp.is.co.za/mirror/ftp.slackware.com/pub/slackware-current/
+#
+#  --- SWEDEN (SE) -----------------------------------------------------------
+# http://ftp.sunet.se/mirror/slackware.com/slackware-current/
+#
+#  --- SWITZERLAND (CH) ------------------------------------------------------
+# https://mirror.init7.net/slackware/slackware-current/
+#
+#  --- TAIWAN (TW) -----------------------------------------------------------
+# http://ftp.twaren.net/Linux/Slackware/slackware-current/
+#
+#  --- TURKEY (TR) -----------------------------------------------------------
+# http://ftp.linux.org.tr/slackware/slackware-current/
+#
+#  --- UKRAINE (UA) ----------------------------------------------------------
+# http://mirrors.mithril.org.ua/linux/slackware/slackware-current/
+#
+#  --- UNITED KINGDOM (UK) ---------------------------------------------------
+# http://slackware.uk/slackware/slackware-current/
+# http://ftp.mirrorservice.org/sites/ftp.slackware.com/pub/slackware/slackware-current/
+# http://mirror.bytemark.co.uk/slackware/slackware-current/
+#
+#  --- UNITED STATES (US) ----------------------------------------------------
+# http://mirrors.us.kernel.org/slackware/slackware-current/
+# http://mirrors.xmission.com/slackware/slackware-current/
+# https://mirror.slackbuilds.org/slackware/slackware-current/
+# http://slackware.cs.utah.edu/pub/slackware/slackware-current/
+# http://slackware.mirrors.tds.net/pub/slackware/slackware-current/
+# http://spout.ussg.indiana.edu/linux/slackware/slackware-current/
+#
+# ============================================================================

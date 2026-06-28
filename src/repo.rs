@@ -24,6 +24,11 @@ pub struct AvailPkg {
     pub md5: Option<String>,
     /// SHA-256 from CHECKSUMS.sha256, if the repo ships one. None otherwise.
     pub sha: Option<String>,
+    /// Dependency package names declared in PACKAGES.TXT via `PACKAGE REQUIRED:`
+    /// (slapt-get / SlackBuilds-style repos). Empty for vanilla Slackware trees,
+    /// which carry no auto-dependency metadata. Used as a fallback when a repo
+    /// ships no per-package `.dep` file.
+    pub required: Vec<String>,
     pub repo: String,
 }
 
@@ -241,8 +246,27 @@ fn official_arch_subdir(cache_dir: &Path) -> Option<String> {
 /// kernel-headers, present even on x86_64). These must not be filtered out, or
 /// clean-system would wrongly flag them as foreign. Genuine 32-bit binary
 /// arches (`i586`/`i686`) are still excluded on a 64-bit system.
+/// Is a package built for `pkg_arch` usable on a system of `arch`? `noarch`,
+/// firmware (`fw`) and the kernel-headers `x86` arch ship on every Slackware
+/// arch, so they are always kept. Otherwise the arch FAMILIES must match: all
+/// 32-bit x86 variants (i386/i486/i586/i686) are one family, so an i686 package
+/// loads on an i586-detected base and vice versa. Without this, the whole 32-bit
+/// tree was dropped — the base detects as i586 while the kernel and most
+/// packages are i686, and an exact-match filter discarded them.
 fn arch_compatible(pkg_arch: &str, arch: &str) -> bool {
-    pkg_arch == arch || pkg_arch == "noarch" || pkg_arch == "fw" || pkg_arch == "x86"
+    pkg_arch == "noarch"
+        || pkg_arch == "fw"
+        || pkg_arch == "x86"
+        || arch_family(pkg_arch) == arch_family(arch)
+}
+
+/// Arch family for the available-list filter: the 32-bit x86 variants collapse
+/// to one group; every other token compares as-is.
+fn arch_family(a: &str) -> &str {
+    match a {
+        "i386" | "i486" | "i586" | "i686" => "x86_32",
+        other => other,
+    }
 }
 
 /// Read a file as text, replacing any invalid UTF-8 bytes rather than failing.
@@ -325,12 +349,12 @@ pub fn invalidate_metadata(repo: &Repo, cache_root: &Path) {
 }
 
 /// Directory holding repo-quarantine markers.
-fn quarantine_dir(cache_root: &Path) -> PathBuf {
-    cache_root.join("quarantine")
+fn quarantine_dir(state_root: &Path) -> PathBuf {
+    state_root.join("quarantine")
 }
 
-fn quarantine_path(cache_root: &Path, repo_name: &str) -> PathBuf {
-    quarantine_dir(cache_root).join(repo_name)
+fn quarantine_path(state_root: &Path, repo_name: &str) -> PathBuf {
+    quarantine_dir(state_root).join(repo_name)
 }
 
 /// True if a repo has been quarantined (failed safety vetting). A quarantined
@@ -338,8 +362,8 @@ fn quarantine_path(cache_root: &Path, repo_name: &str) -> PathBuf {
 /// cleared. SOFT quarantine (unreachable) is retried automatically by the next
 /// update; HARD quarantine (malicious / bad signature / manual distrust) stays
 /// until the user runs `trust-repo`.
-pub fn is_quarantined(cache_root: &Path, repo_name: &str) -> bool {
-    quarantine_path(cache_root, repo_name).exists()
+pub fn is_quarantined(state_root: &Path, repo_name: &str) -> bool {
+    quarantine_path(state_root, repo_name).exists()
 }
 
 /// Whether a quarantine is "soft" (unreachable, auto-retried) or "hard"
@@ -352,8 +376,8 @@ pub enum QuarantineKind {
 
 /// Parse a quarantine marker: first line is the kind tag, the rest is the
 /// human-readable reason. Markers without a recognised tag are treated as soft.
-fn read_quarantine(cache_root: &Path, repo_name: &str) -> Option<(QuarantineKind, String)> {
-    let raw = std::fs::read_to_string(quarantine_path(cache_root, repo_name)).ok()?;
+fn read_quarantine(state_root: &Path, repo_name: &str) -> Option<(QuarantineKind, String)> {
+    let raw = std::fs::read_to_string(quarantine_path(state_root, repo_name)).ok()?;
     let mut it = raw.splitn(2, '\n');
     let kind = match it.next().unwrap_or("").trim() {
         "hard" => QuarantineKind::Hard,
@@ -364,13 +388,13 @@ fn read_quarantine(cache_root: &Path, repo_name: &str) -> Option<(QuarantineKind
 }
 
 /// True only for a HARD quarantine (the next update will NOT auto-retry it).
-pub fn is_hard_quarantined(cache_root: &Path, repo_name: &str) -> bool {
-    matches!(read_quarantine(cache_root, repo_name), Some((QuarantineKind::Hard, _)))
+pub fn is_hard_quarantined(state_root: &Path, repo_name: &str) -> bool {
+    matches!(read_quarantine(state_root, repo_name), Some((QuarantineKind::Hard, _)))
 }
 
 /// The recorded reason a repo was quarantined (for display), if any.
-pub fn quarantine_reason(cache_root: &Path, repo_name: &str) -> Option<String> {
-    read_quarantine(cache_root, repo_name).map(|(_, r)| r)
+pub fn quarantine_reason(state_root: &Path, repo_name: &str) -> Option<String> {
+    read_quarantine(state_root, repo_name).map(|(_, r)| r)
 }
 
 /// Quarantine a repo, recording the kind and why. Its cached integrity metadata
@@ -379,52 +403,54 @@ pub fn quarantine_reason(cache_root: &Path, repo_name: &str) -> Option<String> {
 pub fn quarantine(
     repo: &Repo,
     cache_root: &Path,
+    state_root: &Path,
     kind: QuarantineKind,
     reason: &str,
 ) -> Result<(), String> {
-    let dir = quarantine_dir(cache_root);
+    let dir = quarantine_dir(state_root);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let tag = match kind {
         QuarantineKind::Soft => "soft",
         QuarantineKind::Hard => "hard",
     };
-    std::fs::write(quarantine_path(cache_root, &repo.name), format!("{tag}\n{reason}"))
+    std::fs::write(quarantine_path(state_root, &repo.name), format!("{tag}\n{reason}"))
         .map_err(|e| format!("write quarantine marker: {e}"))?;
-    unmark_trusted(cache_root, &repo.name);
+    unmark_trusted(state_root, &repo.name);
+    // The quarantine MARKER is state; the metadata it invalidates is cache.
     invalidate_metadata(repo, cache_root);
     Ok(())
 }
 
 /// Lift a repo's quarantine.
-pub fn clear_quarantine(cache_root: &Path, repo_name: &str) {
-    let _ = std::fs::remove_file(quarantine_path(cache_root, repo_name));
+pub fn clear_quarantine(state_root: &Path, repo_name: &str) {
+    let _ = std::fs::remove_file(quarantine_path(state_root, repo_name));
 }
 
 /// Directory holding "vetted/trusted" markers. A repo is trusted once it has
 /// passed vetting (or the user ran `trust-repo`): update then uses it normally
 /// and a transient fetch failure does NOT quarantine it. Untrusted repos (newly
 /// added, never vetted) are vetted on first update.
-fn trusted_dir(cache_root: &Path) -> PathBuf {
-    cache_root.join("trusted")
+fn trusted_dir(state_root: &Path) -> PathBuf {
+    state_root.join("trusted")
 }
 
-fn trusted_path(cache_root: &Path, repo_name: &str) -> PathBuf {
-    trusted_dir(cache_root).join(repo_name)
+fn trusted_path(state_root: &Path, repo_name: &str) -> PathBuf {
+    trusted_dir(state_root).join(repo_name)
 }
 
-pub fn is_trusted(cache_root: &Path, repo_name: &str) -> bool {
-    trusted_path(cache_root, repo_name).exists()
+pub fn is_trusted(state_root: &Path, repo_name: &str) -> bool {
+    trusted_path(state_root, repo_name).exists()
 }
 
-pub fn mark_trusted(cache_root: &Path, repo_name: &str) {
-    let dir = trusted_dir(cache_root);
+pub fn mark_trusted(state_root: &Path, repo_name: &str) {
+    let dir = trusted_dir(state_root);
     if std::fs::create_dir_all(&dir).is_ok() {
-        let _ = std::fs::write(trusted_path(cache_root, repo_name), "");
+        let _ = std::fs::write(trusted_path(state_root, repo_name), "");
     }
 }
 
-pub fn unmark_trusted(cache_root: &Path, repo_name: &str) {
-    let _ = std::fs::remove_file(trusted_path(cache_root, repo_name));
+pub fn unmark_trusted(state_root: &Path, repo_name: &str) {
+    let _ = std::fs::remove_file(trusted_path(state_root, repo_name));
 }
 
 
@@ -446,6 +472,7 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
     let mut cur_size_unc: Option<u64> = None;
     let mut cur_summary = String::new();
     let mut cur_desc = String::new();
+    let mut cur_required: Vec<String> = Vec::new();
     let mut in_desc = false;
 
     #[allow(clippy::too_many_arguments)]
@@ -455,7 +482,8 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
                  size: Option<u64>,
                  size_unc: Option<u64>,
                  summary: &str,
-                 desc: &str| {
+                 desc: &str,
+                 required: &[String]| {
         if let Some(filename) = name {
             // Reject path-like filenames/locations from the repo before they can
             // ever reach a filesystem path or URL (see pkg::is_safe_filename).
@@ -474,6 +502,7 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
                     description: desc.trim_end().to_string(),
                     md5: None,
                     sha: None,
+                    required: required.to_vec(),
                     repo: repo_name.to_string(),
                 });
             }
@@ -482,19 +511,27 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
 
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("PACKAGE NAME:") {
-            flush(&mut out, &cur_name, &cur_loc, cur_size, cur_size_unc, &cur_summary, &cur_desc);
+            flush(
+                &mut out, &cur_name, &cur_loc, cur_size, cur_size_unc, &cur_summary, &cur_desc,
+                &cur_required,
+            );
             cur_name = Some(rest.trim().to_string());
             cur_loc.clear();
             cur_size = None;
             cur_size_unc = None;
             cur_summary.clear();
             cur_desc.clear();
+            cur_required.clear();
             in_desc = false;
         } else if let Some(rest) = line.strip_prefix("PACKAGE LOCATION:") {
             cur_loc = rest.trim().to_string();
             if !cur_loc.ends_with('/') {
                 cur_loc.push('/');
             }
+        } else if let Some(rest) = line.strip_prefix("PACKAGE REQUIRED:") {
+            // slapt-get / SlackBuilds repos declare deps here (vanilla Slackware
+            // trees omit it). Additive: parsed only when present.
+            cur_required = parse_required(rest);
         } else if let Some(rest) = line.strip_prefix("PACKAGE SIZE (compressed):") {
             cur_size = rest.trim().split_whitespace().next().and_then(|n| n.parse().ok());
         } else if let Some(rest) = line.strip_prefix("PACKAGE SIZE (uncompressed):") {
@@ -514,7 +551,10 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
             cur_desc.push('\n');
         }
     }
-    flush(&mut out, &cur_name, &cur_loc, cur_size, cur_size_unc, &cur_summary, &cur_desc);
+    flush(
+        &mut out, &cur_name, &cur_loc, cur_size, cur_size_unc, &cur_summary, &cur_desc,
+        &cur_required,
+    );
     out
 }
 
@@ -582,6 +622,33 @@ xfce4-panel: xfce4-panel (panel for Xfce)
         assert_eq!(pkgs[0].id.name, "bash");
         assert_eq!(pkgs[0].series, "a");
         assert_eq!(pkgs[1].series, "xfce");
+        // Vanilla Slackware PACKAGES.TXT has no PACKAGE REQUIRED -> no auto-deps.
+        assert!(pkgs[0].required.is_empty());
+        assert!(pkgs[1].required.is_empty());
+    }
+
+    #[test]
+    fn captures_package_required_when_present() {
+        // slapt-get / SlackBuilds style metadata: deps declared in PACKAGES.TXT.
+        let sample = "\
+PACKAGE NAME:  flatpak-1.18.0-x86_64-1alien.txz
+PACKAGE LOCATION:  ./
+PACKAGE REQUIRED:  bubblewrap,libostree,xdg-dbus-proxy
+PACKAGE DESCRIPTION:
+flatpak: flatpak (application sandboxing)
+
+PACKAGE NAME:  bubblewrap-0.11.2-x86_64-2alien.txz
+PACKAGE LOCATION:  ./
+PACKAGE DESCRIPTION:
+bubblewrap: bubblewrap (sandboxing tool)
+";
+        let pkgs = parse_packages_txt(sample, "alienbob");
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].id.name, "flatpak");
+        assert_eq!(pkgs[0].required, vec!["bubblewrap", "libostree", "xdg-dbus-proxy"]);
+        // A package in the same repo without the field keeps empty deps.
+        assert_eq!(pkgs[1].id.name, "bubblewrap");
+        assert!(pkgs[1].required.is_empty());
     }
 
     #[test]
@@ -627,10 +694,42 @@ xfce4-panel: xfce4-panel (panel for Xfce)
 pub fn fetch_dep(repo: &Repo, avail: &AvailPkg) -> Vec<String> {
     let rel = format!("{}{}.dep", avail.location, avail.id.tag());
     let url = repo.join_url(&rel);
-    match crate::download::get_bytes(&url) {
+    let from_dep = match crate::download::get_bytes(&url) {
         Ok(bytes) => parse_dep(&String::from_utf8_lossy(&bytes)),
         Err(_) => Vec::new(),
+    };
+    // A per-package `.dep` is authoritative. Only when the repo ships none (the
+    // fetch 404s or is empty) do we fall back to the names declared in
+    // PACKAGES.TXT via `PACKAGE REQUIRED:` (slapt-get / SlackBuilds repos). For
+    // vanilla Slackware trees both are empty -> no auto-deps, which is correct.
+    if from_dep.is_empty() {
+        avail.required.clone()
+    } else {
+        from_dep
     }
+}
+
+/// Parse a `PACKAGE REQUIRED:` value: a comma-separated list of dependency
+/// package NAMES. On Slackware repos these are plain names; the slapt-get spec
+/// also permits a trailing version constraint (`name >= 1.2`) and `a|b`
+/// alternatives, so we defensively drop the constraint and take the first
+/// alternative. `%README%` and blanks are skipped.
+fn parse_required(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|tok| {
+            let tok = tok.trim();
+            // First alternative of `a|b|c`.
+            let tok = tok.split('|').next().unwrap_or(tok).trim();
+            // Drop a trailing version constraint: name>=1.2, name = 1.2, name<3 ...
+            tok.split(|c: char| matches!(c, '>' | '<' | '=' | ' ' | '\t'))
+                .next()
+                .unwrap_or(tok)
+                .trim()
+        })
+        .filter(|s| !s.is_empty() && *s != "%README%")
+        .map(String::from)
+        .collect()
 }
 
 /// Parse `.dep` contents: one dependency package name per line, `#` comments
@@ -656,6 +755,23 @@ mod dep_tests {
         let text = "aubio\n# a comment\n\nliblo   \nlilv # inline\n";
         assert_eq!(parse_dep(text), vec!["aubio", "liblo", "lilv"]);
     }
+
+    #[test]
+    fn parse_required_is_format_tolerant() {
+        use super::parse_required;
+        // The common case on Slackware repos: plain, comma-separated names.
+        assert_eq!(
+            parse_required("bubblewrap,libostree,xdg-dbus-proxy"),
+            vec!["bubblewrap", "libostree", "xdg-dbus-proxy"]
+        );
+        // Defensive against the slapt spec: version constraints dropped, the
+        // first `a|b` alternative taken, %README% and blanks skipped, spaces ok.
+        assert_eq!(
+            parse_required("glibc >= 2.2, foo|bar, %README%, , baz<3"),
+            vec!["glibc", "foo", "baz"]
+        );
+        assert!(parse_required("").is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -675,6 +791,20 @@ mod arch_tests {
         assert!(!arch_compatible("i586", "x86_64"));
         assert!(!arch_compatible("i686", "x86_64"));
         assert!(!arch_compatible("aarch64", "x86_64"));
+    }
+
+    #[test]
+    fn keeps_whole_32bit_family_on_32bit() {
+        // The base detects as i586 but the kernel and many packages are i686;
+        // both must stay in the available list (this was the 32-bit bug).
+        assert!(arch_compatible("i586", "i586"));
+        assert!(arch_compatible("i686", "i586")); // i686 kernel on i586 base
+        assert!(arch_compatible("i586", "i686"));
+        assert!(arch_compatible("noarch", "i586"));
+        assert!(arch_compatible("x86", "i586")); // kernel-headers
+        assert!(arch_compatible("fw", "i686")); // firmware
+        // A genuine 64-bit package still does not belong on a 32-bit system.
+        assert!(!arch_compatible("x86_64", "i586"));
     }
 }
 
