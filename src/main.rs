@@ -1374,18 +1374,18 @@ fn kernel_reboot_reminder(plan: &[PlanItem]) {
         return;
     }
     println!();
-    println!("{}", ui::yellow("A kernel package was upgraded."));
+    println!("{}", ui::yellow("/// !!!! --- A kernel package was upgraded.---- !!!! ///"));
     println!(
         "  {}",
         ui::white(
-            "Before rebooting: update the bootloader, and if you use an initrd rebuild it (mkinitrd)."
+            "Before rebooting: make sure the bootloader is updated; if you use an initrd or custom hooks, make sure everything is in place."
         )
     );
     println!(
         "  {}",
         ui::dim(
-            "LILO: run `lilo`  |  ELILO/UEFI: `eliloconfig`  |  GRUB: regenerate grub.cfg  \
-             |  keep the previous kernel in the menu as a fallback"
+            "LILO: run `lilo`  |  ELILO/UEFI: `eliloconfig`  |  GRUB: `update-grub`  \
+             |  This message is a reminder; generally speaking, you should not need to act on it."
         )
     );
 }
