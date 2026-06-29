@@ -1,5 +1,5 @@
 //! GPG support, shelling out to the system `gpg`. We keep a private keyring
-//! under the cache dir so we never touch the user's keyring.
+//! under the state dir so we never touch the user's keyring.
 //!
 //! Trust model (this is the security anchor of the whole package manager):
 //! a repo serves its own GPG-KEY, so importing it proves nothing on its own —

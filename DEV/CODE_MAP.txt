@@ -109,13 +109,16 @@ Turns a Repo's remote files into AvailPkg records and keeps the cache fresh.
                    headers); this mirrors slackpkg, do not narrow casually
   read_text_lossy  pub(crate): UTF-8-lossy reads — some repos (extras) have
                    non-UTF-8 bytes; use this for every metadata read
-  fetch_dep / parse_dep   pull and parse a package's `.dep` file (slackpkg+)
+  fetch_dep / parse_dep   pull and parse a package's `.dep` file (slackpkg+);
+  parse_required          .dep first, else fall back to PACKAGE REQUIRED: in
+                          PACKAGES.TXT (slapt-get/SlackBuilds repos w/o .dep)
   previous_names          the .prev snapshot install-new diffs against (by
                           package NAME, so a version/build bump is not "new")
   fetch_changelog_text    on-demand ChangeLog fetch for show-changelog
   invalidate_metadata     drop a repo's cached PACKAGES.TXT/CHECKSUMS after a
                           failed GPG verification, so unverified data is unused
-  quarantine_dir / trusted_dir / *_marker   cache markers under CACHE_DIR:
+  quarantine_dir / trusted_dir / *_marker   STATE markers under STATE_DIR
+                          (/var/lib/slacker, NOT the disposable cache):
                           quarantine/<name> (frozen, inert) | trusted/<name>
                           (vetted-pass or user-trusted) | neither (untrusted ->
                           light-vetted on next update). is_quarantined /
@@ -323,11 +326,11 @@ gpg.rs            (~280 lines)   key import + signature verify (fail-closed)
 --------------------------------------------------------------------------------
   import_key           `update gpg`: fetch GPG-KEY (from the repo's download
                        base -> the root for a subtree repo) + gpg --import into
-                       a per-cache keyring, then PIN its fingerprint on first
+                       the keyring under STATE_DIR/gpg, then PIN its fingerprint on first
                        contact (TOFU). A later key whose fingerprint differs from
                        the pin is refused as a possible key-substitution attack.
                        Returns ImportOutcome / ImportError(KeyChanged | Other)
-  read_pin / pin       per-repo fingerprint pin under cache/gpg/<name>.fpr
+  read_pin / pin       per-repo fingerprint pin under STATE_DIR/gpg/<name>.fpr
   verify_checksums     verify CHECKSUMS.md5.asc against the pinned key; FAIL-CLOSED
   verify_detached      verify any file against a detached .asc (per-package
                        .txz.asc at install); same pinned-key, fail-closed contract
@@ -554,7 +557,7 @@ General hints for a forker
   warn-and-continue. The official repo gets NO exemption — `official` only
   affects install-new scope and ChangeLog tracking. GPG keys are pinned on first
   use (TOFU): a changed fingerprint is refused as key substitution. A repo that
-  fails vetting is auto-quarantined (markers under CACHE_DIR; see repo.rs) and
+  fails vetting is auto-quarantined (markers under STATE_DIR; see repo.rs) and
   provides no packages until trust-repo/vet-repo clears it.
 
 - ERRORS ARE STRINGS by design. Keep messages short, specific, and actionable

@@ -1,3 +1,8 @@
+![slacker](slacker-banner.svg)
+
+
+---
+
 # slacker - slackpkg + slackpkg+ in one
 
 A Slackware package manager in Rust with full **slackpkg action parity**, plus

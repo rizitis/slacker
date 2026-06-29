@@ -33,6 +33,8 @@
 # ----------------------------------------------------------------------------
 #60         alienbob    https://slackware.nl/people/alien/sbrepos/15.0/x86_64
 #50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/15.0/x86_64
+#80         mate        https://slackware.uk/msb/15.0/1.28/x86_64
+#79         cbs         https://slackware.uk/csb/15.0/x86_64/
 #10         multilib    https://slackware.nl/people/alien/multilib/15.0
 #
 # ----------------------------------------------------------------------------

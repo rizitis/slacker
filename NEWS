@@ -1,3 +1,8 @@
+Update: GPG keys under CACHE_DIR/repos" stale (keyring is STATE_DIR now).
+---
+
+Version Beta 0.9.0
+=====
 Add: slacker now builds and run for i686 systems.
 Add: protection mechanism when the wrong repos are activated on the wrong system. example in x86_64 system --> i686 repo or in stable system --> curent repo, of course if someone wants to commit suicide they always find a way...
 ---

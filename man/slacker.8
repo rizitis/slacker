@@ -557,7 +557,16 @@ package and need only be set to force a specific architecture.
 .B CACHE_DIR
 (default
 .IR /var/cache/slacker )
-holds downloaded metadata and packages.
+holds downloaded metadata and packages (re-downloadable; safe to clear).
+.B STATE_DIR
+(default
+.IR /var/lib/slacker )
+holds persistent security state \(em the GPG keyring, the TOFU fingerprint pins
+.RI ( *.fpr ),
+and the repo quarantine/trust markers. It is kept separate from the disposable
+.B CACHE_DIR
+so that wiping the cache cannot destroy the trust anchors; existing state is
+moved here automatically on first run.
 .B ADM_DIR
 (default
 .IR /var/adm )

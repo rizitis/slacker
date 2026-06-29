@@ -2,7 +2,7 @@
 
 `slacker` = slackpkg + slackpkg+ in one minimal Rust tool. Full slackpkg action
 parity, plus slackpkg+ multi-repo priority resolution and .dep dependency
-handling.
+handling (with a PACKAGE REQUIRED fallback for repos that ship no .dep).
 
 Build needs Rust 1.85.1+ (the effective MSRV; current Slackware ships 1.96). The
 crate itself is edition 2021 for broad compatibility, but a dependency (clap_lex
@@ -17,7 +17,7 @@ slacker/
 ├── Cargo.toml                      <- build manifest (deps: clap, ureq [rustls], md-5, regex; Apache-2.0)
 ├── slacker.8                       <- man page (section 8)
 ├── examples/etc-slacker/           <- config templates for /etc/slacker/
-│   ├── slacker.conf                <- globals (ARCH auto-detect, ADM_DIR, CACHE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY, MAX_PARALLEL, REVERT, CUMULATIVE_URL)
+│   ├── slacker.conf                <- globals (ARCH auto-detect, ADM_DIR, CACHE_DIR, STATE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY, MAX_PARALLEL, REVERT, CUMULATIVE_URL)
 │   ├── mirrors                     <- catalogue of official mirrors - uncomment ONE (none by default)
 │   ├── repos                       <- binary repos + tag-priority lines
 │   ├── blacklist                   <- blacklist rules: [@repo] REGEX | [@repo] series/
@@ -27,7 +27,7 @@ slacker/
     ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + pins (@repo 100% name) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs + DISTRO_UPGRADE_MIRROR (distro-upgrade.conf)
     ├── dist.rs        distribution-upgrade engine: Release/Route types, parse_release_from_os (os-release) + parse_release_from_url, the fail-closed route whitelist (dist_route), release suffix/target parsing (used by upgrade-dist and the release-mismatch guard)
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
-    ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch, quarantine/trust markers
+    ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch (+ PACKAGE REQUIRED fallback for repos without .dep), quarantine/trust markers (under STATE_DIR)
     ├── revert.rs      revert-pkg rollback helpers: previous official versions from removed_packages (strip -upgraded- suffix), cumulative PACKAGES.TXT location parse + .txz URL build
     ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, baseline names (clean-system), blacklist source lookups + pin resolution
     ├── download.rs    https/http (ureq+rustls) + file:// + md5 + sha256 (sha256sum); parallel batch downloads (std::thread::scope, MAX_PARALLEL, best-effort)
@@ -49,7 +49,11 @@ slacker/
   `aaa_base` package (override only for cross). ADM_DIR (default `/var/adm`) is
   the Slackware pkgtools admin root (holds `packages/`, `removed_packages/`,
   `scripts/`, `setup/`); `history` reads it. CACHE_DIR (default
-  `/var/cache/slacker`). PKG_DB_DIR defaults to `ADM_DIR/packages`; set it
+  `/var/cache/slacker`) holds re-downloadable metadata + packages; STATE_DIR
+  (default `/var/lib/slacker`) holds persistent security state (GPG keyring +
+  .fpr pins, quarantine/trust markers) so a cache wipe can't reset the trust
+  anchors — moved from the old cache location automatically on first run.
+  PKG_DB_DIR defaults to `ADM_DIR/packages`; set it
   explicitly only to override that (kept for back-compat). RESOLVE_DEPS (default
   yes), VERIFY (default all), IGNORE_TAGS (build tags that `clean-system` treats
   as non-foreign, e.g. `_SBo cf alien`). MAX_PARALLEL (default 4, clamped
@@ -165,7 +169,7 @@ distrust-repo   generate-template  install-template  remove-template  delete-tem
   or to DIR; confirms before bulk (>10) downloads; refuses to write through a
   pre-existing symlink.
 - `clean-cache [REPO...]` - deletes downloaded *.txz only; never touches repo
-  metadata or GPG keys under CACHE_DIR/repos.
+  metadata (CACHE_DIR/repos) or the GPG keyring + trust markers (STATE_DIR).
 - `remove-template` uninstalls a template's packages (slackpkg behaviour);
   `delete-template` removes only the template file.
 - `frozen RULE...` - add one or more blacklist rules. Each argument is one
@@ -270,7 +274,7 @@ reinstall, upgrade-all, install-new, install-template.
 ### Build_and_Tests
 
 > NO root needed for build & tests (only the mutating actions need root).
-> 159 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
+> 166 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
 
 ```
 cargo build --release
