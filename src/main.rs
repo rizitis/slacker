@@ -202,8 +202,8 @@ enum Cmd {
     /// Delete a template file (does not touch installed packages).
     DeleteTemplate { name: String },
     /// Add one or more blacklist rules ("freeze"). Each argument is one rule:
-    /// a regex, a `series/`, or `@repo regex` (quote rules with spaces). Run with
-    /// no argument to list the current frozen rules.
+    /// a glob (`*`, `?`) or a regex, a `series/`, or `@repo PATTERN` (quote rules
+    /// with spaces). Run with no argument to list the current frozen rules.
     Frozen { names: Vec<String> },
     /// Remove one or more blacklist rules ("unfreeze"). Each argument must match
     /// an existing rule EXACTLY, as a literal string — special characters like
@@ -281,7 +281,10 @@ fn restore_default_sigpipe() {}
 
 fn main() -> ExitCode {
     restore_default_sigpipe();
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => return clap_error_exit(e),
+    };
     match run(&cli) {
         Ok(Outcome::Ok) => ExitCode::SUCCESS,
         Ok(Outcome::NothingFound) => ExitCode::from(20),
@@ -292,6 +295,31 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Show a clap parse error. A single-argument command (`history`, `search`,
+/// `info`, `file-search`, `revert-pkg`, …) cannot accept the flood of filenames
+/// the shell produces from a bare `*`, so clap rejects it with a terse
+/// "unexpected argument" before any of slacker's own code runs. Detect that and
+/// print the same friendly explanation the install/remove path uses; the command
+/// never ran, so nothing changed. Any other parse error defers to clap's output.
+fn clap_error_exit(e: clap::Error) -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if e.kind() == clap::error::ErrorKind::UnknownArgument && looks_shell_expanded(&args) {
+        eprintln!(
+            "{}",
+            ui::yellow(&format!(
+                "note: your shell expanded a glob into {} arguments before slacker ran.",
+                args.len()
+            ))
+        );
+        eprintln!(
+            "{}",
+            ui::dim("      slacker has no `*` wildcard — quote the pattern, or use `@repo` where a whole repo is allowed. Nothing ran.")
+        );
+        return ExitCode::from(2);
+    }
+    e.exit() // clap prints its own usage/help and exits
 }
 
 fn run(cli: &Cli) -> Result<Outcome, String> {
@@ -2174,6 +2202,63 @@ fn fix_pin_repo(db: &PkgDb, m: &str) -> Option<String> {
     Some(format!("{s}:{name}"))
 }
 
+/// Heuristic: do these unmatched arguments look like a shell-expanded glob —
+/// the shell turned a bare `*`/`?` into a list of filenames before slacker ran —
+/// rather than a handful of mistyped names? Two structural tells: a flood of
+/// arguments (nobody types that many package names), or arguments containing
+/// whitespace (a package selector never does). Either way we collapse the
+/// per-argument flood into one explanatory note.
+fn looks_shell_expanded(misses: &[String]) -> bool {
+    const FLOOD: usize = 8;
+    if misses.len() >= FLOOD {
+        return true;
+    }
+    misses.len() >= 2 && misses.iter().filter(|m| m.contains(char::is_whitespace)).count() >= 2
+}
+
+/// One consolidated note replacing a flood of "no match" lines when the shell
+/// clearly expanded a glob. slacker has no `*` wildcard for selecting packages —
+/// a whole repo is `@repo`, a literal pattern must be quoted.
+fn note_shell_expansion(misses: &[String]) {
+    let n = misses.len();
+    let sample: Vec<String> = misses.iter().take(3).map(|m| format!("'{m}'")).collect();
+    let more = if n > 3 {
+        format!(", … (+{} more)", n - 3)
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "{}",
+        ui::yellow(&format!(
+            "note: {n} of your arguments match no package — e.g. {}{more}.",
+            sample.join(", ")
+        ))
+    );
+    eprintln!(
+        "{}",
+        ui::dim("      this looks like a shell-expanded `*`/`?` glob (slacker never reads your directory).")
+    );
+    eprintln!(
+        "{}",
+        ui::dim("      slacker has no `*` wildcard for selecting packages — use `@repo` for a whole repo (e.g. `@gnome`), or quote a literal pattern.")
+    );
+}
+
+/// Safety gate for install/upgrade/remove/reinstall/download. If the UNMATCHED
+/// arguments look like a shell-expanded glob, refuse the WHOLE command before any
+/// plan or picker is built — even arguments that DID match are almost certainly
+/// accidental, because a short stray filename like `go` substring-matches pango,
+/// cargo, dragon, … and a careless `[Enter]=all` would wreck the system. The
+/// deliberate, single-term picker (e.g. `reinstall emacs` -> emacs, emacspeak)
+/// is unaffected: it produces no misses, so the gate stays open.
+fn guard_shell_expansion(misses: &[String]) -> Result<(), String> {
+    if looks_shell_expanded(misses) {
+        note_shell_expansion(misses);
+        return Err("refusing to act on shell-expanded arguments — nothing was changed".into());
+    }
+    Ok(())
+}
+
 /// Report package-name misses with guidance instead of a bare "no match":
 ///   * if the database is empty the real problem is missing metadata, so point
 ///     at `slacker update` (printed once);
@@ -2302,6 +2387,7 @@ fn collect<'a>(
             }
         }
     }
+    guard_shell_expansion(&misses)?;
     let pkgs = order.iter().map(|n| chosen[n].0).collect();
     Ok((pkgs, misses))
 }
@@ -2406,6 +2492,7 @@ fn collect_installed_targets<'a>(
             }
         }
     }
+    guard_shell_expansion(&misses)?;
     Ok((out, protected, misses))
 }
 
@@ -3176,6 +3263,19 @@ fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let hits = manifest::file_search(&cfg.repos, &cfg.cache_dir, filename)?;
     let found = !hits.is_empty();
+
+    // file-search is a plain substring match over MANIFEST paths, not a glob.
+    // If the query carries shell-wildcard characters the user almost certainly
+    // meant them as globs, so flag that they are taken literally.
+    let has_glob = filename.contains(|c| matches!(c, '*' | '?' | '[' | ']'));
+    if has_glob {
+        eprintln!(
+            "{}",
+            ui::yellow("note: file-search matches a literal substring, not a glob —")
+        );
+        eprintln!("      '*', '?', '[' and ']' are treated as ordinary characters, not wildcards.");
+    }
+
     for h in hits {
         let pkgname = pkg::PkgId::parse(&h.package).map(|p| p.name).unwrap_or_else(|| h.package.clone());
         let mark = if system::is_installed(&installed, &pkgname) {
@@ -3211,6 +3311,15 @@ fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
     if !found {
         if unavailable.is_empty() {
             println!("No package ships a file matching '{filename}'.");
+            if has_glob {
+                let stripped: String = filename
+                    .chars()
+                    .filter(|c| !matches!(c, '*' | '?' | '[' | ']'))
+                    .collect();
+                if !stripped.is_empty() && stripped != filename {
+                    println!("Wildcards aren't supported here — try `slacker file-search {stripped}`.");
+                }
+            }
         }
         return Ok(Outcome::NothingFound);
     }
@@ -4936,6 +5045,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
     let mut todo: Vec<&pkg::PkgId> = Vec::new();
     let mut frozen: Vec<String> = Vec::new();
     let mut misses: Vec<String> = Vec::new();
+    let mut miss_pats: Vec<String> = Vec::new(); // raw patterns, for the shell-expansion gate
     let mut seen = HashSet::new();
 
     for pat in patterns {
@@ -4979,6 +5089,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
         // Named something that is not installed: say so (with a typo hint over
         // the installed set) rather than letting it vanish into "Nothing to remove".
         if !hit {
+            miss_pats.push(pat.clone());
             let mut msg = format!("'{pat}' is not installed");
             if let Some(s) = closest(term, installed.iter().map(|p| p.name.as_str())) {
                 msg.push_str(&format!(" — did you mean '{s}'?"));
@@ -4986,6 +5097,7 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
             misses.push(msg);
         }
     }
+    guard_shell_expansion(&miss_pats)?;
     for m in &misses {
         eprintln!("{m}");
     }
@@ -8073,9 +8185,12 @@ fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Outcome, Strin
         return Err(format!("pin takes a single package name, not \"{name}\""));
     }
     if config::name_has_pattern_chars(name) {
+        let is_glob = name.contains(|c| matches!(c, '*' | '?'));
         return Err(format!(
-            "pin uses an EXACT package name, not a pattern (got \"{name}\"). \
-             To freeze a pattern, use `slacker frozen` instead."
+            "pin takes an EXACT package name — no {} (got \"{name}\"). \
+             For pattern freezing use `slacker frozen`, which accepts both globs \
+             (`*`, `?`) and regexes; e.g. `slacker frozen \"{name}\"`.",
+            if is_glob { "shell wildcards" } else { "patterns" }
         ));
     }
     if name.starts_with('-') || name.ends_with('-') {
@@ -9045,6 +9160,23 @@ mod collect_tests {
         assert!(detect_conflicts(&plan, &[], true).is_empty());
     }
 
+    #[test]
+    fn shell_expansion_gate_blocks_floods_but_allows_deliberate_terms() {
+        // Deliberate use must stay open: no misses (e.g. `reinstall emacs` ->
+        // emacs, emacspeak), or a single ordinary miss/typo, never blocks.
+        assert!(guard_shell_expansion(&[]).is_ok());
+        assert!(guard_shell_expansion(&pats(&["emacss"])).is_ok());
+        // A flood of unmatched args is a shell-expanded glob -> refuse the command.
+        let flood = pats(&["1.html", "me.jpg", "a", "b", "c", "d", "e", "f"]); // 8
+        assert!(guard_shell_expansion(&flood).is_err());
+        // Two whitespace-bearing tokens can never be package names -> refuse even
+        // below the flood threshold (a glob expanded onto files with spaces).
+        let spaced = pats(&["VirtualBox VMs", "anagnoristiko starlink"]);
+        assert!(guard_shell_expansion(&spaced).is_err());
+        // ...but a single space-bearing token alone is not enough to refuse.
+        assert!(guard_shell_expansion(&pats(&["one weird name"])).is_ok());
+    }
+
     // slackware (priority 100) and alienbob (60) both provide `vlc`; each also
     // has a package only it ships. Shared fixture for the integration tests.
     fn fixture() -> PkgDb {
@@ -9653,3 +9785,4 @@ mod freshness_tests {
         assert!(!is_release_version_segment(""));
     }
 }
+

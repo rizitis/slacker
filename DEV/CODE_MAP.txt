@@ -52,13 +52,19 @@ effects beyond reading files.
                    (back-compat override), else adm_dir.join("packages"). adm_dir
                    itself is what history.rs walks (packages/ + removed_packages/).
   BlacklistRule    struct: optional @repo scope, optional series, optional
-                   compiled regex (matched against the full package id), + a
-                   `pin` flag. matches() EARLY-RETURNS false when pin is set, so
-                   a pin (`@repo 100% name`) never freezes. With
+                   compiled glob-or-regex (matched against the full package id),
+                   + a `pin` flag. matches() EARLY-RETURNS false when pin is set,
+                   so a pin (`@repo 100% name`) never freezes. With
                    matches(id, series, repo) + repo()/pattern()/describe()
-  parse_blacklist_rule  parse one `[@repo] REGEX|series/` freeze line OR a
+  compile_pattern  compile a freeze PATTERN: no regex syntax -> GLOB (via
+                   glob_to_regex: `*`->`.*`, `?`->`.`, a literal `.` stays
+                   literal so webkit2gtk6.0/python3.11 work); regex syntax (a
+                   structural char or `.*`/`.+`, per looks_like_regex) -> regex
+                   verbatim. Both compile to one unanchored regex.
+  parse_blacklist_rule  parse one `[@repo] GLOB|REGEX|series/` freeze line OR a
                    `@repo 100% NAME` pin (exact name; name_has_pattern_chars
-                   rejects a pattern). pub: the `frozen`/`pin` commands reuse it.
+                   rejects a pattern but allows a literal `.`/`+`/`-`). pub: the
+                   `frozen`/`pin` commands reuse it.
   pinned_repo/pins  the pin lookups: name -> its pinned repo / all (name,repo)
   Repo             struct: priority, name, url, official, immutable, subtree,
                    verify (per-repo override) + verify_policy(global) resolver +
@@ -402,6 +408,13 @@ PLAN builder, and one cmd_* function per action.
 
   Cli / Cmd        clap structs/enums — the CLI surface. ADD A COMMAND HERE
                    (enum variant + match arm in run()); kebab-case is automatic.
+  main / clap_error_exit   main() try_parse()s the CLI; on a clap error it calls
+                   clap_error_exit, which — when the failure is UnknownArgument
+                   AND the raw args look shell-expanded — prints the friendly
+                   shell-glob note instead of clap's terse usage (covers the
+                   single-arg commands history/search/info/file-search/... that
+                   clap rejects before the gate above can run); else defers to
+                   clap.
   Outcome          exit-code enum (0 ok / 1 err / 20 none / 50 self / 100 pending)
   run              dispatch a parsed Cmd to its cmd_* function
   confirm          the y/N prompt (honours --yes)
@@ -444,7 +457,7 @@ PLAN builder, and one cmd_* function per action.
                      candidate / an installed package / either (freeze)? These
                      resolve the series + source repo a rule needs.
     frozen_warn      the `frozen` validator's soft-warning builder: unknown
-                     @repo, or a regex containing whitespace (a package id never
+                     @repo, or a pattern containing whitespace (a package id never
                      does — a forgotten @ or quoting slip)
     blacklist_remove  the `unfrozen` core: removes rules by EXACT-LITERAL
                      string match (each line canonicalised via
@@ -460,7 +473,16 @@ PLAN builder, and one cmd_* function per action.
                      install-new/install-template).
 
   SELECTORS / MATCHING HELPERS:
-    collect          expand patterns -> winning packages (+ validates selectors)
+    collect          expand patterns -> winning packages (+ validates selectors).
+                     collect / collect_installed_targets / cmd_remove all call
+                     guard_shell_expansion before building any plan.
+    guard_shell_expansion / looks_shell_expanded / note_shell_expansion
+                     the safety gate: when the UNMATCHED args look like a
+                     shell-expanded `*` (>=8, or whitespace tokens that can't be
+                     package names) the WHOLE command is refused before any plan
+                     or picker — even args that matched are accidental (a stray
+                     `go` substring-matches pango/cargo/...). Deliberate, low-miss
+                     use (e.g. `reinstall emacs`) is unaffected.
     validate_selector  the @repo/@_tag check with the "did you mean" suggestion
     edit_distance / closest   Levenshtein for suggestions
     select_packages / select_packages_pkgid / parse_selection

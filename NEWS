@@ -1,5 +1,6 @@
 Version Beta 0.9.1
 =====
+Fix: bug to glob and regex
 Update: some cosmetic fixes...
 Update: GPG keys under CACHE_DIR/repos" stale (keyring is STATE_DIR now).
 ---

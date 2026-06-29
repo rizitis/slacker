@@ -605,7 +605,7 @@ impl BlacklistRule {
         };
         match (&self.series, &self.name) {
             (Some(s), _) => format!("series '{s}' {scope}"),
-            (None, Some(re)) => format!("regex /{}/ {scope}", re.as_str()),
+            (None, Some(re)) => format!("matches /{}/ {scope}", re.as_str()),
             (None, None) => format!("(empty rule) {scope}"),
         }
     }
@@ -615,10 +615,61 @@ impl BlacklistRule {
 /// empty pattern or an invalid regex so callers (e.g. `frozen`) can reject it.
 /// Characters that make a name a pattern (regex/glob) rather than an exact
 /// package name. Pins are EXACT, so a pin name containing any of these is
-/// rejected. `+ - _` are allowed because real names use them (e.g. gtk+).
+/// rejected. `+ - _ .` are allowed because real names use them (e.g. gtk+,
+/// python3.11, webkit2gtk6.0) — a bare `.` is a literal dot, never a wildcard.
 pub fn name_has_pattern_chars(s: &str) -> bool {
-    const PATTERN_CHARS: &str = "*?[](){}|^$\\.";
+    const PATTERN_CHARS: &str = "*?[](){}|^$\\";
     s.chars().any(|c| PATTERN_CHARS.contains(c))
+}
+
+/// Structural regex characters that never occur in a Slackware package name or
+/// a glob — their presence means the user wrote a regex. Note `.` is NOT here:
+/// real names carry literal dots (webkit2gtk6.0, python3.11, gtk4...), so a bare
+/// dot stays literal; the regex "any characters" intent is spelled `.*` / `.+`.
+const REGEX_SIGNAL_CHARS: &str = "[](){}|^$\\";
+
+/// Whether PATTERN was written as a regex (taken verbatim) rather than a glob
+/// (translated). Regex if it carries a structural regex character OR a `.*`/`.+`
+/// "any characters" idiom; otherwise it is a glob, where `.` is a literal dot —
+/// so `webkit2gtk6.0*` means "webkit2gtk6.0 followed by anything".
+fn looks_like_regex(pat: &str) -> bool {
+    pat.chars().any(|c| REGEX_SIGNAL_CHARS.contains(c)) || pat.contains(".*") || pat.contains(".+")
+}
+
+/// Compile a blacklist/frozen PATTERN, supporting BOTH styles:
+///   * a GLOB (no regex syntax) — `*` matches any run of characters, `?` matches
+///     one, every other character (incl. `.` and `+`) is literal, e.g.
+///     `pkg_name-*-222*-`, `webkit2gtk6.0*`, `*-l10n-*`;
+///   * a REGEX (uses regex syntax: a structural char or the `.*`/`.+` idiom) is
+///     taken verbatim, so `xf86-.*-202.*` or `^vlc-[0-9]` keep their meaning.
+/// Both compile to the same unanchored regex matched against the full
+/// `name-version-arch-build` id, so the rest of the matcher is unchanged.
+pub fn compile_pattern(pat: &str) -> Result<Regex, String> {
+    let src = if looks_like_regex(pat) {
+        pat.to_string()
+    } else {
+        glob_to_regex(pat)
+    };
+    Regex::new(&src).map_err(|e| format!("invalid pattern '{pat}': {e}"))
+}
+
+/// Translate a glob into an equivalent unanchored regex: `*` -> `.*`, `?` -> `.`,
+/// and every other regex-special byte escaped to a literal (so a name char like
+/// `+` in `gtk+` stays literal). Only called for patterns with no regex syntax.
+fn glob_to_regex(glob: &str) -> String {
+    let mut out = String::with_capacity(glob.len() + 4);
+    for c in glob.chars() {
+        match c {
+            '*' => out.push_str(".*"),
+            '?' => out.push('.'),
+            '+' | '.' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '^' | '$' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
@@ -683,7 +734,7 @@ pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
             pin: false,
         });
     }
-    let re = Regex::new(rest).map_err(|e| format!("'{raw}': invalid pattern: {e}"))?;
+    let re = compile_pattern(rest).map_err(|e| format!("'{raw}': {e}"))?;
     Ok(BlacklistRule { repo, series: None, name: Some(re), pin })
 }
 
@@ -1250,12 +1301,47 @@ mod tests {
         assert!(name_has_pattern_chars("xf86-.*"));
         assert!(!name_has_pattern_chars("gtk+")); // + and - are real name chars
         assert!(!name_has_pattern_chars("vlc-plugin"));
+        // A literal dot is a real name character, NOT a pattern: dotted names
+        // (python3.11, webkit2gtk6.0, foo.6) are valid EXACT pin names.
+        assert!(!name_has_pattern_chars("python3.11"));
+        assert!(!name_has_pattern_chars("webkit2gtk6.0"));
+        assert!(parse_blacklist_rule("@ponce 100% python3.11").is_ok());
+        assert!(parse_blacklist_rule("@ponce 100% foo.6").is_ok());
 
         // A pin name must be a valid package name: no leading/trailing '-'
         // (a real name never does), but internal dashes are fine.
         assert!(parse_blacklist_rule("@alienbob 100% vlc-").is_err());
         assert!(parse_blacklist_rule("@alienbob 100% -vlc").is_err());
         assert!(parse_blacklist_rule("@alienbob 100% vlc-plugin").is_ok());
+    }
+
+    #[test]
+    fn patterns_support_both_glob_and_regex() {
+        let id = "pkg_name-1.2-x86_64-222build-";
+        // GLOB: no regex metacharacters -> `*` is "any run", `?` is "one char".
+        let g = parse_blacklist_rule("pkg_name-*-222*-").unwrap();
+        assert!(g.matches(id, None, None));
+        // a glob with a leading `*` (which is an INVALID bare regex) now works
+        let lead = parse_blacklist_rule("*-x86_64-*").unwrap();
+        assert!(lead.matches(id, None, None));
+        // `gtk+` keeps its literal '+', matching the real package name
+        let plus = parse_blacklist_rule("gtk+").unwrap();
+        assert!(plus.matches("gtk+-3.24-x86_64-3", None, None));
+        assert!(!plus.matches("gtkmm-1-x86_64-1", None, None));
+
+        // Real package names carry LITERAL dots; a glob keeps them literal.
+        let wk = parse_blacklist_rule("webkit2gtk6.0*").unwrap();
+        assert!(wk.matches("webkit2gtk6.0-2.52.4-x86_64-1_gfs", None, None));
+        assert!(!wk.matches("webkit2gtk4.0-1-x86_64-1", None, None)); // 6.0 literal, not "any"
+        let py = parse_blacklist_rule("python3.11*").unwrap();
+        assert!(py.matches("python3.11-3.11.9-x86_64-1", None, None));
+
+        // REGEX: a pattern that uses regex syntax is taken verbatim, unchanged.
+        let r = parse_blacklist_rule("xf86-.*-202.*").unwrap();
+        assert!(r.matches("xf86-video-intel-20260518-x86_64-1", None, None));
+        let anchored = parse_blacklist_rule("^vlc-[0-9]").unwrap();
+        assert!(anchored.matches("vlc-3-x86_64-1", None, None));
+        assert!(!anchored.matches("vlc-plugin-3-x86_64-1", None, None)); // anchored: no leading match
     }
 
     #[test]

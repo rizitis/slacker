@@ -20,11 +20,11 @@ slacker/
 │   ├── slacker.conf                <- globals (ARCH auto-detect, ADM_DIR, CACHE_DIR, STATE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY, MAX_PARALLEL, REVERT, CUMULATIVE_URL)
 │   ├── mirrors                     <- catalogue of official mirrors - uncomment ONE (none by default)
 │   ├── repos                       <- binary repos + tag-priority lines
-│   ├── blacklist                   <- blacklist rules: [@repo] REGEX | [@repo] series/
+│   ├── blacklist                   <- blacklist rules: [@repo] GLOB|REGEX | [@repo] series/
 │   └── distro-upgrade.conf         <- optional DISTRO_UPGRADE_MIRROR (local source for upgrade-dist)
 └── src/                            <- 18 modules
     ├── main.rs        CLI + commands (38 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, blacklist freeze + pin/unpin, quarantine, history, distribution upgrade)
-    ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (regex/@repo/series) + pins (@repo 100% name) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs + DISTRO_UPGRADE_MIRROR (distro-upgrade.conf)
+    ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (glob-or-regex/@repo/series) + glob<->regex pattern compile + pins (@repo 100% name) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs + DISTRO_UPGRADE_MIRROR (distro-upgrade.conf)
     ├── dist.rs        distribution-upgrade engine: Release/Route types, parse_release_from_os (os-release) + parse_release_from_url, the fail-closed route whitelist (dist_route), release suffix/target parsing (used by upgrade-dist and the release-mismatch guard)
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
     ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch (+ PACKAGE REQUIRED fallback for repos without .dep), quarantine/trust markers (under STATE_DIR)
@@ -84,9 +84,12 @@ slacker/
     packages are never silently migrated to another repo or downgraded by
     `upgrade-all`. Tag-priority lines may share priority values.
 - **blacklist** - one rule per line: `[@repo] PATTERN` (freeze), or `@repo 100% NAME` (pin: take that package only from that repo, exact name). `PATTERN` is a
-  Slackware series when it ends in `/` (e.g. `kde/`), otherwise an unanchored
-  **regex** matched against the full package id `name-version-arch-build`
-  (slackpkg-style, so `xf86-.*-202.*` works; anchor with `^...$` for exact). An
+  Slackware series when it ends in `/` (e.g. `kde/`), otherwise a **glob** *or* an
+  unanchored **regex** matched against the full package id `name-version-arch-build`
+  (slackpkg-style). With no regex syntax it is a glob (`*`=any run, `?`=one, a
+  literal `.` as in `webkit2gtk6.0`), so `vlc-*` works; with regex syntax (a
+  `[ ] ( ) { } | ^ $ \` char, or `.*`/`.+`) it is a regex, so `xf86-.*-202.*`
+  works; anchor with `^...$` for exact. An
   optional `@repo` scopes the rule to one repo (for an available package its
   candidate repo, for an installed one its source). An installed match is
   **frozen** (never installed/upgraded/reinstalled/removed, and never listed by
@@ -128,6 +131,11 @@ An unknown `@repo`/`@tag` gives a helpful error with a "did you mean" suggestion
 (edit-distance) and lists the available repos and tags. When a pattern matches
 more than one package, install/upgrade/reinstall/remove show a numbered list
 (Enter = all, numbers/ranges like `1 3 5` or `2-4`, `n` = cancel).
+There is **no `*` wildcard** for command-line selection: an unquoted `*` is
+expanded by the *shell* into the current directory's filenames before slacker
+runs, so when many arguments match no package (or carry whitespace) slacker treats
+it as a shell-expanded glob and **refuses the command without changing anything** —
+quote a literal pattern, or use `@repo`.
 
 ### Actions (35; slackpkg parity + extras)
 
@@ -174,7 +182,7 @@ distrust-repo   generate-template  install-template  remove-template  delete-tem
   `delete-template` removes only the template file.
 - `frozen RULE...` - add one or more blacklist rules. Each argument is one
   rule (quote rules with spaces, e.g. `"@alienbob vlc"`); slacker validates them,
-  warns about a likely typo (unknown `@repo`, or a regex with a space — package
+  warns about a likely typo (unknown `@repo`, or a pattern with a space — package
   ids never contain spaces / a forgotten `@`), shows what each rule freezes, and
   asks for confirmation before writing (`--yes` skips the prompts).
 - `unfrozen RULE...` - remove one or more blacklist rules (the counterpart to
@@ -274,7 +282,7 @@ reinstall, upgrade-all, install-new, install-template.
 ### Build_and_Tests
 
 > NO root needed for build & tests (only the mutating actions need root).
-> 166 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
+> 170 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
 
 ```
 cargo build --release

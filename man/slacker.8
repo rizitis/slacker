@@ -358,7 +358,7 @@ Rules are validated before being written. A bare
 typed without its pattern is reported with a suggested correction. A rule that
 parses but looks like a mistake \(em an
 .I @repo
-naming no active repository, or a plain regex containing whitespace (no package
+naming no active repository, or a pattern containing whitespace (no package
 id has spaces, so this is usually a forgotten
 .RB ` @ `
 or a quoting slip) \(em is listed together with the active repos, and you are
@@ -541,6 +541,19 @@ another source is left untouched.
 Every package carrying that build tag, e.g.
 .I @_SBo
 to remove all installed SlackBuilds.org packages.
+.PP
+slacker has no
+.RB ` * `
+wildcard for selecting packages on the command line: a whole repository is
+.IR @repo ,
+and any literal pattern is matched as a substring. An unquoted
+.RB ` * `
+is expanded by the
+.I shell
+into the filenames of the current directory before slacker runs; when that
+produces a flood of non\-package arguments slacker recognises it and refuses the
+command without changing anything (quote the argument, or use
+.IR @repo ).
 .SH FILES
 All configuration is plain text under
 .I /etc/slacker
@@ -708,9 +721,27 @@ is a Slackware series when it ends in
 .RB ` / `
 (e.g.\&
 .IR kde/ ),
-otherwise an unanchored regular expression matched against the full package id
+otherwise a glob or an unanchored regular expression matched against the full
+package id
 .RI ( name\-version\-arch\-build ),
-exactly like slackpkg \(em so
+exactly like slackpkg. A pattern with no regular\-expression syntax is a
+.IR glob :
+.RB ` * `
+matches any run of characters,
+.RB ` ? `
+matches one, and every other character \(em including a literal
+.RB ` . `
+as in
+.I webkit2gtk6.0
+\(em is taken verbatim, so
+.I vlc\-*
+and
+.I webkit2gtk6.0*
+work as written. A pattern that uses regex syntax (a
+.RB ` [ ] ( ) { } | ^ $ \e `
+character, or the
+.RI ` .* `/` .+ `
+idiom) is an unanchored regex, so
 .I xf86\-.*\-202.*
 catches a 202x build and a bare
 .I vlc
