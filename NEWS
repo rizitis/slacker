@@ -1,6 +1,8 @@
 Version Beta 0.9.1
 =====
-Fix: bug to glob and regex
+Fix: typo in doinst.sh
+Update: Wiki, man pages,DEV/docs*
+Fix: several bugs for glob and regex
 Update: some cosmetic fixes...
 Update: GPG keys under CACHE_DIR/repos" stale (keyring is STATE_DIR now).
 ---

@@ -300,12 +300,19 @@ fn main() -> ExitCode {
 /// Show a clap parse error. A single-argument command (`history`, `search`,
 /// `info`, `file-search`, `revert-pkg`, …) cannot accept the flood of filenames
 /// the shell produces from a bare `*`, so clap rejects it with a terse
-/// "unexpected argument" before any of slacker's own code runs. Detect that and
-/// print the same friendly explanation the install/remove path uses; the command
-/// never ran, so nothing changed. Any other parse error defers to clap's output.
+/// "unexpected argument"; a bare `slacker *` (no subcommand) has its first
+/// expanded filename taken as the subcommand, giving "unrecognized subcommand".
+/// In both cases, detect the shell-expanded flood and print the same friendly
+/// explanation the install/remove path uses; the command never ran, so nothing
+/// changed. Any other parse error defers to clap's own output.
 fn clap_error_exit(e: clap::Error) -> ExitCode {
+    use clap::error::ErrorKind;
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if e.kind() == clap::error::ErrorKind::UnknownArgument && looks_shell_expanded(&args) {
+    let glob_flood = matches!(
+        e.kind(),
+        ErrorKind::UnknownArgument | ErrorKind::InvalidSubcommand
+    ) && looks_shell_expanded(&args);
+    if glob_flood {
         eprintln!(
             "{}",
             ui::yellow(&format!(
