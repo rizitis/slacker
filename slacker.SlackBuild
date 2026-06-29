@@ -62,7 +62,7 @@ find . ! -type l -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} +
 # Build ONCE: cargo-auditable embeds an SBOM and is a superset of `cargo build`,
 # so use it when present, otherwise fall back to a plain build (no double build).
 if command -v cargo-auditable >/dev/null 2>&1; then
-  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --release
 else
   CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build
 fi
@@ -71,7 +71,9 @@ fi
 cargo test
 
 mkdir -p $PKG/usr/local/sbin
-install -m0755 target/debug/slacker $PKG/usr/local/sbin/slacker
+install -m0755 target/release/slacker $PKG/usr/local/sbin/slacker
+
+find $PKG | xargs file | grep -e "executable" -e "shared object" | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
 
 # docs
 mkdir -p $PKG/usr/doc/$PRGNAM-$VERSION/examples

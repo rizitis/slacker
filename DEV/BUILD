@@ -1,4 +1,4 @@
-sudo bash slacker.SlackBuild 2>&1 | tee "build-$(date +%Y%m%d-%H%M%S).log"
+sudo bash slacker.SlackBuild 2>&1 | tee "release_build-$(date +%Y%m%d-%H%M%S).log"
 # --- build ---
 
 # offline-friendly, optimized; release profile already does strip+lto
