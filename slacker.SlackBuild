@@ -64,7 +64,7 @@ find . ! -type l -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} +
 if command -v cargo-auditable >/dev/null 2>&1; then
   CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --release
 else
-  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build --release
 fi
 
 # run tests
