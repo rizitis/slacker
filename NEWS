@@ -1,3 +1,6 @@
+Version Beta 0.9.1
+=====
+Update: some cosmetic fixes...
 Update: GPG keys under CACHE_DIR/repos" stale (keyring is STATE_DIR now).
 ---
 

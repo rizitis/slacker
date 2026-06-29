@@ -1029,6 +1029,176 @@ fn note_pin_excluded(pins: &[(String, String)]) {
     }
 }
 
+/// Informational, shown with the plan just before the confirmation prompt:
+/// optional companions a repo SUGGESTS for something being installed or
+/// upgraded. The SUGGESTS field is printed verbatim: slapt-get repos may put a
+/// free-text note there rather than a clean package list, so slacker shows it
+/// as-is and never tries to act on it. Gated on dependency resolution (the same
+/// switch that honours a repo's dependency metadata); a repo that ships no
+/// SUGGESTS, or vanilla Slackware, prints nothing.
+fn note_optional_suggests(plan: &[PlanItem], resolve: bool) {
+    if !resolve {
+        return;
+    }
+    let mut printed = false;
+    for it in plan {
+        if !matches!(
+            it.action,
+            InstallAction::Install | InstallAction::Upgrade | InstallAction::Reinstall
+        ) {
+            continue;
+        }
+        let note = it.pkg.suggests.trim();
+        if note.is_empty() {
+            continue;
+        }
+        printed = true;
+        println!(
+            "{}",
+            ui::blue(&format!(
+                "  {} — the repo maintainers suggest (acting on it is up to you):",
+                it.pkg.id.name
+            ))
+        );
+        println!("{}", ui::blue(&format!("    {note}")));
+    }
+    if printed {
+        println!(
+            "{}",
+            ui::dim("    optional only — install any you want yourself; slacker won't pull them in")
+        );
+    }
+}
+
+/// A repo-declared conflict that is currently installed: the package about to
+/// be installed/upgraded, and the installed package it declares a conflict with.
+struct Conflict {
+    installing: String,
+    installed: String,
+}
+
+/// Detect repo-declared `PACKAGE CONFLICTS:` (from PACKAGES.TXT) that are
+/// currently installed. One-directional by necessity: only the conflicts the
+/// package *being installed* declares are knowable — an installed package
+/// carries no PACKAGES.TXT metadata. Gated on dependency resolution; de-duped on
+/// (installing, installed). A package never conflicts with its own new version.
+fn detect_conflicts(plan: &[PlanItem], installed: &[pkg::PkgId], resolve: bool) -> Vec<Conflict> {
+    if !resolve {
+        return Vec::new();
+    }
+    let mut out: Vec<Conflict> = Vec::new();
+    for it in plan {
+        if !matches!(
+            it.action,
+            InstallAction::Install | InstallAction::Upgrade | InstallAction::Reinstall
+        ) {
+            continue;
+        }
+        for c in &it.pkg.conflicts {
+            if *c == it.pkg.id.name || system::installed_by_name(installed, c.as_str()).is_none() {
+                continue;
+            }
+            if !out.iter().any(|x| x.installing == it.pkg.id.name && x.installed == *c) {
+                out.push(Conflict {
+                    installing: it.pkg.id.name.clone(),
+                    installed: c.clone(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Print the conflict ATTENTION block (red). Shown with the plan, in dry-run and
+/// before the confirmation alike.
+fn report_conflicts(conflicts: &[Conflict]) {
+    if conflicts.is_empty() {
+        return;
+    }
+    println!(
+        "{}",
+        ui::red(&format!(
+            "  ATTENTION: {} package conflict{} with what is already installed:",
+            conflicts.len(),
+            if conflicts.len() == 1 { "" } else { "s" }
+        ))
+    );
+    for c in conflicts {
+        println!(
+            "{}",
+            ui::red(&format!(
+                "    {} conflicts with the installed {}",
+                c.installing, c.installed
+            ))
+        );
+    }
+}
+
+/// Conflict-aware confirmation. With no conflicts it is the normal yes/no
+/// prompt. With conflicts it offers a 3-way choice: continue anyway, removepkg
+/// the conflicting installed package(s) first then continue, or abort. With
+/// `assume_yes` it warns and proceeds — never auto-removing a package, never
+/// silently aborting an automated run. Returns whether to proceed; runs the
+/// chosen removals itself. Reverse dependencies of a removed package are NOT
+/// chased — removing a conflict is at the user's explicit request.
+fn confirm_conflicts(
+    prompt: &str,
+    conflicts: &[Conflict],
+    assume_yes: bool,
+) -> Result<bool, String> {
+    if conflicts.is_empty() {
+        return Ok(confirm(prompt, assume_yes));
+    }
+    if assume_yes {
+        println!(
+            "{}",
+            ui::yellow(
+                "--yes: proceeding despite the conflict(s); the conflicting installed package(s) are left in place."
+            )
+        );
+        return Ok(true);
+    }
+    // Distinct installed packages we would remove if asked.
+    let mut to_remove: Vec<String> = Vec::new();
+    for c in conflicts {
+        if !to_remove.contains(&c.installed) {
+            to_remove.push(c.installed.clone());
+        }
+    }
+    println!("    {}", hilite_keys("[c]ontinue   install anyway, leave the conflicting package(s)"));
+    println!(
+        "    {}",
+        hilite_keys(&format!(
+            "[r]emove     removepkg {} first, then continue",
+            to_remove.join(", ")
+        ))
+    );
+    println!("    {}", hilite_keys("[a]bort      cancel, change nothing (default)"));
+    loop {
+        print!("  {} ", hilite_keys("Choice [c/r/a]:"));
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() {
+            return Ok(false);
+        }
+        match line.trim() {
+            "c" | "C" => return Ok(true),
+            "r" | "R" => {
+                for name in &to_remove {
+                    println!("{}", ui::blue(&format!("  removing conflicting {name} ...")));
+                    system::remove_package(name)?;
+                }
+                return Ok(true);
+            }
+            "" | "a" | "A" => return Ok(false),
+            other => println!(
+                "    {}",
+                ui::blue(&format!("'{other}' is not a choice — type c, r, or a (Enter = abort)."))
+            ),
+        }
+    }
+}
+
 /// One-time migration of persistent security state from the old CACHE_DIR home
 /// to STATE_DIR. Earlier versions kept the GPG keyring + TOFU `.fpr` pins and
 /// the quarantine/ + trusted/ markers under CACHE_DIR; those now live under
@@ -4619,11 +4789,14 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
     show_plan_alternatives(cfg, &db, &plan, resolve);
+    note_optional_suggests(&plan, resolve);
+    let conflicts = detect_conflicts(&plan, &installed, resolve);
+    report_conflicts(&conflicts);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
-    if !confirm("Proceed with installation?", cli.yes) {
+    if !confirm_conflicts("Proceed with installation?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
     let before_cfgs: HashSet<PathBuf> = newconfig::find_new_configs(&newconfig::default_roots())
@@ -4676,11 +4849,14 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     show_plan(&plan, &frozen, &protected);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
+    note_optional_suggests(&plan, resolve);
+    let conflicts = detect_conflicts(&plan, &installed, resolve);
+    report_conflicts(&conflicts);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
-    if !confirm("Proceed with upgrade?", cli.yes) {
+    if !confirm_conflicts("Proceed with upgrade?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
     let before_cfgs: HashSet<PathBuf> = newconfig::find_new_configs(&newconfig::default_roots())
@@ -4733,11 +4909,14 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     show_plan(&plan, &frozen, &protected);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
+    note_optional_suggests(&plan, resolve);
+    let conflicts = detect_conflicts(&plan, &installed, resolve);
+    report_conflicts(&conflicts);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
-    if !confirm("Proceed with reinstall?", cli.yes) {
+    if !confirm_conflicts("Proceed with reinstall?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
     execute_plan(cfg, &plan, cli.yes)?;
@@ -6220,11 +6399,14 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
 
+    note_optional_suggests(&plan, resolve);
+    let conflicts = detect_conflicts(&plan, &installed, resolve);
+    report_conflicts(&conflicts);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
-    if !confirm("Proceed with upgrade-all?", cli.yes) {
+    if !confirm_conflicts("Proceed with upgrade-all?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
     let before_cfgs: HashSet<PathBuf> = newconfig::find_new_configs(&newconfig::default_roots())
@@ -6327,11 +6509,14 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
     show_plan_alternatives(cfg, &db, &plan, resolve);
+    note_optional_suggests(&plan, resolve);
+    let conflicts = detect_conflicts(&plan, &installed, resolve);
+    report_conflicts(&conflicts);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
-    if !confirm("Install new packages?", cli.yes) {
+    if !confirm_conflicts("Install new packages?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
     execute_plan(cfg, &plan, cli.yes)?;
@@ -7431,11 +7616,14 @@ fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, 
     print_plan(&plan);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
+    note_optional_suggests(&plan, resolve);
+    let conflicts = detect_conflicts(&plan, &installed, resolve);
+    report_conflicts(&conflicts);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
-    if !confirm("Install template packages?", cli.yes) {
+    if !confirm_conflicts("Install template packages?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
     execute_plan(cfg, &plan, cli.yes)?;
@@ -8827,8 +9015,34 @@ mod collect_tests {
             md5: None,
             sha: None,
             required: Vec::new(),
+            conflicts: Vec::new(),
+            suggests: String::new(),
             repo: repo_.into(),
         }
+    }
+
+    #[test]
+    fn detect_conflicts_finds_installed_declared_conflicts() {
+        // `foo` declares a conflict with `bar`; flagged only when bar is installed.
+        let mut foo = av("foo-1.0-x86_64-1", "alienbob");
+        foo.conflicts = vec!["bar".into(), "foo".into()]; // self-name must be ignored
+        let plan = vec![PlanItem {
+            pkg: foo,
+            action: InstallAction::Install,
+            dep_for: None,
+            from: None,
+        }];
+        let bar_installed = vec![pkg::PkgId::parse("bar-2.0-x86_64-1.txz").unwrap()];
+
+        // bar installed -> exactly one conflict (foo vs bar); self-conflict dropped.
+        let c = detect_conflicts(&plan, &bar_installed, true);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].installing, "foo");
+        assert_eq!(c[0].installed, "bar");
+        // resolve disabled -> nothing.
+        assert!(detect_conflicts(&plan, &bar_installed, false).is_empty());
+        // bar not installed -> nothing.
+        assert!(detect_conflicts(&plan, &[], true).is_empty());
     }
 
     // slackware (priority 100) and alienbob (60) both provide `vlc`; each also

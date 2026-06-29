@@ -29,6 +29,17 @@ pub struct AvailPkg {
     /// which carry no auto-dependency metadata. Used as a fallback when a repo
     /// ships no per-package `.dep` file.
     pub required: Vec<String>,
+    /// Package names declared as conflicting via PACKAGES.TXT `PACKAGE
+    /// CONFLICTS:` (slapt-get / SlackBuilds-style repos). Empty for vanilla
+    /// Slackware trees. At install time, a conflict that is currently installed
+    /// is surfaced for the user to resolve.
+    pub conflicts: Vec<String>,
+    /// Optional/suggested companions declared via PACKAGES.TXT `PACKAGE
+    /// SUGGESTS:`, kept as the raw verbatim text. slapt-get repos may put a
+    /// free-text note here rather than a clean package list, so we store and
+    /// print it as-is instead of guessing package names out of it. Empty for
+    /// vanilla Slackware trees. Informational only — never auto-installed.
+    pub suggests: String,
     pub repo: String,
 }
 
@@ -473,6 +484,8 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
     let mut cur_summary = String::new();
     let mut cur_desc = String::new();
     let mut cur_required: Vec<String> = Vec::new();
+    let mut cur_conflicts: Vec<String> = Vec::new();
+    let mut cur_suggests = String::new();
     let mut in_desc = false;
 
     #[allow(clippy::too_many_arguments)]
@@ -483,7 +496,9 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
                  size_unc: Option<u64>,
                  summary: &str,
                  desc: &str,
-                 required: &[String]| {
+                 required: &[String],
+                 conflicts: &[String],
+                 suggests: &str| {
         if let Some(filename) = name {
             // Reject path-like filenames/locations from the repo before they can
             // ever reach a filesystem path or URL (see pkg::is_safe_filename).
@@ -503,6 +518,8 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
                     md5: None,
                     sha: None,
                     required: required.to_vec(),
+                    conflicts: conflicts.to_vec(),
+                    suggests: suggests.trim().to_string(),
                     repo: repo_name.to_string(),
                 });
             }
@@ -513,7 +530,7 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
         if let Some(rest) = line.strip_prefix("PACKAGE NAME:") {
             flush(
                 &mut out, &cur_name, &cur_loc, cur_size, cur_size_unc, &cur_summary, &cur_desc,
-                &cur_required,
+                &cur_required, &cur_conflicts, &cur_suggests,
             );
             cur_name = Some(rest.trim().to_string());
             cur_loc.clear();
@@ -522,6 +539,8 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
             cur_summary.clear();
             cur_desc.clear();
             cur_required.clear();
+            cur_conflicts.clear();
+            cur_suggests.clear();
             in_desc = false;
         } else if let Some(rest) = line.strip_prefix("PACKAGE LOCATION:") {
             cur_loc = rest.trim().to_string();
@@ -531,7 +550,14 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
         } else if let Some(rest) = line.strip_prefix("PACKAGE REQUIRED:") {
             // slapt-get / SlackBuilds repos declare deps here (vanilla Slackware
             // trees omit it). Additive: parsed only when present.
-            cur_required = parse_required(rest);
+            cur_required = parse_pkg_list(rest);
+        } else if let Some(rest) = line.strip_prefix("PACKAGE CONFLICTS:") {
+            // Packages that must not be co-installed (slapt-get style). Additive.
+            cur_conflicts = parse_pkg_list(rest);
+        } else if let Some(rest) = line.strip_prefix("PACKAGE SUGGESTS:") {
+            // Optional companions / free-text note (slapt-get style). Kept raw,
+            // informational only — never parsed into package names.
+            cur_suggests = rest.trim().to_string();
         } else if let Some(rest) = line.strip_prefix("PACKAGE SIZE (compressed):") {
             cur_size = rest.trim().split_whitespace().next().and_then(|n| n.parse().ok());
         } else if let Some(rest) = line.strip_prefix("PACKAGE SIZE (uncompressed):") {
@@ -553,7 +579,7 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
     }
     flush(
         &mut out, &cur_name, &cur_loc, cur_size, cur_size_unc, &cur_summary, &cur_desc,
-        &cur_required,
+        &cur_required, &cur_conflicts, &cur_suggests,
     );
     out
 }
@@ -652,6 +678,33 @@ bubblewrap: bubblewrap (sandboxing tool)
     }
 
     #[test]
+    fn captures_conflicts_and_suggests_when_present() {
+        // slapt-get style: optional CONFLICTS / SUGGESTS fields in PACKAGES.TXT.
+        let sample = "\
+PACKAGE NAME:  foo-1.0-x86_64-1alien.txz
+PACKAGE LOCATION:  ./
+PACKAGE CONFLICTS:  bar,baz
+PACKAGE SUGGESTS:  ffmpeg, libdvdcss
+PACKAGE DESCRIPTION:
+foo: foo (a thing)
+
+PACKAGE NAME:  bar-2.0-x86_64-1alien.txz
+PACKAGE LOCATION:  ./
+PACKAGE DESCRIPTION:
+bar: bar (another thing)
+";
+        let pkgs = parse_packages_txt(sample, "alienbob");
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].id.name, "foo");
+        assert_eq!(pkgs[0].conflicts, vec!["bar", "baz"]);
+        assert_eq!(pkgs[0].suggests, "ffmpeg, libdvdcss");
+        // Vanilla / fieldless packages keep both empty (purely additive parsing).
+        assert_eq!(pkgs[1].id.name, "bar");
+        assert!(pkgs[1].conflicts.is_empty());
+        assert!(pkgs[1].suggests.is_empty());
+    }
+
+    #[test]
     fn series_extraction() {
         assert_eq!(series_from_location("./slackware64/ap/"), "ap");
         assert_eq!(series_from_location("./patches/packages/"), "packages");
@@ -709,12 +762,13 @@ pub fn fetch_dep(repo: &Repo, avail: &AvailPkg) -> Vec<String> {
     }
 }
 
-/// Parse a `PACKAGE REQUIRED:` value: a comma-separated list of dependency
-/// package NAMES. On Slackware repos these are plain names; the slapt-get spec
-/// also permits a trailing version constraint (`name >= 1.2`) and `a|b`
-/// alternatives, so we defensively drop the constraint and take the first
-/// alternative. `%README%` and blanks are skipped.
-fn parse_required(value: &str) -> Vec<String> {
+/// Parse a comma-separated PACKAGES.TXT package-NAME list — shared by
+/// `PACKAGE REQUIRED:`, `PACKAGE CONFLICTS:` and `PACKAGE SUGGESTS:`. On
+/// Slackware repos these are plain names; the slapt-get spec also permits a
+/// trailing version constraint (`name >= 1.2`) and `a|b` alternatives, so we
+/// defensively drop the constraint and take the first alternative. `%README%`
+/// and blanks are skipped.
+fn parse_pkg_list(value: &str) -> Vec<String> {
     value
         .split(',')
         .map(|tok| {
@@ -757,20 +811,20 @@ mod dep_tests {
     }
 
     #[test]
-    fn parse_required_is_format_tolerant() {
-        use super::parse_required;
+    fn parse_pkg_list_is_format_tolerant() {
+        use super::parse_pkg_list;
         // The common case on Slackware repos: plain, comma-separated names.
         assert_eq!(
-            parse_required("bubblewrap,libostree,xdg-dbus-proxy"),
+            parse_pkg_list("bubblewrap,libostree,xdg-dbus-proxy"),
             vec!["bubblewrap", "libostree", "xdg-dbus-proxy"]
         );
         // Defensive against the slapt spec: version constraints dropped, the
         // first `a|b` alternative taken, %README% and blanks skipped, spaces ok.
         assert_eq!(
-            parse_required("glibc >= 2.2, foo|bar, %README%, , baz<3"),
+            parse_pkg_list("glibc >= 2.2, foo|bar, %README%, , baz<3"),
             vec!["glibc", "foo", "baz"]
         );
-        assert!(parse_required("").is_empty());
+        assert!(parse_pkg_list("").is_empty());
     }
 }
 

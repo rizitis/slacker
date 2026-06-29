@@ -6,7 +6,7 @@
 # slacker - slackpkg + slackpkg+ in one
 
 A Slackware package manager in Rust with full **slackpkg action parity**, plus
-**slackpkg+ multi-repo priority** resolution.
+**slackpkg+-style multi-repo priority** resolution.
 
 - slackpkg: official mirror, update/install/upgrade/remove/clean-system, file-
   search, templates, ChangeLog tracking, GPG, .new config handling.
@@ -17,8 +17,13 @@ A Slackware package manager in Rust with full **slackpkg action parity**, plus
 
 - Thin layer over the native pkgtools - never reimplements
   installpkg/upgradepkg/removepkg, just calls them.
-- Dependencies come **only** from a package's own `.dep` file 
-  no dependency *guessing* for official packages - Slackware tradition.
+- **Dependency resolution is the repository's responsibility, not the package
+  manager's.** Official Slackware ships none, so official packages get no
+  auto-resolved deps - the Slackware tradition, kept on purpose. Where a
+  *third-party* repo chooses to declare them (a package's own `.dep`, or a
+  `PACKAGE REQUIRED:` line in `PACKAGES.TXT`), slacker honours that declaration
+  at the repo's responsibility - it never *guesses* - and you can switch it off
+  (`RESOLVE_DEPS=off`, or `--no-deps` per run).
 - Synchronous; heavy lifting (bzip2 for MANIFEST, GPG) shells out to the
   system tools Slackware already ships, so no extra Rust deps.
 - Everything a user edits is plain text.
@@ -158,7 +163,7 @@ These packages are signed with my GPG key:
 Fetch the key once, then verify any release:
 
     gpg --keyserver hkps://keys.openpgp.org --recv-keys 83A599D8E91630742706CD0E1463A5BD1FD92D7B
-    gpg --verify slacker-0.8.1-x86_64-1_FRG.txz.asc slacker-0.8.1-x86_64-1_FRG.txz
+    gpg --verify slacker-0.9.0-x86_64-1_FRG.txz.asc slacker-0.9.0-x86_64-1_FRG.txz
 
 A "Good signature from Ioannis Anagnostakis <rizitis@gmail.com>" line means the
 package is authentic and untampered.
@@ -176,5 +181,5 @@ report what you find:
   genuinely make it into the codebase.
 
 > **Note:** GitHub repository is a **read-only mirror**. Development happens
-> upstream at <https://forge.slackware.nl/rizitis/slacker>. You may pen **issues** there,
+> upstream at <https://forge.slackware.nl/rizitis/slacker>. You may open **issues** there,
 > but send any **patches upstream**.

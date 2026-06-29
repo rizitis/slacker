@@ -44,7 +44,9 @@ fn paint_when(on: bool, code: &str, s: &str) -> String {
 }
 
 pub fn blue(s: &str) -> String {
-    paint("34", s)
+    // Light cornflower blue (256-colour). The basic ANSI blue (34) renders as a
+    // hard-to-read dark navy on most terminals; this is softer and lighter.
+    paint("38;5;111", s)
 }
 pub fn green(s: &str) -> String {
     paint("32", s)
@@ -95,7 +97,7 @@ mod tests {
         // environment) or wraps its input in that helper's own code — checked
         // without forcing the TTY state, so it holds either way.
         let cases: [(fn(&str) -> String, &str); 8] = [
-            (blue, "34"),
+            (blue, "38;5;111"),
             (green, "32"),
             (red, "31"),
             (purple, "35"),

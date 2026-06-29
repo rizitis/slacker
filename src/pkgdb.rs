@@ -576,6 +576,8 @@ mod upgrade_tests {
             md5: None,
             sha: None,
             required: Vec::new(),
+            conflicts: Vec::new(),
+            suggests: String::new(),
             repo: repo.into(),
         }
     }
@@ -972,6 +974,8 @@ mod series_match_tests {
             md5: None,
             sha: None,
             required: Vec::new(),
+            conflicts: Vec::new(),
+            suggests: String::new(),
             repo: repo.into(),
         }
     }
