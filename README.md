@@ -186,3 +186,12 @@ report what you find:
 > **Note:** GitHub repository is a **read-only mirror**. Development happens
 > upstream at <https://forge.slackware.nl/rizitis/slacker>. You may open **issues** there,
 > but send any **patches upstream**.
+
+---
+
+### Development Approach
+
+- This project is developed using AI-assisted tools. Code is generated with the help of AI based on human-provided specifications, design decisions, and iterative feedback.
+- All contributions are reviewed, tested, and curated by the maintainer before being included in the codebase. AI is used as a productivity and exploration tool, while human oversight remains central to all decisions.
+
+> The goal is to combine the flexibility of AI-assisted development with standard open-source practices such as transparency, review, and accountability.
