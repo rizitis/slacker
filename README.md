@@ -33,7 +33,7 @@ A Slackware package manager in Rust with full **slackpkg action parity**, plus
 Everything you need to know about slacker: [Wiki](https://forge.slackware.nl/rizitis/slacker/wiki)
 
 ## NOTE: 
-**slacker** source code is beta and **slacker** [wiki](https://forge.slackware.nl/rizitis/slacker/wiki) is a Beta work.
+**slacker** source code is beta and **slacker** [wiki](https://forge.slackware.nl/rizitis/slacker/wiki) is a WIP.
 
 ---
 
