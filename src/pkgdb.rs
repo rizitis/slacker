@@ -17,6 +17,23 @@ pub struct PkgDb {
     pins: HashMap<String, String>,
 }
 
+/// Mark every candidate a blacklist rule matches (tested against its full id,
+/// series and candidate repo), once, when the db is built. The whole resolver
+/// can then treat a frozen candidate as simply absent — winner-selection skips
+/// it and resolution falls through to the next non-frozen candidate — without
+/// re-running the blacklist on every lookup.
+///
+/// Pins are never frozen here: `blacklist_hit` returns false for a pin rule (a
+/// pin is the positive "only from this repo" rule, the opposite of a freeze), so
+/// a pinned candidate stays available. A `@repo`-scoped rule freezes only that
+/// repo's candidate, so resolution falls through to other repos by priority;
+/// an unscoped rule matches every candidate, so the package is held everywhere.
+fn mark_frozen(all: &mut [AvailPkg], cfg: &Config) {
+    for p in all.iter_mut() {
+        p.frozen = cfg.blacklist_hit(&p.id.tag(), Some(&p.series), Some(&p.repo));
+    }
+}
+
 impl PkgDb {
     pub fn load(cfg: &Config) -> Result<PkgDb, String> {
         let mut all = Vec::new();
@@ -35,6 +52,7 @@ impl PkgDb {
             .into_iter()
             .map(|(n, r)| (n.to_string(), r.to_string()))
             .collect();
+        mark_frozen(&mut all, cfg);
         Ok(PkgDb { all, priority, official_priority, pins })
     }
 
@@ -66,6 +84,7 @@ impl PkgDb {
             .into_iter()
             .map(|(n, r)| (n.to_string(), r.to_string()))
             .collect();
+        mark_frozen(&mut all, cfg);
         (PkgDb { all, priority, official_priority, pins }, missing)
     }
 
@@ -150,6 +169,25 @@ impl PkgDb {
             .iter()
             .filter(|p| p.id.name == name)
             .filter(|p| forced.map_or(true, |r| p.repo == r))
+            .max_by(|a, b| self.repo_priority(&a.repo).cmp(&self.repo_priority(&b.repo)))
+    }
+
+    /// Resolve to the highest-priority candidate that is NOT frozen — the
+    /// effective winner once frozen candidates are treated as absent. A pin (or
+    /// explicit `repo:name`) restricts the candidate set FIRST, then frozen
+    /// candidates are excluded within it; so if the only candidate a pin allows
+    /// is frozen, this returns None (the freeze wins on that collision and the
+    /// package is held). Returns None when every candidate (in the allowed set)
+    /// is frozen. The caller still applies the priority-floor / direction rule,
+    /// so this never causes a silent downgrade.
+    pub fn resolve_unfrozen(&self, query: &str) -> Option<&AvailPkg> {
+        let (explicit, name) = split_pin(query);
+        let forced = explicit.or_else(|| self.pins.get(name).map(String::as_str));
+        self.all
+            .iter()
+            .filter(|p| p.id.name == name)
+            .filter(|p| forced.map_or(true, |r| p.repo == r))
+            .filter(|p| !p.frozen)
             .max_by(|a, b| self.repo_priority(&a.repo).cmp(&self.repo_priority(&b.repo)))
     }
 
@@ -265,7 +303,16 @@ impl PkgDb {
                 continue;
             }
             let better = match winners.get(p.id.name.as_str()) {
-                Some(existing) => self.repo_priority(&p.repo) > self.repo_priority(&existing.repo),
+                // Prefer a non-frozen candidate; among the same frozen-status,
+                // higher priority wins. So a frozen top-priority candidate is
+                // displaced by a lower-priority non-frozen one (the fallback),
+                // and only when EVERY candidate is frozen does a frozen one win
+                // (then surfaced/skipped as blacklisted by the caller).
+                Some(existing) => {
+                    (existing.frozen && !p.frozen)
+                        || (existing.frozen == p.frozen
+                            && self.repo_priority(&p.repo) > self.repo_priority(&existing.repo))
+                }
                 None => true,
             };
             if better {
@@ -329,7 +376,14 @@ impl PkgDb {
         for p in &self.all {
             if p.id.name.to_lowercase() == needle {
                 let better = match seen.get(p.id.name.as_str()) {
-                    Some(e) => self.repo_priority(&p.repo) > self.repo_priority(&e.repo),
+                    // Same rule as match_pattern: non-frozen first, then priority,
+                    // so search shows the effective (fallback) winner and only
+                    // marks [blacklisted] when every candidate is frozen.
+                    Some(e) => {
+                        (e.frozen && !p.frozen)
+                            || (e.frozen == p.frozen
+                                && self.repo_priority(&p.repo) > self.repo_priority(&e.repo))
+                    }
                     None => true,
                 };
                 if better {
@@ -362,10 +416,20 @@ impl PkgDb {
         // so the bare tag `alien` is shared by extras (90) and alienbob (10). A
         // tag-only `.max()` would then treat *every* alien package as 90; keying
         // on name+tag pins each one to its real source (flatpak -> alienbob 10).
+        //
+        // FROZEN candidates are excluded from this floor: a frozen candidate is
+        // treated as if its repo did not offer the package at all, so it must not
+        // raise the installed package's source priority either. This is what lets
+        // a `@testing`-scoped freeze fall through to the official repo: a tagless
+        // package installed from slackware (100) is ALSO served tagless by a
+        // higher-priority testing subtree (105); without this exclusion the floor
+        // would be 105 and the slackware fallback (100) would look like a
+        // downgrade and be refused. With the frozen testing candidate excluded,
+        // the floor is correctly 100 and the official update flows.
         let from_pkg = self
             .all
             .iter()
-            .filter(|p| p.id.build_tag() == tag && p.id.name == inst.name)
+            .filter(|p| !p.frozen && p.id.build_tag() == tag && p.id.name == inst.name)
             .map(|p| self.repo_priority(&p.repo))
             .max();
         if let Some(p) = from_pkg {
@@ -376,7 +440,7 @@ impl PkgDb {
         let from_tag = self
             .all
             .iter()
-            .filter(|p| p.id.build_tag() == tag)
+            .filter(|p| !p.frozen && p.id.build_tag() == tag)
             .map(|p| self.repo_priority(&p.repo))
             .max();
         if let Some(p) = from_tag {
@@ -414,24 +478,49 @@ impl PkgDb {
     }
 
     /// Pending upgrades, respecting source priority so SBo/local packages are
-    /// never silently migrated to a lower-priority repo or downgraded.
+    /// never silently migrated to a lower-priority repo or downgraded, and
+    /// respecting the blacklist so a frozen candidate is treated as absent.
     ///
-    /// For each installed package we take the highest-priority available
-    /// candidate (`resolve`) and the installed package's own source priority
-    /// (`installed_priority`):
+    /// For each installed package we take the highest-priority NON-frozen
+    /// candidate (`resolve_unfrozen`) and the installed package's own source
+    /// priority (`installed_priority`):
     ///   - candidate from a *higher* priority repo  -> propose (source wins)
     ///   - candidate from an *equal* priority repo   -> propose only if the
     ///     version or build actually differs (a genuine self-upgrade)
     ///   - candidate from a *lower* priority repo    -> skip (no migration down)
+    ///
+    /// Because a frozen candidate is skipped, a `@repo`-scoped freeze on the
+    /// top-priority repo falls through to the next repo by priority (so official
+    /// updates still flow), while an unscoped freeze matches every candidate and
+    /// leaves the package unchanged. Returns the upgrades plus the names that are
+    /// "held": packages that DO have a (newer) candidate but only frozen ones, so
+    /// the caller can report them as frozen/skipped rather than silently
+    /// dropping them.
     pub fn upgrades_for(
         &self,
         installed: &[PkgId],
         tag_prios: &[crate::config::TagPriority],
-    ) -> Vec<Upgrade<'_>> {
+    ) -> (Vec<Upgrade<'_>>, Vec<String>) {
         let mut out = Vec::new();
+        let mut held = Vec::new();
         for inst in installed {
-            let Some(avail) = self.resolve(&inst.name) else {
-                continue;
+            let avail = match self.resolve_unfrozen(&inst.name) {
+                Some(a) => a,
+                None => {
+                    // No non-frozen candidate. If a (different) candidate exists
+                    // but is frozen, the package is being held by the blacklist —
+                    // report it so the caller can say "frozen (skipped)". If the
+                    // frozen candidate is identical to what's installed, there is
+                    // nothing to hold back, so stay quiet.
+                    if let Some(raw) = self.resolve(&inst.name) {
+                        if raw.frozen
+                            && !(raw.id.version == inst.version && raw.id.build == inst.build)
+                        {
+                            held.push(inst.name.clone());
+                        }
+                    }
+                    continue;
+                }
             };
             // identical to what's installed: nothing to do
             if avail.id.version == inst.version && avail.id.build == inst.build {
@@ -439,10 +528,10 @@ impl PkgDb {
             }
             let propose = if self.pins.contains_key(&inst.name) {
                 // A pin forces its repo as the source regardless of priority or
-                // migration direction. resolve() already returned the pinned
-                // repo's candidate, and it differs from what's installed (exact
-                // matches were skipped above), so the package now tracks the
-                // pinned repo.
+                // migration direction. resolve_unfrozen() already returned the
+                // pinned repo's (non-frozen) candidate, and it differs from
+                // what's installed (exact matches were skipped above), so the
+                // package now tracks the pinned repo.
                 avail.id.is_other_revision_of(inst)
             } else {
                 let inst_prio = self.installed_priority(inst, tag_prios);
@@ -460,7 +549,9 @@ impl PkgDb {
             }
         }
         out.sort_by(|a, b| a.installed.name.cmp(&b.installed.name));
-        out
+        held.sort();
+        held.dedup();
+        (out, held)
     }
 
     /// install-new: packages newly added to a repo since the last update that
@@ -579,6 +670,7 @@ mod upgrade_tests {
             conflicts: Vec::new(),
             suggests: String::new(),
             repo: repo.into(),
+            frozen: false,
         }
     }
 
@@ -592,6 +684,117 @@ mod upgrade_tests {
 
     fn tag(name: &str, t: &str, p: i32) -> TagPriority {
         TagPriority { name: name.into(), tag: t.into(), priority: p }
+    }
+
+    /// An available candidate already marked frozen, as `mark_frozen` would on
+    /// load. Lets the resolution tests exercise the freeze-fallback directly.
+    fn frozen_avail(nv: &str, repo: &str) -> AvailPkg {
+        let mut p = avail(nv, repo);
+        p.frozen = true;
+        p
+    }
+
+    #[test]
+    fn scoped_freeze_falls_through_to_next_repo() {
+        // conraid's case: testing (105) outranks slackware (100). The incoming
+        // testing build is frozen (e.g. `@testing xf86-.*` or `xf86-.*-202.*`);
+        // resolution must fall through to slackware so official updates flow.
+        let pkgs = vec![
+            frozen_avail("xf86-input-evdev-20260421-x86_64-1", "testing"),
+            avail("xf86-input-evdev-2.12.0-x86_64-1", "slackware"),
+        ];
+        let d = db(pkgs, &[("testing", 105), ("slackware", 100)], Some(100));
+        // Raw winner is the frozen testing build; the effective winner is slackware.
+        assert_eq!(d.resolve("xf86-input-evdev").unwrap().repo, "testing");
+        assert_eq!(d.resolve_unfrozen("xf86-input-evdev").unwrap().repo, "slackware");
+
+        // Installed is the older official 2.11.0 (slackware = floor 100).
+        let installed = vec![PkgId::parse("xf86-input-evdev-2.11.0-x86_64-1").unwrap()];
+        let (ups, held) = d.upgrades_for(&installed, &[]);
+        assert_eq!(ups.len(), 1);
+        assert_eq!(ups[0].available.repo, "slackware");
+        assert_eq!(ups[0].available.id.version, "2.12.0");
+        assert!(held.is_empty(), "official update flows; nothing held");
+    }
+
+    #[test]
+    fn unscoped_freeze_holds_everywhere() {
+        // An unscoped rule matches the candidate in EVERY repo -> all frozen ->
+        // the package is held, and reported (a newer candidate does exist).
+        let pkgs = vec![
+            frozen_avail("xf86-input-evdev-20260421-x86_64-1", "testing"),
+            frozen_avail("xf86-input-evdev-2.12.0-x86_64-1", "slackware"),
+        ];
+        let d = db(pkgs, &[("testing", 105), ("slackware", 100)], Some(100));
+        assert!(d.resolve_unfrozen("xf86-input-evdev").is_none());
+
+        let installed = vec![PkgId::parse("xf86-input-evdev-2.11.0-x86_64-1").unwrap()];
+        let (ups, held) = d.upgrades_for(&installed, &[]);
+        assert!(ups.is_empty());
+        assert_eq!(held, vec!["xf86-input-evdev".to_string()]);
+    }
+
+    #[test]
+    fn freeze_never_falls_below_floor() {
+        // Installed from conraid (110). conraid's candidate is frozen; slackware
+        // (100) offers a newer build but 100 < 110 = floor, so falling through to
+        // it would be a priority DOWNGRADE — never proposed (the invariant holds).
+        let pkgs = vec![
+            frozen_avail("bar-2.0-x86_64-1cf", "conraid"),
+            avail("bar-1.5-x86_64-1", "slackware"),
+        ];
+        let d = db(pkgs, &[("conraid", 110), ("slackware", 100)], Some(100));
+        // Only non-frozen candidate is slackware...
+        assert_eq!(d.resolve_unfrozen("bar").unwrap().repo, "slackware");
+        // ...but it is below the installed source's floor, so no upgrade is made.
+        let installed = vec![PkgId::parse("bar-1.0-x86_64-1cf").unwrap()];
+        let (ups, _held) = d.upgrades_for(&installed, &[]);
+        assert!(ups.is_empty(), "must never migrate down to a lower-priority repo");
+    }
+
+    #[test]
+    fn pin_restricts_first_then_freeze_excludes() {
+        // A pin restricts the candidate set FIRST; the freeze then excludes within
+        // it. Pinned to the frozen repo -> held (freeze wins on the collision).
+        // Pinned to a non-frozen repo -> resolves there, ignoring priority.
+        let pkgs = vec![
+            frozen_avail("vlc-4.0-x86_64-1", "testing"),
+            avail("vlc-3.0-x86_64-1", "alienbob"),
+            avail("vlc-3.5-x86_64-1", "slackware"),
+        ];
+        let mut d = db(
+            pkgs,
+            &[("testing", 105), ("slackware", 100), ("alienbob", 60)],
+            Some(100),
+        );
+        d.pins.insert("vlc".into(), "testing".into());
+        assert!(d.resolve_unfrozen("vlc").is_none(), "pinned candidate frozen -> held");
+        d.pins.insert("vlc".into(), "alienbob".into());
+        assert_eq!(d.resolve_unfrozen("vlc").unwrap().repo, "alienbob");
+    }
+
+    #[test]
+    fn match_pattern_prefers_non_frozen_winner() {
+        let pkgs = vec![
+            frozen_avail("xf86-input-evdev-20260421-x86_64-1", "testing"),
+            avail("xf86-input-evdev-2.12.0-x86_64-1", "slackware"),
+        ];
+        let d = db(pkgs, &[("testing", 105), ("slackware", 100)], Some(100));
+        let m = d.match_pattern("xf86-input-evdev");
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].repo, "slackware", "fallback (non-frozen) wins the pattern");
+        assert!(!m[0].frozen);
+
+        // When EVERY candidate is frozen, the winner is a frozen one (so the
+        // install path can surface/skip it as blacklisted rather than vanish).
+        let pkgs2 = vec![
+            frozen_avail("xf86-input-evdev-20260421-x86_64-1", "testing"),
+            frozen_avail("xf86-input-evdev-2.12.0-x86_64-1", "slackware"),
+        ];
+        let d2 = db(pkgs2, &[("testing", 105), ("slackware", 100)], Some(100));
+        let m2 = d2.match_pattern("xf86-input-evdev");
+        assert_eq!(m2.len(), 1);
+        assert!(m2[0].frozen);
     }
 
     #[test]
@@ -619,7 +822,7 @@ mod upgrade_tests {
         // the pin, alienbob's lower-priority build would never be proposed ("never
         // migrate down"); the pin bypasses that guard and proposes alienbob.
         let installed = vec![PkgId::parse("vlc-3.0.21-x86_64-1").unwrap()];
-        let ups = d.upgrades_for(&installed, &[]);
+        let (ups, _held) = d.upgrades_for(&installed, &[]);
         assert_eq!(ups.len(), 1);
         assert_eq!(ups[0].available.repo, "alienbob");
         assert_eq!(ups[0].available.id.version, "3.0.20");
@@ -627,7 +830,7 @@ mod upgrade_tests {
         // Pin to a repo that does not offer the package -> no candidate (stays put).
         d.pins.insert("vlc".into(), "nosuch".into());
         assert!(d.resolve("vlc").is_none());
-        assert!(d.upgrades_for(&installed, &[]).is_empty());
+        assert!(d.upgrades_for(&installed, &[]).0.is_empty());
     }
 
     #[test]
@@ -700,7 +903,7 @@ mod upgrade_tests {
             Some(100),
         );
         let installed = vec![PkgId::parse("asio-1.28.2-x86_64-1_SBo").unwrap()];
-        let ups = db.upgrades_for(&installed, &[tag("SBo", "_SBo", 100)]);
+        let (ups, _held) = db.upgrades_for(&installed, &[tag("SBo", "_SBo", 100)]);
         assert!(ups.is_empty(), "SBo package must not migrate to conraid");
     }
 
@@ -713,7 +916,7 @@ mod upgrade_tests {
             Some(100),
         );
         let installed = vec![PkgId::parse("libdca-0.0.7-x86_64-3_SBo").unwrap()];
-        let ups = db.upgrades_for(&installed, &[tag("SBo", "_SBo", 100)]);
+        let (ups, _held) = db.upgrades_for(&installed, &[tag("SBo", "_SBo", 100)]);
         assert!(ups.is_empty(), "must not downgrade across repos");
     }
 
@@ -726,7 +929,7 @@ mod upgrade_tests {
             Some(100),
         );
         let installed = vec![PkgId::parse("flatpak-1.17.6-x86_64-1cf").unwrap()];
-        let ups = db.upgrades_for(&installed, &[]);
+        let (ups, _held) = db.upgrades_for(&installed, &[]);
         assert_eq!(ups.len(), 1, "conraid self-upgrade must be proposed");
     }
 
@@ -738,7 +941,7 @@ mod upgrade_tests {
             Some(100),
         );
         let installed = vec![PkgId::parse("mkinitrd-1.4.11-x86_64-73").unwrap()];
-        let ups = db.upgrades_for(&installed, &[]);
+        let (ups, _held) = db.upgrades_for(&installed, &[]);
         assert_eq!(ups.len(), 1, "official build bump must upgrade");
     }
 
@@ -825,7 +1028,7 @@ mod upgrade_tests {
             Some(100),
         );
         let installed = vec![PkgId::parse("foo-1.0-x86_64-1alien").unwrap()];
-        let ups = db.upgrades_for(&installed, &[]);
+        let (ups, _held) = db.upgrades_for(&installed, &[]);
         assert_eq!(ups.len(), 1, "higher-priority same-version should be proposed");
         assert_eq!(ups[0].available.repo, "conraid");
     }
@@ -977,6 +1180,7 @@ mod series_match_tests {
             conflicts: Vec::new(),
             suggests: String::new(),
             repo: repo.into(),
+            frozen: false,
         }
     }
 

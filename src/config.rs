@@ -574,7 +574,14 @@ impl BlacklistRule {
             return false;
         }
         if let Some(want) = &self.repo {
-            if repo != Some(want.as_str()) {
+            // `@scope` matches either the candidate's REPO name (`@testing`,
+            // `@alienbob`) or its build TAG (`@_SBo`, `@cf`), so a rule can be
+            // scoped to a third-party tag as well as a repo. The tag is derived
+            // from the full id; a non-parseable id simply doesn't match by tag.
+            let repo_hit = repo == Some(want.as_str());
+            let tag_hit = crate::pkg::PkgId::parse(id)
+                .map_or(false, |p| p.build_tag() == want.as_str());
+            if !repo_hit && !tag_hit {
                 return false;
             }
         }
@@ -1271,6 +1278,17 @@ mod tests {
         let scoped = parse_blacklist_rule("@alienbob vlc").unwrap();
         assert!(scoped.matches("vlc-3-x86_64-1", None, Some("alienbob")));
         assert!(!scoped.matches("vlc-3-x86_64-1", None, Some("slackware")));
+
+        // `@scope` matches either the candidate's repo OR its build tag, so a
+        // rule can be scoped to a third-party tag (`@_SBo`, `@cf`) as well as a
+        // repo name. Build tag wins regardless of which repo serves it; an
+        // official (tagless) build of the same name is left alone.
+        let by_repo = parse_blacklist_rule("@testing xf86-.*").unwrap();
+        assert!(by_repo.matches("xf86-input-evdev-20260421-x86_64-1", Some("x"), Some("testing")));
+        assert!(!by_repo.matches("xf86-input-evdev-2.11.0-x86_64-1", Some("x"), Some("slackware")));
+        let by_tag = parse_blacklist_rule("@_SBo foo").unwrap();
+        assert!(by_tag.matches("foo-1.0-x86_64-1_SBo", None, Some("ponce")));
+        assert!(!by_tag.matches("foo-1.0-x86_64-1", None, Some("slackware")));
 
         assert!(parse_blacklist_rule("@alienbob").is_err());
         assert!(parse_blacklist_rule("a[b").is_err());

@@ -855,7 +855,7 @@ fn add_with_deps(
                 // come fresh from this repo, or is already installed/frozen.
                 let bl = db
                     .resolve(&format!("{}:{}", pkg.repo, dep))
-                    .map_or(false, |o| bl_avail(cfg, o))
+                    .map_or(false, |o| o.frozen)
                     || system::installed_by_name(installed, &dep)
                         .map_or(false, |i| bl_installed(cfg, Some(db), i));
                 if bl {
@@ -2530,11 +2530,12 @@ fn kept_detail(
 
 // ---- blacklist helpers ---------------------------------------------------
 
-/// Is an available candidate blacklisted? Matched against its full id, series
-/// and candidate repo.
-fn bl_avail(cfg: &Config, p: &repo::AvailPkg) -> bool {
-    cfg.blacklist_hit(&p.id.tag(), Some(p.series.as_str()), Some(p.repo.as_str()))
-}
+// Candidate freezes are precomputed once on load (AvailPkg::frozen, set by
+// PkgDb::mark_frozen) and read directly as `p.frozen`, so a frozen candidate is
+// treated as absent during resolution. The only freeze check that still needs a
+// helper is for INSTALLED packages (no AvailPkg to carry a flag), used by
+// `remove` / `clean-system` / `remove-template` — operations on installed
+// packages, where there is no candidate to fall through to.
 
 /// Is an installed package blacklisted (frozen)? Matched against its full id,
 /// the series looked up from the db, and its source repo — the official repo
@@ -2549,15 +2550,6 @@ fn bl_installed(cfg: &Config, db: Option<&PkgDb>, i: &pkg::PkgId) -> bool {
         db.and_then(|d| d.repo_for_tag(tag))
     };
     cfg.blacklist_hit(&i.tag(), series, repo)
-}
-
-/// Frozen if either the candidate or the installed copy of the same name is
-/// blacklisted (so an `@repo`-scoped rule on the installed source still freezes
-/// even when the winning candidate now comes from a different repo).
-fn bl_frozen(cfg: &Config, db: &PkgDb, installed: &[pkg::PkgId], p: &repo::AvailPkg) -> bool {
-    bl_avail(cfg, p)
-        || system::installed_by_name(installed, &p.id.name)
-            .map_or(false, |i| bl_installed(cfg, Some(db), i))
 }
 
 // ---- commands ------------------------------------------------------------
@@ -3222,7 +3214,7 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
         } else {
             ui::red(&format!("{:<11}", "uninstalled"))
         };
-        let bl = if bl_frozen(cfg, &db, &installed, p) {
+        let bl = if p.frozen {
             ui::purple(" [blacklisted]")
         } else {
             String::new()
@@ -3255,6 +3247,17 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
     Ok(Outcome::Ok)
 }
 
+/// True when the package filename of a file-search hit names a build that is
+/// actually installed — the EXACT name-version-arch-build, not merely some other
+/// build of the same name. `installed_tags` is the set of installed full tags. A
+/// non-package filename (e.g. a `*.tar.xz` source tarball listed in a MANIFEST)
+/// doesn't parse to a PkgId and is reported not installed, which is correct.
+fn hit_build_installed(package_filename: &str, installed_tags: &HashSet<String>) -> bool {
+    pkg::PkgId::parse(package_filename)
+        .map(|p| installed_tags.contains(&p.tag()))
+        .unwrap_or(false)
+}
+
 fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
     // MANIFEST is fetched lazily (it is large); make sure it's present. Track
     // repos whose MANIFEST we could neither find nor fetch, so we can explain
@@ -3272,6 +3275,13 @@ fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
     }
 
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
+    // Index installed packages by their full tag (name-version-arch-build) so a
+    // hit is marked "installed" only when THAT EXACT build is on the system —
+    // not merely when some other build of the same name is. file-search lists
+    // every repo's copy of a file (e.g. slackware's xf86-input-libinput AND
+    // testing's xlibre snapshot); keying on name alone made every candidate of
+    // an installed name read "installed", which was misleading.
+    let installed_tags: HashSet<String> = installed.iter().map(|i| i.tag()).collect();
     let hits = manifest::file_search(&cfg.repos, &cfg.cache_dir, filename)?;
     let found = !hits.is_empty();
 
@@ -3288,8 +3298,9 @@ fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
     }
 
     for h in hits {
-        let pkgname = pkg::PkgId::parse(&h.package).map(|p| p.name).unwrap_or_else(|| h.package.clone());
-        let mark = if system::is_installed(&installed, &pkgname) {
+        // A source tarball or other non-package filename won't parse to a PkgId
+        // and so is never "installed" — correct, since it isn't a package.
+        let mark = if hit_build_installed(&h.package, &installed_tags) {
             ui::green(&format!("{:<11}", "installed"))
         } else {
             ui::red(&format!("{:<11}", "uninstalled"))
@@ -3362,7 +3373,7 @@ fn cmd_info(cfg: &Config, name: &str) -> Result<Outcome, String> {
         let csize = p.size_k.map(|k| format!("{k} K")).unwrap_or_else(|| "?".into());
         let usize_ = p.size_uncompressed_k.map(|k| format!("{k} K")).unwrap_or_else(|| "?".into());
         let md5 = if p.md5.is_some() { "md5 ok" } else { "no md5" };
-        let bl = if bl_frozen(cfg, &db, &installed, p) {
+        let bl = if p.frozen {
             ui::purple("  [blacklisted]")
         } else {
             String::new()
@@ -4864,7 +4875,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     let todo: Vec<_> = matched
         .into_iter()
         .filter(|p| {
-            if bl_frozen(cfg, &db, &installed, p) {
+            if p.frozen {
                 frozen.push(p.id.name.clone());
                 return false;
             }
@@ -4938,7 +4949,7 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     let todo: Vec<_> = cands
         .into_iter()
         .filter(|p| {
-            if bl_frozen(cfg, &db, &installed, p) {
+            if p.frozen {
                 frozen.push(p.id.name.clone());
                 return false;
             }
@@ -4998,7 +5009,7 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     let todo: Vec<_> = cands
         .into_iter()
         .filter(|p| {
-            if bl_frozen(cfg, &db, &installed, p) {
+            if p.frozen {
                 frozen.push(p.id.name.clone());
                 return false;
             }
@@ -6487,25 +6498,13 @@ fn refuse_through_symlink(path: &std::path::Path) -> Result<(), String> {
 fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let mut ups = db.upgrades_for(&installed, &cfg.tag_priorities);
-    // Drop frozen upgrades. The blacklist must be tested against the UPGRADE
-    // CANDIDATE (`u.available`), not only the installed copy: a date/version
-    // rule like `xf86-.*-202.*` only ever matches the incoming build, never the
-    // older installed one, so an installed-only test (`bl_installed`) would let
-    // the very build the user froze through. `bl_frozen` covers both the
-    // candidate and any `@repo`-scoped rule on the installed source — the same
-    // check `upgrade <pattern>`, `install`, `install-new` and `info` all use.
-    let mut frozen = Vec::new();
-    ups.retain(|u| {
-        if bl_frozen(cfg, &db, &installed, u.available) {
-            frozen.push(u.available.id.name.clone());
-            return false;
-        }
-        true
-    });
-    frozen.sort();
-    frozen.dedup();
-    note_frozen_excluded(&frozen);
+    // upgrades_for already treats a frozen candidate as absent and falls through
+    // to the next non-frozen candidate by priority (never below the installed
+    // source's priority). `held` are packages whose only newer candidate is
+    // frozen — reported as frozen/skipped so the user sees the freeze took
+    // effect, rather than a silent drop.
+    let (ups, held) = db.upgrades_for(&installed, &cfg.tag_priorities);
+    note_frozen_excluded(&held);
     if ups.is_empty() {
         println!("Everything is up to date.");
         return Ok(Outcome::Ok);
@@ -6618,7 +6617,7 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     let todo: Vec<_> = matched
         .into_iter()
         .filter(|p| {
-            if bl_frozen(cfg, &db, &installed, p) {
+            if p.frozen {
                 frozen.push(p.id.name.clone());
                 return false;
             }
@@ -6661,6 +6660,17 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     }
     execute_plan(cfg, &plan, cli.yes)?;
     Ok(Outcome::Ok)
+}
+
+/// Whether an installed package should be treated as "pinned to its source" by
+/// clean-system: it carries a persistent pin (`pin_repo` is `Some`) AND its
+/// installed build actually came from that pinned repo (`installed_tag_repo` —
+/// the repo that owns the installed build tag — equals the pin's repo). A pinned
+/// name installed from some OTHER repo returns false: the pin is then ignored and
+/// the package falls through to the normal foreign-package logic (kept if
+/// official, removed if nothing else protects it).
+fn is_pinned_from_its_repo(pin_repo: Option<&str>, installed_tag_repo: Option<&str>) -> bool {
+    matches!((pin_repo, installed_tag_repo), (Some(p), Some(o)) if p == o)
 }
 
 fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
@@ -6749,8 +6759,96 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
             }
         })
         .collect();
+
+    // Among the foreign packages, separate out ones the user PINNED to a repo
+    // and actually installed FROM that repo (the pin's repo owns the installed
+    // build tag). A pin is an explicit "take this from here" choice, so removing
+    // such a package is offered as a deliberate decision (R/K/P, default Keep)
+    // rather than lumped in with the rest. A pinned name whose installed copy is
+    // NOT from the pin repo keeps falling through to the normal logic above.
+    let (pinned, mut orphans): (Vec<&pkg::PkgId>, Vec<&pkg::PkgId>) =
+        orphans.into_iter().partition(|p| {
+            is_pinned_from_its_repo(cfg.pinned_repo(&p.name), db.repo_for_tag(p.build_tag()))
+        });
+
+    if !pinned.is_empty() {
+        println!("{}", ui::blue("Pinned packages found among the foreign set:"));
+        println!();
+        let pw = pinned.len().to_string().len();
+        for (i, p) in pinned.iter().enumerate() {
+            let to = cfg.pinned_repo(&p.name).unwrap_or("?");
+            println!(
+                "  {}) {}{}  {}",
+                ui::dim(&format!("{:>pw$}", i + 1, pw = pw)),
+                ui::white(&p.name),
+                ui::dim(&format!("-{}-{}-{}", p.version, p.arch, p.build)),
+                ui::dim(&format!("(pinned to {to})"))
+            );
+        }
+        println!();
+
+        if cli.dry_run {
+            println!(
+                "{}",
+                ui::dim("(dry-run: pinned packages would be offered [R]emove all / [K]eep all / [P]rompt each — kept by default)")
+            );
+            // default Keep: leave them out of the removal set in dry-run.
+        } else if cli.yes {
+            // Non-interactive: a pin is explicit intent, so --yes keeps pinned
+            // packages rather than sweeping them away. Remove them by hand if
+            // that is really wanted.
+            println!("{}", ui::blue("Keeping pinned packages (--yes does not remove pinned packages)."));
+        } else {
+            print!(
+                "{}",
+                hilite_keys("Pinned packages — [R]emove all · [K]eep all · [P]rompt each (default Keep): ")
+            );
+            std::io::stdout().flush().ok();
+            let mut line = String::new();
+            if std::io::stdin().read_line(&mut line).is_err() {
+                return Ok(Outcome::Ok);
+            }
+            match line.trim() {
+                "r" | "R" => {
+                    // Fold every pinned package back into the foreign list; they
+                    // then appear in the normal plan below (still keepable by no.).
+                    orphans.extend(pinned.iter().copied());
+                }
+                "p" | "P" => {
+                    for p in &pinned {
+                        let to = cfg.pinned_repo(&p.name).unwrap_or("?");
+                        print!(
+                            "{}",
+                            hilite_keys(&format!(
+                                "  remove {}-{}-{}-{} (pinned to {to})? [y/N]: ",
+                                p.name, p.version, p.arch, p.build
+                            ))
+                        );
+                        std::io::stdout().flush().ok();
+                        let mut ans = String::new();
+                        if std::io::stdin().read_line(&mut ans).is_err() {
+                            return Ok(Outcome::Ok);
+                        }
+                        if matches!(ans.trim(), "y" | "Y" | "yes") {
+                            orphans.push(p);
+                        }
+                    }
+                }
+                // K / k / keep / empty (Enter) / anything unrecognised -> keep all.
+                // Keep is the safe default for an explicit pin.
+                _ => {
+                    println!("{}", ui::blue("Keeping all pinned packages."));
+                }
+            }
+        }
+    }
+
     if orphans.is_empty() {
-        println!("No foreign packages found.");
+        if pinned.is_empty() {
+            println!("No foreign packages found.");
+        } else {
+            println!("No further foreign packages to remove.");
+        }
         return Ok(Outcome::Ok);
     }
 
@@ -7737,11 +7835,14 @@ fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, 
         if system::is_installed(&installed, n) {
             continue;
         }
-        if let Some(p) = db.resolve(n) {
-            if bl_avail(cfg, p) {
-                continue;
-            }
+        // Fall through a frozen candidate to the next non-frozen one by
+        // priority, like every other install path; only when EVERY candidate is
+        // frozen is the package skipped (resolve_unfrozen returns None).
+        if let Some(p) = db.resolve_unfrozen(n) {
             todo.push(p);
+        } else if db.resolve(n).is_some() {
+            // exists but only as frozen candidate(s) -> held, skip quietly
+            continue;
         } else {
             eprintln!("template package not found in repos: {n}");
         }
@@ -9161,7 +9262,47 @@ mod collect_tests {
             conflicts: Vec::new(),
             suggests: String::new(),
             repo: repo_.into(),
+            frozen: false,
         }
+    }
+
+    #[test]
+    fn pinned_from_its_repo_predicate() {
+        // pinned to a repo AND installed from that same repo -> treated as pinned
+        assert!(is_pinned_from_its_repo(Some("alienbob"), Some("alienbob")));
+        // pinned to one repo but installed from another -> pin ignored
+        assert!(!is_pinned_from_its_repo(Some("alienbob"), Some("conraid")));
+        // no pin at all -> not pinned
+        assert!(!is_pinned_from_its_repo(None, Some("alienbob")));
+        // pinned, but the installed build's tag is owned by no known repo -> not
+        assert!(!is_pinned_from_its_repo(Some("alienbob"), None));
+        // neither -> not
+        assert!(!is_pinned_from_its_repo(None, None));
+    }
+
+    #[test]
+    fn file_search_marks_only_the_exact_installed_build() {
+        // Two repos ship the same file under the same package NAME but different
+        // builds; only the build actually installed must read "installed".
+        let installed_tags: HashSet<String> =
+            ["xf86-input-libinput-1.5.0-x86_64-1".to_string()].into_iter().collect();
+        // the installed slackware build
+        assert!(hit_build_installed(
+            "xf86-input-libinput-1.5.0-x86_64-1.txz",
+            &installed_tags
+        ));
+        // a different (testing) build of the same name -> NOT installed
+        assert!(!hit_build_installed(
+            "xf86-input-libinput-20260202_4eb6691-x86_64-1.txz",
+            &installed_tags
+        ));
+        // a source tarball (doesn't parse to a package) -> NOT installed
+        assert!(!hit_build_installed(
+            "xf86-input-libinput-20260202_4eb6691.tar.xz",
+            &installed_tags
+        ));
+        // unrelated name -> NOT installed
+        assert!(!hit_build_installed("bash-5.2.21-x86_64-1.txz", &installed_tags));
     }
 
     #[test]

@@ -1,3 +1,76 @@
+Version Beta 0.9.4
+=====
+freeze-fallback: a frozen candidate is treated as absent
+
+WHAT CHANGES (semantic change to `frozen`):
+A blacklist (frozen) rule no longer means "hold this package, never touch it".
+It now means "do not take THIS candidate". A frozen candidate is treated as if
+its repo did not offer the package at all; resolution then proceeds normally by
+priority. A package is "held" (left unchanged) ONLY when EVERY candidate it would
+consider is frozen.
+
+This makes the three rule shapes behave as one would expect:
+
+  frozen xf86-.*            (unscoped)  -> matches the candidate in EVERY repo,
+                                          so all are frozen -> package held
+                                          everywhere (hard freeze, as before).
+  frozen "@testing xf86-.*" (repo)      -> freezes ONLY the testing candidate ->
+                                          resolution falls through to slackware
+                                          by priority -> official updates flow.
+  frozen "@_SBo foo"        (build tag) -> freezes the _SBo build wherever served;
+                                          @scope now matches a build tag too.
+
+A `pin repo:name` still wins: it restricts the candidate set FIRST, then the
+freeze excludes within it (so a pinned-but-frozen candidate is held).
+
+The priority invariant is preserved: the fallback only considers candidates whose
+priority is >= the installed source's priority (the existing direction rule), so
+it never silently downgrades or migrates to a lower-priority repo.
+
+WHY (reported by conraid):
+conraid runs `testing` ABOVE `slackware` (105 > 100) and wants the new xf86/Xlibre
+testing snapshots frozen while still getting official updates. Under the old
+"hold the package" semantics that was impossible: freezing the testing winner left
+the package stuck at the installed version with no fallback. Now `@testing xf86-.*`
+(or the date rule `xf86-.*-202.*`) freezes only the testing build and slackware's
+official update flows.
+
+IMPLEMENTATION:
+- repo.rs: AvailPkg gains `frozen: bool`.
+- pkgdb.rs: `mark_frozen` sets it once on load (`blacklist_hit` per candidate;
+  pins are never frozen). New `resolve_unfrozen` = highest-priority non-frozen
+  candidate. `match_pattern` / `search` winner-selection prefers non-frozen, then
+  priority. `upgrades_for` uses `resolve_unfrozen` and returns `(ups, held)`.
+- pkgdb.rs: `installed_priority` now EXCLUDES frozen candidates from the floor.
+  This is essential: a tagless package installed from slackware (100) is ALSO
+  served tagless by the higher-priority testing subtree (105); without excluding
+  the frozen testing candidate the floor would read 105 and the slackware
+  fallback (100) would look like a downgrade and be refused. (This was caught by
+  the scoped-fallback test — it is the crux that makes conraid's real case work.)
+- config.rs: a `@scope` blacklist rule matches the candidate's REPO name OR its
+  build TAG, enabling `@_SBo`, `@cf`, etc.
+- main.rs: candidate freeze checks read the precomputed `p.frozen`; `upgrade-all`
+  consumes `(ups, held)` and reports held via `note_frozen_excluded`;
+  install-template falls through too. Dead `bl_frozen`/`bl_avail` removed;
+  `bl_installed` kept for remove / clean-system / remove-template (no candidate
+  there to fall through to). upgrade-dist is unchanged (it deliberately bypasses
+  the blacklist).
+
+TESTS:
+Builds clean, 0 warnings. 175 pass / 1 ignored (live TLS). New tests:
+  - scoped_freeze_falls_through_to_next_repo   (conraid's case end to end)
+  - unscoped_freeze_holds_everywhere
+  - freeze_never_falls_below_floor             (no silent downgrade)
+  - pin_restricts_first_then_freeze_excludes
+  - match_pattern_prefers_non_frozen_winner
+  - blacklist @scope matches repo OR build tag
+
+Fix: file-search
+- marks only the exact build as installed (not every build of the same name)
+Add: pinnded repo:pkg are not frozen it only means give me updates for this pkg ONLY from the repo is pinned, but user might want to keep pkg on clean-system command
+- add question and let user to decide, keep or remove ONLY if pkg is installed from the pinned repo.
+---
+
 Version Beta 0.9.3
 =====
 Fix: bug in cmd_upgrade_all , thanks to conraid again!

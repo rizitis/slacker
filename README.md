@@ -187,7 +187,7 @@ report what you find:
   genuinely make it into the codebase.
 
 > **Note:** GitHub repository is a **read-only mirror**. Development happens
-> upstream at <https://forge.slackware.nl/rizitis/slacker>. You may open **issues** there,
+> upstream at <https://forge.slackware.nl/rizitis/slacker>. You may open **issues** there, download releases,
 > but send any **patches upstream**.
 
 ---

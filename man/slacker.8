@@ -1,4 +1,4 @@
-.TH SLACKER 8 "June 2026" "slacker 0.9.3" "Slackware Package Management"
+.TH SLACKER 8 "July 2026" "slacker 0.9.4" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -102,7 +102,16 @@ this does not substring-match: \fIfoo\fR matches only \fIfoo\fR, not
 .TP
 .BI file-search " FILENAME"
 Report which package ships a given file, using the repository MANIFEST. The
-MANIFEST is downloaded on first use and can be large.
+MANIFEST is downloaded on first use and can be large. Each hit is marked
+.I installed
+or
+.I uninstalled
+by its
+.I exact
+build (name\-version\-arch\-build), not merely by name, so when several repos
+ship the same file under the same package name only the build actually on the
+system reads
+.IR installed .
 .TP
 .BI info " PACKAGE"
 Show the installed version and the available candidates per repository
@@ -217,7 +226,8 @@ Like the other install paths it honours source and tag priority (each package is
 taken from its highest\-priority source, and a dependency is never pulled from a
 repository of lower priority than the one already installed) and the
 .B blacklist
-\(em frozen packages are skipped and listed as frozen.
+\(em a frozen candidate falls through to the next repository by priority, and a
+package every one of whose candidates is frozen is skipped and listed as frozen.
 .TP
 .B upgrade-dist \fR{\fIcurrent\fR|\fIVERSION\fR}
 Upgrade the whole system to a different Slackware release \(em a distribution
@@ -293,6 +303,27 @@ repo has no metadata loaded (run
 first). With
 .B \-\-yes
 all listed packages are removed.
+.IP
+A
+.I pin
+by itself does not protect a package here (unlike a freeze). Instead, any foreign
+package that is pinned
+.I and
+was actually installed from the repo it is pinned to (the pin's repo owns its
+build tag) is presented in a separate step before the main list, offering
+.RB ( R )emove
+all,
+.RB ( K )eep
+all, or
+.RB ( P )rompt
+each, defaulting to
+.I Keep
+\(em a pin is an explicit choice, so its packages are kept unless you say
+otherwise, and
+.B \-\-yes
+keeps them too. A pinned name whose installed copy came from some other source is
+not treated as pinned: the pin is ignored and it follows the normal rule above
+(kept if official, removed if nothing else protects it).
 .TP
 .B clean-cache \fR[\fIREPO\fR...]
 Delete downloaded package files from
@@ -368,6 +399,14 @@ anything is written,
 prints what each rule will freeze and asks for confirmation;
 .B \-\-yes
 skips the prompts. Run with no argument to list the current frozen rules.
+.IP
+A freeze makes a matching candidate fall through to the next repository by
+priority rather than pinning the installed version; a package is held unchanged
+only when every candidate it would consider is frozen. An
+.I @repo
+scope matches a repository name or a build tag. See
+.B FILES
+for the full semantics.
 .TP
 .BI unfrozen " RULE..."
 Remove one or more rules from the blacklist \(em the counterpart to
@@ -751,17 +790,48 @@ anchor with
 .RI ^ \&...\& $
 for an exact match. The optional
 .I @repo
-prefix scopes the rule to one repository: for an available package its candidate
-repo, for an installed package its source. An installed package that matches is
-frozen (never changed); an uninstalled match is hidden from
+prefix scopes the rule, and matches either a repository
+.I name
+or a build
+.IR tag :
+.RB ` "@testing xf86\-.*" `
+freezes the candidate served by the
+.I testing
+repo, while
+.RB ` "@_SBo foo" `
+freezes packages carrying the
+.I _SBo
+tag.
+.PP
+A freeze does not simply pin the installed version. A frozen candidate is treated
+as if its repository did not offer the package at all, and resolution then
+proceeds normally by priority over the remaining (non\-frozen) candidates. An
+installed package is held unchanged only when
+.I every
+candidate it would otherwise consider is frozen. So an unscoped
+.RB ` "frozen xf86\-.*" `
+freezes that name in every repo and holds it; but
+.RB ` "@testing xf86\-.*" `
+freezes only the
+.I testing
+candidate, so resolution falls through to the next repo by priority \(em e.g.\&
+\fIslackware\fR \(em
+and that repo's updates keep flowing. The fallback never drops below the priority
+of the source the package is currently installed from, so a freeze can never turn
+into a downgrade; if the only non\-frozen candidate would be lower than that, the
+package is held instead. A
+.I pin
+restricts the candidate set first and a freeze is then applied within it, so a
+package both pinned and frozen is held.
+.PP
+An uninstalled frozen match is hidden from
 .BR install\-new ,
 upgrades and
-.BR check\-updates ,
-but still shown by
+.BR check\-updates .
 .B search
 and
 .B info
-marked
+show the effective non\-frozen winner and additionally mark any frozen candidate
 .IR [blacklisted] .
 The same file also holds
 .IR pins .

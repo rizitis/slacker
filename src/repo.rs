@@ -41,6 +41,15 @@ pub struct AvailPkg {
     /// vanilla Slackware trees. Informational only — never auto-installed.
     pub suggests: String,
     pub repo: String,
+    /// True when a blacklist rule matches this candidate (its full id, series and
+    /// candidate repo). Computed once, when the db is loaded (see
+    /// `PkgDb::mark_frozen`). A frozen candidate is treated as if its repo did
+    /// not offer the package: winner-selection skips it and resolution falls
+    /// through to the next non-frozen candidate by priority (never below the
+    /// installed source's priority). A package is only "held" (left unchanged)
+    /// when EVERY candidate it would consider is frozen. Pins are never frozen
+    /// (a pin is a positive rule), so a pinned candidate is always available.
+    pub frozen: bool,
 }
 
 impl AvailPkg {
@@ -521,6 +530,7 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
                     conflicts: conflicts.to_vec(),
                     suggests: suggests.trim().to_string(),
                     repo: repo_name.to_string(),
+                    frozen: false, // set later by PkgDb::mark_frozen once cfg is known
                 });
             }
         }
