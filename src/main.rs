@@ -2,6 +2,7 @@
 //! combined with slackpkg+ multi-repo priority resolution.
 
 mod banner;
+mod banner2;
 mod changelog;
 mod config;
 mod dist;
@@ -330,6 +331,9 @@ fn clap_error_exit(e: clap::Error) -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<Outcome, String> {
+    // Banner No. 2 (the labyrinth masthead) heads every command, on a terminal
+    // only (show() no-ops when stdout is piped, so scripts/pipes stay clean).
+    banner2::show();
     // `status` must work even when the configuration is broken — diagnosing
     // exactly that is its job — so it loads resiliently on its own and is
     // dispatched before the strict load below (which aborts on those problems).
