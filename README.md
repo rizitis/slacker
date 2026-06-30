@@ -37,6 +37,9 @@ Everything you need to know about slacker: [Wiki](https://forge.slackware.nl/riz
 
 ---
 
+[![asciicast](https://asciinema.org/a/hQvscQ2URkx92EJq.svg)](https://asciinema.org/a/hQvscQ2URkx92EJq)
+---
+
 # slacker - Development & Release Model
 
 ## TL;DR

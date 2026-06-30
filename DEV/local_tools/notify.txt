@@ -1,0 +1,32 @@
+exit 0
+αυτο το φηνω εδω για το μελλον να θυμαμαι να βαλω ενα daemon...
+δεν θα το εχω το αρχείο στο /tmp αλλά στην /var/cache/slacker
+
+send_notification() {
+
+    # Exit if file doesn't exist or is empty or only whitespace
+    [[ -s /tmp/updates.log ]] || return 0
+    grep -q '[^[:space:]]' /tmp/updates.log || return 0
+
+    MESSAGE="$(printf "%s\n\nPlease run command:\nslacker update" \
+        "$(head -n 10 /tmp/updates.log)")"
+
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog \
+            --icon system-software-update \
+            --title "Slackpkg Update Checker" \
+            --msgbox "$MESSAGE" &
+
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity \
+            --info \
+            --title="Slackpkg Update Checker" \
+            --text="$MESSAGE" &
+
+    else
+        notify-send \
+            --icon=system-software-update \
+            "Slackpkg Update Checker" \
+            "$MESSAGE"
+    fi
+}
