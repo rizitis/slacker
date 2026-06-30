@@ -168,8 +168,9 @@ Fetch the key once, then verify any release:
     gpg --keyserver hkps://keys.openpgp.org --recv-keys 83A599D8E91630742706CD0E1463A5BD1FD92D7B
     gpg --verify slacker-0.9.0-x86_64-1_FRG.txz.asc slacker-0.9.0-x86_64-1_FRG.txz
 
-A "Good signature from Ioannis Anagnostakis <rizitis@gmail.com>" line means the
+A `"Good signature from Ioannis Anagnostakis <rizitis@gmail.com>"` line means the
 package is authentic and untampered.
+
 ---
 
 ## How you can help
