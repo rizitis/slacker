@@ -15,6 +15,8 @@ A Slackware package manager in Rust with full **slackpkg action parity**, plus
 
 ## Philosophy
 
+![slacker](slacker-logo.png)
+
 - Thin layer over the native pkgtools - never reimplements
   installpkg/upgradepkg/removepkg, just calls them.
 - **Dependency resolution is the repository's responsibility, not the package
