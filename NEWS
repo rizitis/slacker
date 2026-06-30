@@ -1,3 +1,28 @@
+Version Beta 0.9.3
+=====
+Fix: bug in cmd_upgrade_all , thanks to conraid again!
+- THE BUG (reported live by conraid, reproduced on thinkstar1)
+------------------------------------------------------------
+`upgrade-all` filtered frozen packages by testing the blacklist against the
+INSTALLED id only (bl_installed on u.installed). A date/version rule such as
+`xf86-.*-202.*` only ever matches the INCOMING build (e.g.
+xf86-input-evdev-20260421_...), never the older installed one (2.11.0), so the
+very build the user froze was offered for upgrade. Meanwhile `info` (which tests
+bl_frozen on each candidate) correctly showed it [blacklisted] — the visible
+inconsistency.
+
+THE FIX (src/main.rs, cmd_upgrade_all)
+--------------------------------------
+Filter with bl_frozen(cfg, &db, &installed, u.available) — the candidate-aware
+check every other path already uses (upgrade <pattern>, install, install-new,
+reinstall, info, add_with_deps). It covers both the candidate and any
+@repo-scoped rule on the installed source, so nothing the old installed-only
+test caught is lost. Frozen names are now collected and reported via
+note_frozen_excluded(), so the user sees "frozen (skipped)" instead of a silent
+drop. One change, one function. No behaviour change for remove/clean-system
+(those correctly stay installed-only — there is no candidate in a removal).
+---
+
 Version Beta 0.9.2
 =====
 This release is "stable enough", in a regular developing tree should be RC.

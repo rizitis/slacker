@@ -6488,7 +6488,24 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let mut ups = db.upgrades_for(&installed, &cfg.tag_priorities);
-    ups.retain(|u| !bl_installed(cfg, Some(&db), &u.installed));
+    // Drop frozen upgrades. The blacklist must be tested against the UPGRADE
+    // CANDIDATE (`u.available`), not only the installed copy: a date/version
+    // rule like `xf86-.*-202.*` only ever matches the incoming build, never the
+    // older installed one, so an installed-only test (`bl_installed`) would let
+    // the very build the user froze through. `bl_frozen` covers both the
+    // candidate and any `@repo`-scoped rule on the installed source — the same
+    // check `upgrade <pattern>`, `install`, `install-new` and `info` all use.
+    let mut frozen = Vec::new();
+    ups.retain(|u| {
+        if bl_frozen(cfg, &db, &installed, u.available) {
+            frozen.push(u.available.id.name.clone());
+            return false;
+        }
+        true
+    });
+    frozen.sort();
+    frozen.dedup();
+    note_frozen_excluded(&frozen);
     if ups.is_empty() {
         println!("Everything is up to date.");
         return Ok(Outcome::Ok);
