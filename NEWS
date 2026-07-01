@@ -56,15 +56,6 @@ IMPLEMENTATION:
   there to fall through to). upgrade-dist is unchanged (it deliberately bypasses
   the blacklist).
 
-TESTS:
-Builds clean, 0 warnings. 175 pass / 1 ignored (live TLS). New tests:
-  - scoped_freeze_falls_through_to_next_repo   (conraid's case end to end)
-  - unscoped_freeze_holds_everywhere
-  - freeze_never_falls_below_floor             (no silent downgrade)
-  - pin_restricts_first_then_freeze_excludes
-  - match_pattern_prefers_non_frozen_winner
-  - blacklist @scope matches repo OR build tag
-
 Fix: file-search
 - marks only the exact build as installed (not every build of the same name)
 Add: pinnded repo:pkg are not frozen it only means give me updates for this pkg ONLY from the repo is pinned, but user might want to keep pkg on clean-system command
