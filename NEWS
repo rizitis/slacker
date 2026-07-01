@@ -60,6 +60,8 @@ Fix: file-search
 - marks only the exact build as installed (not every build of the same name)
 Add: pinnded repo:pkg are not frozen it only means give me updates for this pkg ONLY from the repo is pinned, but user might want to keep pkg on clean-system command
 - add question and let user to decide, keep or remove ONLY if pkg is installed from the pinned repo.
+
+Update: man.8
 ---
 
 Version Beta 0.9.3

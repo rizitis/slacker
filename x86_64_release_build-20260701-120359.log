@@ -1,0 +1,407 @@
+    Updating crates.io index
+     Locking 99 packages to latest compatible versions
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding md-5 v0.10.6 (available: v0.11.0)
+      Adding ureq v2.12.1 (available: v3.3.0)
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling stable_deref_trait v1.2.1
+   Compiling writeable v0.6.3
+   Compiling shlex v2.0.1
+   Compiling cfg-if v1.0.4
+   Compiling find-msvc-tools v0.1.9
+   Compiling litemap v0.8.2
+   Compiling icu_normalizer_data v2.2.0
+   Compiling libc v0.2.186
+   Compiling utf8_iter v1.0.4
+   Compiling version_check v0.9.5
+   Compiling icu_properties_data v2.2.0
+   Compiling zeroize v1.9.0
+   Compiling typenum v1.20.1
+   Compiling smallvec v1.15.2
+   Compiling utf8parse v0.2.2
+   Compiling untrusted v0.9.0
+   Compiling crc32fast v1.5.0
+   Compiling anstyle-parse v1.0.0
+   Compiling simd-adler32 v0.3.9
+   Compiling anstyle-query v1.1.5
+   Compiling percent-encoding v2.3.2
+   Compiling memchr v2.8.2
+   Compiling colorchoice v1.0.5
+   Compiling cc v1.2.65
+   Compiling rustls-pki-types v1.15.0
+   Compiling adler2 v2.0.1
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle v1.0.14
+   Compiling rustls v0.23.41
+   Compiling clap_lex v1.1.0
+   Compiling subtle v2.6.1
+   Compiling miniz_oxide v0.8.9
+   Compiling strsim v0.11.1
+   Compiling log v0.4.33
+   Compiling heck v0.5.0
+   Compiling form_urlencoded v1.2.2
+   Compiling once_cell v1.21.4
+   Compiling regex-syntax v0.8.11
+   Compiling generic-array v0.14.7
+   Compiling base64 v0.22.1
+   Compiling anstream v1.0.0
+   Compiling clap_builder v4.6.0
+   Compiling webpki-roots v1.0.8
+   Compiling webpki-roots v0.26.11
+   Compiling aho-corasick v1.1.4
+   Compiling flate2 v1.1.9
+   Compiling syn v2.0.118
+   Compiling getrandom v0.2.17
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling ring v0.17.14
+   Compiling md-5 v0.10.6
+   Compiling regex-automata v0.4.14
+   Compiling synstructure v0.13.2
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling zerovec-derive v0.11.3
+   Compiling displaydoc v0.2.6
+   Compiling clap_derive v4.6.1
+   Compiling regex v1.12.4
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling clap v4.6.1
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling icu_collections v2.2.0
+   Compiling icu_locale_core v2.2.0
+   Compiling icu_provider v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling rustls-webpki v0.103.13
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling ureq v2.12.1
+   Compiling slacker v0.9.4 (/tmp/FORGE)
+    Finished `release` profile [optimized] target(s) in 47.82s
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling stable_deref_trait v1.2.1
+   Compiling shlex v2.0.1
+   Compiling find-msvc-tools v0.1.9
+   Compiling litemap v0.8.2
+   Compiling cfg-if v1.0.4
+   Compiling writeable v0.6.3
+   Compiling utf8_iter v1.0.4
+   Compiling version_check v0.9.5
+   Compiling icu_properties_data v2.2.0
+   Compiling icu_normalizer_data v2.2.0
+   Compiling libc v0.2.186
+   Compiling zeroize v1.9.0
+   Compiling typenum v1.20.1
+   Compiling smallvec v1.15.2
+   Compiling utf8parse v0.2.2
+   Compiling crc32fast v1.5.0
+   Compiling untrusted v0.9.0
+   Compiling rustls v0.23.41
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle-parse v1.0.0
+   Compiling percent-encoding v2.3.2
+   Compiling memchr v2.8.2
+   Compiling adler2 v2.0.1
+   Compiling anstyle v1.0.14
+   Compiling simd-adler32 v0.3.9
+   Compiling cc v1.2.65
+   Compiling rustls-pki-types v1.15.0
+   Compiling colorchoice v1.0.5
+   Compiling anstyle-query v1.1.5
+   Compiling once_cell v1.21.4
+   Compiling form_urlencoded v1.2.2
+   Compiling strsim v0.11.1
+   Compiling log v0.4.33
+   Compiling clap_lex v1.1.0
+   Compiling regex-syntax v0.8.11
+   Compiling subtle v2.6.1
+   Compiling heck v0.5.0
+   Compiling miniz_oxide v0.8.9
+   Compiling base64 v0.22.1
+   Compiling anstream v1.0.0
+   Compiling generic-array v0.14.7
+   Compiling clap_builder v4.6.0
+   Compiling aho-corasick v1.1.4
+   Compiling webpki-roots v1.0.8
+   Compiling webpki-roots v0.26.11
+   Compiling flate2 v1.1.9
+   Compiling syn v2.0.118
+   Compiling ring v0.17.14
+   Compiling getrandom v0.2.17
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling md-5 v0.10.6
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.4
+   Compiling synstructure v0.13.2
+   Compiling rustls-webpki v0.103.13
+   Compiling zerovec-derive v0.11.3
+   Compiling displaydoc v0.2.6
+   Compiling clap_derive v4.6.1
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling clap v4.6.1
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling icu_collections v2.2.0
+   Compiling icu_locale_core v2.2.0
+   Compiling icu_provider v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling ureq v2.12.1
+   Compiling slacker v0.9.4 (/tmp/FORGE)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.61s
+     Running unittests src/main.rs (target/debug/deps/slacker-3694c9ec422ee9bb)
+
+running 178 tests
+test collect_tests::kernel_packages_are_recognised ... ok
+test collect_tests::dep_delta_reports_added_and_removed ... ok
+test collect_tests::alternatives_surface_other_repo_for_collided_name ... ok
+test collect_tests::detect_conflicts_finds_installed_declared_conflicts ... ok
+test collect_tests::file_search_marks_only_the_exact_installed_build ... ok
+test collect_tests::different_name_pins_both_kept ... ok
+test collect_tests::dist_defers_gpg_chain_to_the_end ... ok
+test collect_tests::dist_upgrade_sets_bypass_priority_and_order_critical ... ok
+test attribution_tests::every_installed_package_has_a_source_never_untracked ... ok
+test collect_tests::misses_reported_for_non_matching_patterns ... ok
+test collect_tests::pinned_from_its_repo_predicate ... ok
+test collect_tests::no_alternatives_when_single_repo_offers_name ... ok
+test collect_tests::pin_beats_higher_priority_repo_either_order ... ok
+test collect_tests::prefers_precedence_is_pin_then_priority_then_first ... ok
+test collect_tests::search_display_prefers_installed_source_over_priority_winner ... ok
+test collect_tests::single_pattern_is_unchanged ... ok
+test collect_tests::shell_expansion_gate_blocks_floods_but_allows_deliberate_terms ... ok
+test collect_tests::two_pins_same_name_keep_first_listed ... ok
+test config::tests::blacklist_lines ... ok
+test config::tests::cumulative_url_default_and_override ... ok
+test config::tests::distro_upgrade_mirror_parse ... ok
+test config::tests::max_parallel_parse_and_clamp ... ok
+test config::tests::keyvals_and_comments ... ok
+test collect_tests::two_repos_higher_priority_wins_either_order ... ok
+test collect_tests::audit_flags_writable_and_symlinks_without_following ... ok
+test collect_tests::tool_in_dirs_detects_executables ... ok
+test config::tests::mirrors_none_active ... ok
+test config::tests::mirrors_two_active_is_error ... ok
+test config::tests::mirrors_one_active ... ok
+test config::tests::repos_columns_and_official ... ok
+test config::tests::repos_mirror_subpath_without_active_mirror_errors ... ok
+test config::tests::repos_bad_input ... ok
+test collect_tests::migrate_state_moves_trust_anchors_once_and_never_clobbers ... ok
+test config::tests::pin_rule_parses_and_never_freezes ... ok
+test config::tests::verify_policy_wants_requires ... ok
+test config::tests::pinned_repo_and_pins_read_back ... ok
+test dist::tests::os_release_current_wins_over_version_id ... ok
+test config::tests::repos_duplicate_priority_is_error ... ok
+test config::tests::repos_mirror_keyword_resolves ... ok
+test config::tests::repos_immutable_flag_parses ... ok
+test config::tests::arch_detected_from_aaa_base ... ok
+test config::tests::revert_toggle_defaults_on ... ok
+test dist::tests::os_release_garbage_is_none ... ok
+test config::tests::repos_mirror_keyword_without_active_errors ... ok
+test dist::tests::os_release_stable_from_version_id ... ok
+test dist::tests::refuses_unparseable_target_version ... ok
+test dist::tests::refuses_backward_and_sideways ... ok
+test dist::tests::refuses_wrong_starting_point ... ok
+test dist::tests::allowed_routes ... ok
+test dist::tests::version_compare ... ok
+test dist::tests::target_argument_parses ... ok
+test dist::tests::url_target_detection ... ok
+test config::tests::repos_subtree_flag_parses_and_resolves_parent_base ... ok
+test download::tests::tls_handshake_works ... ignored
+test config::tests::verify_policy_parsing ... ok
+test download::tests::file_url_parsing ... ok
+test config::tests::repos_mirror_subpath_resolves_and_keeps_flags ... ok
+test freshness_tests::freshness_url_is_patches_on_stable_root_on_current ... ok
+test freshness_tests::dist_rewrite_swaps_release_segment ... ok
+test freshness_tests::humanize_lag_is_readable ... ok
+test freshness_tests::dist_disables_only_nonmirror_repos ... ok
+test config::tests::system_arch_reads_forced_arch_from_conf ... ok
+test freshness_tests::parses_canonical_header ... ok
+test freshness_tests::release_version_segment_is_x_dot_y_only ... ok
+test freshness_tests::parses_space_padded_day ... ok
+test freshness_tests::rejects_malformed_lines ... ok
+test download::tests::file_url_fetch_roundtrip ... ok
+test freshness_tests::repos_text_set_priority_retunes_only_the_named_line ... ok
+test freshness_tests::repo_release_token_detects_official_and_thirdparty ... ok
+test freshness_tests::set_active_mirror_line_on_all_commented ... ok
+test freshness_tests::set_active_mirror_line_comments_and_appends ... ok
+test freshness_tests::staleness_threshold_is_48h ... ok
+test freshness_tests::slackware_dir_release_and_arch ... ok
+test freshness_tests::upstream_url_uses_release_dir ... ok
+test history::tests::civil_roundtrip_known_dates ... ok
+test history::tests::format_is_local_via_calibration ... ok
+test history::tests::downtube_full_life_is_reconstructed ... ok
+test history::tests::parse_upgraded_suffix_works ... ok
+test manifest::tests::finds_file_and_package ... ok
+test history::tests::lost_successor_infers_target_version ... ok
+test mirrors::tests::candidate_url_appends_index ... ok
+test manifest::tests::symlink_target_stripped ... ok
+test history::tests::rebuilt_same_version_chain_pairs_correctly ... ok
+test download::tests::md5_of_known_content ... ok
+test mirrors::tests::extract_https_handles_wrappers ... ok
+test mirrors::tests::rank_drops_stale_and_sorts_by_latency ... ok
+test mirrors::tests::parses_only_https_with_country ... ok
+test mirrors::tests::rank_without_upstream_keeps_all_by_latency ... ok
+test mirrors::tests::rank_truncates_to_top_n ... ok
+test parallel_download_tests::summarize_ignores_out_of_range_index ... ok
+test parallel_download_tests::summarize_marks_ready_and_collects_failures ... ok
+test parallel_download_tests::verify_suffix_reflects_strength ... ok
+test pkg::tests::bare_tag_without_ext ... ok
+test pkg::tests::build_tag_strips_number_both_styles ... ok
+test pkg::tests::dashed_name ... ok
+test pkg::tests::rejects_garbage ... ok
+test pkg::tests::safe_filename_accepts_normal_packages ... ok
+test pkg::tests::revision_detection ... ok
+test pkg::tests::safe_filename_rejects_traversal_and_tricks ... ok
+test pkg::tests::safe_location_rejects_dotdot ... ok
+test pkg::tests::simple_name ... ok
+test pkg::tests::slack_stable_tag_is_recognised_as_official ... ok
+test pkgdb::series_match_tests::is_real_series_needs_two_distinct_names ... ok
+test pkgdb::series_match_tests::per_name_dir_does_not_shadow_pin ... ok
+test pkgdb::series_match_tests::per_name_dir_does_not_shadow_bare_name ... ok
+test pkgdb::upgrade_tests::at_repo_selects_whole_repo ... ok
+test pkgdb::upgrade_tests::available_names_and_is_empty ... ok
+test pkgdb::upgrade_tests::at_tag_selects_by_build_tag ... ok
+test pkgdb::series_match_tests::real_series_still_matches_by_series ... ok
+test pkgdb::upgrade_tests::bare_word_is_not_a_repo ... ok
+test pkgdb::upgrade_tests::conraid_80_now_outranks_installed_alienbob_10 ... ok
+test pkgdb::upgrade_tests::freeze_never_falls_below_floor ... ok
+test pkgdb::upgrade_tests::genuine_self_upgrade_within_same_repo ... ok
+test pkgdb::upgrade_tests::higher_priority_same_version_is_proposed ... ok
+test pkgdb::upgrade_tests::installed_priority_falls_back_to_tag_when_pkg_gone ... ok
+test pkgdb::upgrade_tests::installed_priority_official_empty_tag_keeps_official ... ok
+test pkgdb::upgrade_tests::installed_priority_user_tag_wins ... ok
+test pkgdb::upgrade_tests::installed_priority_pins_alien_pkg_to_its_real_repo ... ok
+test pkgdb::upgrade_tests::names_provided_by_scopes_to_baseline ... ok
+test pkgdb::upgrade_tests::match_pattern_prefers_non_frozen_winner ... ok
+test pkgdb::upgrade_tests::newly_added_matches_by_name_not_filename ... ok
+test pkgdb::upgrade_tests::no_downgrade_from_lower_repo ... ok
+test pkgdb::upgrade_tests::official_upgrade_proposed ... ok
+test pkgdb::upgrade_tests::pin_restricts_first_then_freeze_excludes ... ok
+test pkgdb::upgrade_tests::pin_excluded_flags_unsatisfiable_pins ... ok
+test pkgdb::upgrade_tests::pin_forces_repo_and_bypasses_priority ... ok
+test pkgdb::upgrade_tests::scoped_freeze_falls_through_to_next_repo ... ok
+test pkgdb::upgrade_tests::sbo_is_not_migrated_to_lower_repo ... ok
+test pkgdb::upgrade_tests::substring_pattern_still_works ... ok
+test pkgdb::upgrade_tests::series_pattern_matches_only_series ... ok
+test repo::arch_tests::accepts_native_noarch_fw_x86 ... ok
+test repo::arch_tests::keeps_whole_32bit_family_on_32bit ... ok
+test pkgdb::upgrade_tests::unscoped_freeze_holds_everywhere ... ok
+test repo::arch_tests::rejects_genuine_32bit_binaries_on_64 ... ok
+test newconfig::tests::finds_new_files_recursively ... ok
+test repo::dep_tests::parse_pkg_list_is_format_tolerant ... ok
+test repo::dep_tests::parses_names_and_skips_noise ... ok
+test repo::tests::captures_conflicts_and_suggests_when_present ... ok
+test repo::tests::captures_package_required_when_present ... ok
+test repo::lossy_tests::reads_non_utf8_without_failing ... ok
+test repo::tests::series_extraction ... ok
+test repo::tests::parses_checksums_ok ... ok
+test revert::tests::builds_32bit_url_from_slackware_tree ... ok
+test repo::tests::parses_blocks_with_series ... ok
+test revert::tests::strip_handles_upgraded_and_plain ... ok
+test revert::tests::unknown_package_yields_no_url ... ok
+test revert::tests::builds_url_for_older_version_via_stable_location ... ok
+test revert::tests::trailing_slash_in_base_url_is_handled ... ok
+test revert::tests::name_match_is_exact ... ok
+test selection_tests::edit_distance_basics ... ok
+test selection_tests::privilege_classification ... ok
+test selection_tests::closest_suggests_within_two ... ok
+test repo::tests::official_arch_subdir_picks_arch_dir ... ok
+test revert::tests::filters_official_only_and_dedups_newest_first ... ok
+test selection_tests::parse_selection_works ... ok
+test system::tests::missing_db_is_empty_not_error ... ok
+test selection_tests::fix_pin_repo_catches_mistyped_repo ... ok
+test revert::tests::parses_name_to_location ... ok
+test revert::tests::respects_limit_in_input_order ... ok
+test ui::tests::paint_gate_is_pure ... ok
+test ui::tests::helpers_map_to_the_right_code ... ok
+test unfreeze_tests::parse_pin_line_recognizes_pins_only ... ok
+test system::tests::removed_records_are_detected ... ok
+test unfreeze_tests::arch_family_compatibility ... ok
+test unfreeze_tests::partial_name_does_not_match ... ok
+test unfreeze_tests::removes_exact_rule_only_no_glob ... ok
+test unfreeze_tests::repo_scoped_rule_does_not_touch_bare_rule ... ok
+test unfreeze_tests::removing_last_rule_leaves_header_intact ... ok
+test template::tests::delete_removes_file_only ... ok
+test unfreeze_tests::regex_metachars_are_literal ... ok
+test unfreeze_tests::preserves_comments_and_reports_not_found ... ok
+test unfreeze_tests::remove_pins_drops_only_matching_pins ... ok
+test template::tests::name_suffix_is_normalized ... ok
+test system::tests::reads_fake_installed_db ... ok
+test system::tests::record_present_detects_db_record ... ok
+test template::tests::generate_then_load_with_include ... ok
+test config::tests::blacklist_rules ... ok
+test config::tests::patterns_support_both_glob_and_regex ... ok
+
+test result: ok. 177 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+Slackware package maker, version 3.141592653.
+
+Searching for symbolic links:
+
+No symbolic links were found, so we won't make an installation script.
+You can make your own later in ./install/doinst.sh and rebuild the
+package if you like.
+
+This next step is optional - you can set the directories in your package
+to some sane permissions. If any of the directories in your package have
+special permissions, then DO NOT reset them here!
+
+Would you like to reset all directory permissions to 755 (drwxr-xr-x) and
+directory ownerships to root:root ([y]es, [n]o)? n
+
+
+Creating Slackware package:  /tmp/slacker-0.9.4-x86_64-1_FRG.txz
+
+./
+etc/
+etc/slacker/
+etc/slacker/blacklist.new
+etc/slacker/distro-upgrade.conf.new
+etc/slacker/mirrors.new
+etc/slacker/repos.new
+etc/slacker/slacker.conf.new
+etc/slacker/templates/
+install/
+install/doinst.sh
+install/slack-desc
+usr/
+usr/doc/
+usr/doc/slacker-0.9.4/
+usr/doc/slacker-0.9.4/NEWS
+usr/doc/slacker-0.9.4/README.md
+usr/doc/slacker-0.9.4/examples/
+usr/doc/slacker-0.9.4/examples/blacklist
+usr/doc/slacker-0.9.4/examples/distro-upgrade.conf
+usr/doc/slacker-0.9.4/examples/mirrors
+usr/doc/slacker-0.9.4/examples/repos
+usr/doc/slacker-0.9.4/examples/slacker.conf
+usr/doc/slacker-0.9.4/slacker.SlackBuild
+usr/local/
+usr/local/sbin/
+usr/local/sbin/slacker
+usr/man/
+usr/man/man8/
+usr/man/man8/slacker.8.gz
+
+Slackware package /tmp/slacker-0.9.4-x86_64-1_FRG.txz created.
+
