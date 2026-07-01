@@ -5,6 +5,7 @@ mod banner;
 mod banner2;
 mod changelog;
 mod config;
+mod credentials;
 mod dist;
 mod download;
 mod gpg;
@@ -361,6 +362,9 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
     }
     let cfg = Config::load_dir(&cli.config_dir)?;
     migrate_state(&cfg);
+    // Install repo credentials (HTTP Basic) before any download. Secrets come
+    // from credentials.d/<name> and credentials.cat, never the repos file.
+    download::set_auth(credentials::build_registry(&cfg));
     let privileged = requires_privilege(&cli.command);
     if privileged {
         ensure_privileged(&cli.command)?;
@@ -2826,8 +2830,11 @@ fn vet_repo(cfg: &Config, r: &config::Repo) -> Vec<String> {
     let mut issues: Vec<String> = Vec::new();
     let policy = r.verify_policy(&cfg.verify);
 
-    // 1. Transport: plaintext http is tamperable in flight.
-    if r.url.to_ascii_lowercase().starts_with("http://") {
+    // 1. Transport: plaintext http is tamperable in flight — unless the user
+    //    explicitly accepted that risk for this repo with the `insecure` flag
+    //    (in which case freezing it for the very thing they opted into would be
+    //    contradictory; GPG/checksum verification still applies below).
+    if r.url.to_ascii_lowercase().starts_with("http://") && !r.insecure {
         issues.push("served over plaintext http — a network attacker could tamper with it".into());
     }
 
@@ -2947,6 +2954,11 @@ fn apply_vet(cfg: &Config, r: &config::Repo) -> bool {
 /// commands that have just rewritten the repos file.
 fn reload_repo(cfg: &Config, name: &str) -> Result<config::Repo, String> {
     let fresh = config::Config::load_dir(&cfg.config_dir)?;
+    // The repos file just changed (e.g. add-repo added this repo with a
+    // credentials= flag). Rebuild the auth registry from the fresh config so
+    // that vetting the new repo authenticates with its credentials, instead of
+    // the stale registry built before the write.
+    download::set_auth(credentials::build_registry(&fresh));
     fresh
         .repo_by_name(name)
         .cloned()
@@ -3578,6 +3590,12 @@ fn cmd_list_repos(cfg: &Config) -> Result<Outcome, String> {
         }
         if r.subtree {
             line.push_str(&ui::cyan("  (subtree)"));
+        }
+        if let Some(name) = &r.credentials {
+            line.push_str(&ui::cyan(&format!("  (credentials={name})")));
+        }
+        if r.insecure {
+            line.push_str(&ui::yellow("  (insecure)"));
         }
         if repo::is_hard_quarantined(&cfg.state_dir, &r.name) {
             line.push_str(&ui::red("  [FROZEN]"));
@@ -4444,6 +4462,42 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
             &ui::yellow(&format!(
                 "plaintext http (MITM-able): {} — prefer https",
                 insecure.join(", ")
+            )),
+        );
+    }
+
+    // Credentials transport: a repo carrying credentials= over plaintext http.
+    // Without the `insecure` flag the login is NOT sent (fail-safe); with it,
+    // the login is exposed on the wire — flagged either way.
+    let is_http = |r: &&config::Repo| r.url.to_ascii_lowercase().starts_with("http://");
+    let cred_blocked: Vec<String> = cfg
+        .repos
+        .iter()
+        .filter(|r| r.credentials.is_some() && is_http(r) && !r.insecure)
+        .map(|r| r.name.clone())
+        .collect();
+    let cred_insecure: Vec<String> = cfg
+        .repos
+        .iter()
+        .filter(|r| r.credentials.is_some() && is_http(r) && r.insecure)
+        .map(|r| r.name.clone())
+        .collect();
+    if !cred_blocked.is_empty() {
+        srow(
+            &bad,
+            "Credentials",
+            &ui::red(&format!(
+                "credentials over plaintext http, NOT sent: {} — use https (or add `insecure` to force)",
+                cred_blocked.join(", ")
+            )),
+        );
+    } else if !cred_insecure.is_empty() {
+        srow(
+            &warn,
+            "Credentials",
+            &ui::yellow(&format!(
+                "credentials sent over plaintext http (insecure): {} — exposed on the wire, at your own risk",
+                cred_insecure.join(", ")
             )),
         );
     }
@@ -8634,9 +8688,10 @@ fn repos_text_with(current: &str, line: &str) -> String {
 /// Usage reminders shown on any add-* mistake (the "suggestion" half of the
 /// validation). Each field is a separate word — unlike `frozen`, no quoting is
 /// needed (quote only a URL that itself contains shell-special characters).
-const ADD_REPO_USAGE: &str = "usage: slacker add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=gpg,md5]\n  \
+const ADD_REPO_USAGE: &str = "usage: slacker add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=gpg,md5] [credentials=NAME] [insecure]\n  \
      e.g.  slacker add-repo 60 alienbob https://slackware.nl/people/alien/sbrepos/current/x86_64\n  \
      e.g.  slacker add-repo 70 extras https://slackware.uk/slackware/slackware64-current/extra subtree\n  \
+     e.g.  slacker add-repo 80 myforge https://forge.slackware.nl/rizitis/repo credentials=forge\n  \
      (pass each field as a separate word — no quotes)";
 const ADD_TAG_USAGE: &str = "usage: slacker add-tag PRIORITY NAME TAG\n  \
      e.g.  slacker add-tag 100 SBo _SBo\n  \
@@ -8813,6 +8868,19 @@ fn cmd_add_repo(
         return Err(format!(
             "that URL is already used by repo '{}': {}\n{ADD_REPO_USAGE}",
             dup.name, dup.url
+        ));
+    }
+    // Credentials over plaintext http would leak on the wire. Refuse unless the
+    // user explicitly accepts the risk with the `insecure` flag.
+    let is_http = url.to_ascii_lowercase().starts_with("http://");
+    let has_creds = flags.iter().any(|f| f.starts_with("credentials="));
+    let has_insecure = flags.iter().any(|f| f == "insecure");
+    if is_http && has_creds && !has_insecure {
+        return Err(format!(
+            "refusing to add repo '{name}': it carries credentials over plaintext http, \
+             which would expose the login on the network.\n  \
+             Fix: use an https:// URL for this repo.\n  \
+             Override (at your own risk): re-run with the `insecure` flag to send credentials over http anyway."
         ));
     }
     let mut line = format!("{priority} {name} {url}");

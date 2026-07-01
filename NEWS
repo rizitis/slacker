@@ -1,5 +1,28 @@
+Version Beta 0.10.0
+=====
+Add: Credentials system — zypper-modeled
+ - HTTP Basic authentication for repos that require login:
+Named sets: /etc/slacker/credentials.d/NAME (username/password), referenced with flag credentials=NAME in repos line.
+Global catalogue: /etc/slacker/credentials.cat with [url-prefix] sections.
+Order: credentials= flag → longest catalogue prefix → anonymous.
+Permissions enforced: root-owned 0600, otherwise refuse+warn+anonymous (fail-safe).
+Zero leak: secret only in Authorization: Basic header — never in repos file, URL, or logs.
+New module credentials.rs with inline base64 (no new dependencies).
+https-only + insecure flag (new)
+Credentials only go over https (like apt). For http:
+add-repo with credentials= on http → refuse (with clear message).
+Explicit alternative: per-repo flag insecure → sends to http, at your own risk (and vetting no longer freezes it for http, since you accepted it).
+The status finds it: new Credentials row (red withheld / yellow insecure).
+The list-repos now shows the (credentials=NAME) and (insecure) flags.
+
+Add:  User-Agent: slacker/0.10.0 (rustls) Slackware-version-arch
+  - slacker isn not anonymous bot it has id
+
+Fix: Accept-Encoding: identity (fix)
+  - All request paths now send explicit identities
 Fix: bug with install-new thanks to @conraid
-- now install new will not skip testing/extras/patches/pasture IF having priority higher than slackware repo else keep looking only slackware repo.
+  - now install new will not skip testing/extras/patches/pasture IF having priority higher than slackware repo else keep looking only slackware repo.
+
 Update: cosmetic fix: add space between install-new,installs, new-config headers
 Update: slacker new-config command to escape blocking if a mirror is not set up already as it should be
 Update: slacker status command to check slacker cache for forgotten (old, huge) packages

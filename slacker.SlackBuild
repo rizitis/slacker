@@ -6,7 +6,7 @@
 cd $(dirname $0) ; CWD=$(pwd)
 
 PRGNAM=slacker
-VERSION=${VERSION:-0.9.5}
+VERSION=${VERSION:-0.10.0}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
@@ -86,6 +86,24 @@ for f in slacker.conf distro-upgrade.conf mirrors repos blacklist; do
   install -m0644 examples/etc-slacker/"$DIR"/"$ARCH"/$f $PKG/etc/slacker/$f.new
 done
 chmod 644 $PKG/etc/slacker/*.new
+
+#
+install -d -m 0700 $PKG/etc/slacker/credentials.d
+cp examples/README.credentials $PKG/etc/slacker/credentials.d/
+chmod 0600 $PKG/etc/slacker/credentials.d/README.credentials
+cat > $PKG/etc/slacker/credentials.cat.new <<'EOF'
+# slacker repository credentials (HTTPS Basic) — OPTIONAL.
+# Public Slackware mirrors need NONE of this for now...
+#
+# Per-URL catalog: any repo whose URL starts with a section prefix uses it.
+#   [https://forge.slackware.nl/rizitis]
+#   username = rizitis
+#   password = <token>
+#
+# Or a named set in credentials.d/<name>, referenced from the repos line with
+# `credentials=<name>`. Either way: chmod 600, chown root:root.
+EOF
+chmod 600 $PKG/etc/slacker/credentials.cat.new
 
 # man page
 mkdir -p $PKG/usr/man/man8

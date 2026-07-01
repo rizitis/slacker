@@ -11,12 +11,86 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// The running Slackware release for the User-Agent: `current` on -current, or
+/// the stable version (e.g. `15.0`) read from /etc/os-release — so the UA is
+/// truthful on whatever the tool actually runs on, exactly as zypper reports
+/// `openSUSE-Leap-15.2`. Read once. Falls back to `current` (slacker's primary
+/// target) if the release can't be determined.
+fn slackware_release() -> &'static str {
+    static REL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    REL.get_or_init(|| {
+        crate::dist::parse_release_from_os(
+            crate::system::version_id().as_deref(),
+            crate::system::version_codename().as_deref(),
+        )
+        .map(|r| crate::dist::release_suffix(&r))
+        .unwrap_or_else(|| "current".to_string())
+    })
+}
+
+/// Identifying User-Agent, in the spirit of zypper's `ZYpp x.y (curl a.b)
+/// openSUSE-Leap-15.2-x86_64`: it names the tool, version, TLS backend, the
+/// distribution+release and the architecture, so a mirror operator can
+/// recognise slacker as a legitimate package manager (and whitelist it) rather
+/// than an anonymous scraper. Honest identification, never browser spoofing.
+fn user_agent() -> String {
+    format!(
+        "slacker/{} (rustls) Slackware-{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        slackware_release(),
+        std::env::consts::ARCH,
+    )
+}
+
 /// Build a ureq Agent. TLS is rustls, linked into the binary with the Mozilla
 /// CA roots bundled (ureq's `tls` feature), so there is no dependency on a
 /// system OpenSSL. Kept fallible (returns Result) for call-site compatibility,
 /// though construction no longer fails.
 fn build_agent(timeout: Duration) -> Result<ureq::Agent, String> {
-    Ok(ureq::AgentBuilder::new().timeout(timeout).build())
+    Ok(ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .user_agent(&user_agent())
+        .build())
+}
+
+/// (url-prefix, `Authorization` header) rules, set once at startup from the
+/// credentials config. A request to a URL that begins with a rule's prefix
+/// carries that rule's header (the LONGEST matching prefix wins). Empty/unset
+/// means every request is anonymous — the default for public mirrors.
+static AUTH_REGISTRY: std::sync::RwLock<Vec<(String, String)>> =
+    std::sync::RwLock::new(Vec::new());
+
+/// Install or replace the credential registry (see `credentials::build_registry`).
+/// Called after the config loads, and again whenever a command rewrites the
+/// repos file (e.g. add-repo) so that vetting the just-added repo uses its
+/// credentials rather than a stale, pre-write registry.
+pub fn set_auth(registry: Vec<(String, String)>) {
+    if let Ok(mut w) = AUTH_REGISTRY.write() {
+        *w = registry;
+    }
+}
+
+/// The `Authorization` header for a URL, if a credential rule matches. Longest
+/// prefix wins, so a specific repo rule beats a broader catalog prefix.
+fn auth_for(url: &str) -> Option<String> {
+    let reg = AUTH_REGISTRY.read().ok()?;
+    reg.iter()
+        .filter(|(prefix, _)| url.starts_with(prefix.as_str()))
+        .max_by_key(|(prefix, _)| prefix.len())
+        .map(|(_, header)| header.clone())
+}
+
+/// Attach the matching `Authorization` header to a request, if any. Which URLs
+/// carry credentials is decided when the registry is built (`build_registry`):
+/// https repos always, http repos only with the `insecure` flag. A plain-https
+/// registry entry cannot match an http URL, so an https→http redirect drops the
+/// header. The secret only ever travels in this header — never in the URL, a log
+/// line, or output.
+fn with_auth(req: ureq::Request, url: &str) -> ureq::Request {
+    match auth_for(url) {
+        Some(h) => req.set("Authorization", &h),
+        None => req,
+    }
 }
 
 /// Convert a `file://` URL to a filesystem path, or None for other schemes.
@@ -102,7 +176,9 @@ pub fn get_bytes_capped(url: &str, cap: u64) -> Result<Vec<u8>, String> {
         return Ok(data);
     }
     let agent = build_agent(Duration::from_secs(60))?;
-    let resp = agent.get(url).call().map_err(|e| e.to_string())?;
+    let resp = with_auth(agent.get(url).set("Accept-Encoding", "identity"), url)
+        .call()
+        .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     resp.into_reader()
         .take(cap + 1)
@@ -132,12 +208,15 @@ pub fn first_line(url: &str, timeout: Duration) -> Result<String, String> {
         return first_nonempty_line(&buf);
     }
     let agent = build_agent(timeout)?;
-    let resp = agent
-        .get(url)
-        .set("Range", "bytes=0-127")
-        .set("Accept-Encoding", "identity")
-        .call()
-        .map_err(|e| e.to_string())?;
+    let resp = with_auth(
+        agent
+            .get(url)
+            .set("Range", "bytes=0-127")
+            .set("Accept-Encoding", "identity"),
+        url,
+    )
+    .call()
+    .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     resp.into_reader().take(PEEK).read_to_end(&mut buf).map_err(|e| e.to_string())?;
     first_nonempty_line(&buf)
@@ -173,9 +252,7 @@ pub fn download_to(url: &str, dest: &Path) -> Result<(), String> {
     // while Content-Length still reports the *encoded* length. That mismatch
     // makes byte accounting wrong and can leave the final read blocking until
     // the agent timeout (~600s) instead of stopping at end-of-body.
-    let resp = agent
-        .get(url)
-        .set("Accept-Encoding", "identity")
+    let resp = with_auth(agent.get(url).set("Accept-Encoding", "identity"), url)
         .call()
         .map_err(|e| e.to_string())?;
     let tmp = dest.with_extension("part");
@@ -214,9 +291,7 @@ pub fn download_to_progress(url: &str, dest: &Path, label: &str) -> Result<(), S
     // Ask for an unencoded body so Content-Length matches the bytes we actually
     // write, the stream ends cleanly at EOF (no read blocking until the ~600s
     // timeout), and the percentage below is truthful. See download_to.
-    let resp = agent
-        .get(url)
-        .set("Accept-Encoding", "identity")
+    let resp = with_auth(agent.get(url).set("Accept-Encoding", "identity"), url)
         .call()
         .map_err(|e| e.to_string())?;
     // Only trust Content-Length as the percentage denominator when the body is

@@ -1,4 +1,4 @@
-.TH SLACKER 8 "July 2026" "slacker 0.9.5" "Slackware Package Management"
+.TH SLACKER 8 "July 2026" "slacker 0.10.0" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -496,7 +496,26 @@ Append a binary repository to the
 file. The URL must be
 .IR http:// " or " https://
 and not already in use. Optional flags (separate words, any order):
-.BR official ", " immutable ", " subtree ", and " verify= gpg,md5,...
+.BR official ", " immutable ", " subtree ", " insecure ", " verify= "gpg,md5,... , and " credentials= NAME.
+The
+.BI credentials= NAME
+flag authenticates to a repository that requires a login: it references a
+credential set stored in
+.IR credentials.d/ NAME
+(see
+.BR FILES ) \(em
+no secret is ever written to the
+.I repos
+file. Credentials are sent over
+.B https
+only; adding a
+.B credentials=
+repo whose URL is plaintext
+.B http
+is refused unless the
+.B insecure
+flag is also given (an explicit, at-your-own-risk override, since http would
+expose the login on the network).
 The line is validated and, on confirmation, the repo is fetched and vetted (see
 .BR "Repository safety" ).
 .TP
@@ -726,7 +745,7 @@ errors out if two are active. Supports
 .TP
 .I /etc/slacker/repos
 Repository priorities, names and external repositories, one per line as
-.IR "priority name url" " [" official "] [" immutable "] [" subtree "] [" verify= ...].
+.IR "priority name url" " [" official "] [" immutable "] [" subtree "] [" insecure "] [" verify= ...] [ credentials= ...].
 Higher priority wins. The URL field may be a literal URL, the keyword
 .B mirror
 (filled in from the active line in
@@ -750,6 +769,63 @@ lists package locations relative to the distribution root; its packages and
 .I GPG-KEY
 are fetched from the parent (root) URL while its metadata comes from the repo
 URL itself.
+.B credentials= NAME
+authenticates to a repository that needs a login, using the credential set
+.IR credentials.d/ NAME
+(HTTP Basic); the flag holds only the name, never the secret. Credentials are
+sent over
+.B https
+only.
+.B insecure
+permits sending them over plaintext
+.B http
+for this repo \(em off by default, an explicit at-your-own-risk override, since
+http exposes the login on the wire. Without it a credentials= repo over http is
+refused by
+.B add-repo
+and, if written by hand, its credentials are withheld.
+.TP
+.I /etc/slacker/credentials.d/
+Per\(hyrepository login credentials, one file per set, referenced from a repos
+line with
+.BR credentials= NAME .
+Each file holds a single pair:
+.IP
+.EX
+username = rizitis
+password = <token\(hyor\(hypassword>
+.EE
+.IP
+This is optional \(em public Slackware mirrors need none of it. A file is used
+only if it is a regular file owned by
+.B root
+with no group or other permission bits
+.RB ( "chmod 600" ,
+.RB "chown root:root" );
+anything looser is refused with a warning and the repository is fetched
+anonymously, so a mis\(hypermissioned secret never silently leaks. The secret
+travels only in an
+.I Authorization
+header \(em never in a URL, a log line, or program output. Keep the directory
+itself
+.B 0700
+so the file names are not visible to non\(hyroot users.
+.TP
+.I /etc/slacker/credentials.cat
+Optional global credentials catalogue: one
+.RI [ url\(hyprefix ]
+section per line group, each with its own
+.I username
+and
+.I password
+lines. Any repository whose URL begins with a section's prefix uses that
+section, without needing a
+.B credentials=
+flag. Lookup order per repository is: an explicit
+.B credentials= NAME
+flag first, else the longest matching catalogue prefix, else anonymous. Same
+permission rules as
+.IR credentials.d/ .
 .TP
 .I /etc/slacker/blacklist
 Blacklist rules, one per line (`#` comments). A rule is
@@ -980,6 +1056,49 @@ reports the same mismatch. Pass
 to override when you are sure. A distribution upgrade
 .RB ( upgrade-dist )
 changes the release on purpose and is not subject to this guard.
+.PP
+.B Repository credentials.
+For a repository that requires a login,
+.B slacker
+sends HTTP Basic credentials read from
+.I credentials.d/ NAME
+(referenced by a
+.B credentials= NAME
+flag) or from the global
+.I credentials.cat
+catalogue by URL prefix. A secret is never written to the
+.I repos
+file, never placed in a URL, and never printed or logged \(em it travels only in
+the request's
+.I Authorization
+header. A credential file is honoured only when it is a regular file owned by
+.B root
+with no group or other permissions
+.RB ( 0600 " or stricter);"
+otherwise it is refused with a warning and the repository is fetched
+anonymously. This mirrors how
+.BR zypper (8)
+and apt store repository logins: plain files under
+.IR /etc ,
+protected by permissions, never encrypted in place (offline protection is the
+job of full\(hydisk encryption, not the package manager).
+.IP
+Credentials are transmitted over
+.B https
+only. A repository whose URL is plaintext
+.B http
+does not receive them (they would be exposed on the network) unless it carries
+the
+.B insecure
+flag, an explicit at-your-own-risk override; likewise
+.B add-repo
+refuses to add a
+.B credentials=
+repo over http without that flag. Either way,
+.B status
+reports a repository carrying credentials over http on its
+.B Credentials
+row, and, as with the apt convention, https is the assumed and only safe default.
 .SH EXIT STATUS
 .TP
 .B 0

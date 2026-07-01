@@ -177,6 +177,18 @@ pub struct Repo {
     /// Per-repo verification override (`verify=` on the repos line). None means
     /// "use the global VERIFY policy".
     pub verify: Option<VerifyPolicy>,
+    /// `credentials=<name>` on the repos line: the name of a credential set in
+    /// `<config_dir>/credentials.d/<name>` to authenticate to this repo (HTTP
+    /// Basic). None means no explicit reference — the global credentials catalog
+    /// is consulted by URL prefix instead, and failing that the repo is fetched
+    /// anonymously. The NAME here is a reference only; no secret lives in the
+    /// repos file.
+    pub credentials: Option<String>,
+    /// `insecure` flag on the repos line: permit sending `credentials=` over
+    /// plaintext http for THIS repo. Off by default — credentials go over https
+    /// only. Setting it is an explicit, at-your-own-risk override, since the
+    /// login would then be exposed on the wire.
+    pub insecure: bool,
 }
 
 impl Repo {
@@ -896,6 +908,8 @@ fn parse_repos(
         let mut immutable = false;
         let mut subtree = false;
         let mut verify: Option<VerifyPolicy> = None;
+        let mut credentials: Option<String> = None;
+        let mut insecure = false;
         for flag in fields {
             if flag == "official" {
                 official = true;
@@ -903,14 +917,24 @@ fn parse_repos(
                 immutable = true;
             } else if flag == "subtree" {
                 subtree = true;
+            } else if flag == "insecure" {
+                insecure = true;
             } else if let Some(v) = flag.strip_prefix("verify=") {
                 verify = Some(
                     VerifyPolicy::parse(v)
                         .map_err(|e| format!("repos:{}: verify=: {e}", lineno + 1))?,
                 );
+            } else if let Some(name) = flag.strip_prefix("credentials=") {
+                if name.is_empty() {
+                    return Err(format!(
+                        "repos:{}: credentials= needs a name (a file in credentials.d/)",
+                        lineno + 1
+                    ));
+                }
+                credentials = Some(name.to_string());
             } else {
                 return Err(format!(
-                    "repos:{}: unknown flag '{flag}' (allowed: official, immutable, subtree, verify=...)",
+                    "repos:{}: unknown flag '{flag}' (allowed: official, immutable, subtree, insecure, verify=..., credentials=...)",
                     lineno + 1
                 ));
             }
@@ -924,6 +948,8 @@ fn parse_repos(
             immutable,
             subtree,
             verify,
+            credentials,
+            insecure,
         });
     }
 

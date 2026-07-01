@@ -11,3 +11,11 @@ config etc/slacker/mirrors.new
 config etc/slacker/repos.new
 config etc/slacker/blacklist.new
 config etc/slacker/distro-upgrade.conf.new
+config etc/slacker/credentials.cat.new
+
+if [ -d etc/slacker/credentials.d ]; then
+  chmod 0700 etc/slacker/credentials.d
+fi
+if [ -e etc/slacker/credentials.cat ]; then
+  chmod 0600 etc/slacker/credentials.cat
+fi

@@ -10,8 +10,9 @@ The mental model: config.rs reads your /etc/slacker files -> repo.rs fetches and
 parses each repo's metadata into AvailPkg records -> pkgdb.rs unifies them into
 one priority-ordered database and answers "what wins / what upgrades / what
 matches" -> main.rs turns a CLI command into a plan and calls system.rs to run
-the real pkgtools. download.rs, gpg.rs, manifest.rs, changelog.rs, history.rs,
-template.rs, newconfig.rs, revert.rs are focused helpers used along the way.
+the real pkgtools. download.rs, credentials.rs, gpg.rs, manifest.rs, changelog.rs,
+history.rs, template.rs, newconfig.rs, revert.rs are focused helpers used along
+the way.
 
 Everything is synchronous. Errors are String (Result<_, String>) on purpose —
 simple, greppable messages, no error crates.
@@ -67,9 +68,11 @@ effects beyond reading files.
                    `frozen`/`pin` commands reuse it.
   pinned_repo/pins  the pin lookups: name -> its pinned repo / all (name,repo)
   Repo             struct: priority, name, url, official, immutable, subtree,
-                   verify (per-repo override) + verify_policy(global) resolver +
-                   download_base()/join_download_url() (subtree -> parent/root
-                   URL for packages & GPG-KEY; metadata still from the repo URL)
+                   verify (per-repo override), credentials (Option<NAME>),
+                   insecure (allow http credentials) + verify_policy(global)
+                   resolver + download_base()/join_download_url() (subtree ->
+                   parent/root URL for packages & GPG-KEY; metadata still from
+                   the repo URL)
   TagPriority      struct: priority, name, tag   (the `priority name tag` lines)
   Check            enum: Gpg | Md5 | Sha — one verification method
   VerifyPolicy     enum: All | Required(list) | None, with wants()/requires();
@@ -86,8 +89,9 @@ effects beyond reading files.
                    otherwise -> tag line. The url keyword resolves to the active
                    mirror (bare `mirror`) or the active mirror plus a subpath
                    (`mirror/extra`, `mirror/testing`). Also parses `official`,
-                   `immutable`, `subtree` and `verify=` flags (any order; an
-                   unknown flag is a fail-fast error)
+                   `immutable`, `subtree`, `insecure`, `verify=` and
+                   `credentials=NAME` flags (any order; an unknown flag is a
+                   fail-fast error)
   parse_mirrors    enforces "exactly one uncommented mirror"
 
 KEY RULES ENFORCED HERE:
@@ -224,10 +228,18 @@ There are unit tests pinning this (sbo_not_migrated, no_downgrade,
 genuine_self_upgrade, higher_priority_same_version) — keep them green.
 
 --------------------------------------------------------------------------------
-download.rs       (~345 lines)   bytes over http/https/file
+download.rs       (~360 lines)   bytes over http/https/file
 --------------------------------------------------------------------------------
 The only module that talks to the network (via ureq + rustls).
 
+  user_agent       identifying UA: "slacker/<ver> (rustls) Slackware-<rel>-<arch>"
+                   (zypper-style; <rel> read once from /etc/os-release)
+  build_agent      ureq agent carrying the User-Agent
+  set_auth         install/replace the credential registry (called from run(),
+                   and again after add-repo rewrites repos so the new repo's
+                   credentials apply when it is vetted)
+  auth_for         longest-prefix match of a URL against the registry
+  with_auth        attach the matching Authorization header to a request
   get_bytes        fetch a URL into memory (used for keys, .dep, small files)
   download_to      stream a URL to a destination path
   md5_file         md5 of a local file (md-5 crate) for CHECKSUMS verification
@@ -235,12 +247,50 @@ The only module that talks to the network (via ureq + rustls).
                    hashing crate; shelled out like gpg/bzip2)
   file_url_to_path + percent_decode   file:// support, reads the FS directly
 
+Every request carries the User-Agent and Accept-Encoding: identity. Credentials
+(when a registry entry matches) ride only in the Authorization header. WHICH
+URLs carry credentials is decided in credentials.rs (build_registry): https
+always, http only for an `insecure` repo. A plain-https registry entry cannot
+match an http URL, so an https->http redirect drops the header.
+
 NOTE: download.rs itself is per-file and synchronous; the concurrency lives in
 main.rs (execute_plan and cmd_download run get_bytes/download_to for many
 packages at once via std::thread::scope, bounded by MAX_PARALLEL).
 
-LOOK HERE IF: TLS/proxy/timeout issues, file:// URLs, or md5 mismatches. TLS is
-NO system OpenSSL (ureq's rustls TLS); a CA/proxy problem surfaces here.
+LOOK HERE IF: TLS/proxy/timeout issues, file:// URLs, md5 mismatches, or the
+User-Agent. TLS is NO system OpenSSL (ureq's rustls TLS); a CA/proxy problem
+surfaces here. Credential POLICY lives in credentials.rs, not here.
+
+--------------------------------------------------------------------------------
+credentials.rs    (~300 lines)   repository login credentials (HTTP Basic)
+--------------------------------------------------------------------------------
+Repository authentication, modelled on zypper. A secret NEVER lives in `repos`;
+it lives in files the admin controls under /etc/slacker, and travels only in an
+Authorization: Basic header.
+
+  Credential            struct { username, password }; basic_header() -> base64
+  parse_credential_file username=/password= (also user:/pass:, # comments)
+  parse_catalog         [url-prefix] sections, each its own username/password
+  secure_perms          regular file + root-owned + no group/other bits (0600),
+                        else Err — the file is then refused (fail-safe)
+  load_named            read + validate credentials.d/NAME (warn, not abort)
+  load_catalog          read + validate credentials.cat
+  build_registry        the policy hub: for each repo with credentials= (then
+                        each catalogue prefix) emit (url-prefix, Basic header)
+                        — https always; http ONLY when the repo has `insecure`
+                        (with a warning); http without insecure is skipped + warned
+  base64_encode         inline RFC 4648 (no extra dependency)
+  is_https              the transport gate used by build_registry
+
+Two sources, in order: a repo's `credentials=NAME` flag -> credentials.d/NAME;
+else the longest matching `credentials.cat` prefix; else anonymous. download.rs
+consumes the registry via set_auth/auth_for; add-repo (main.rs) refuses a
+credentials= repo over plaintext http unless `insecure` is set, and status shows
+a Credentials row.
+
+LOOK HERE IF: a login is not sent (check https vs the `insecure` flag and file
+permissions), base64/header format, or the credentials.d / credentials.cat
+parsing. The http-vs-https decision is HERE (build_registry), not in download.rs.
 
 --------------------------------------------------------------------------------
 system.rs         (~117 lines)    the bridge to real pkgtools
@@ -512,9 +562,15 @@ PLAN builder, and one cmd_* function per action.
     cmd_status        whole-setup health check (mirror, repos, keys, freshness,
                       reachability, pending) with "what to do next"
     cmd_add_repo / cmd_del_repo / cmd_add_tag / cmd_del_tag   edit the `repos`
-                      file (validated via config::validate_repos_text, confirmed)
+                      file (validated via config::validate_repos_text, confirmed).
+                      cmd_add_repo REFUSES a `credentials=` repo over plaintext
+                      http unless the `insecure` flag is also given.
     cmd_vet_repo / cmd_trust_repo / cmd_distrust_repo   the quarantine model:
-                      re-vet on demand, lift a quarantine (override), or freeze
+                      re-vet on demand, lift a quarantine (override), or freeze.
+                      vet_repo does NOT freeze an http repo for its transport when
+                      `insecure` is set (the user opted in); GPG/checksum checks
+                      still apply. trust-repo touches only STATE_DIR markers, never
+                      the repos file, so a repo's flags are never rewritten.
     installed_attribution / attribute_tags   tag-based source mapping with a pure,
                       testable core attribute_tags(official, tag_priorities,
                       resolve_repo, installed) -> (per_repo, per_rule, per_other).

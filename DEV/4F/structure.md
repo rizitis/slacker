@@ -22,15 +22,16 @@ slacker/
 │   ├── repos                       <- binary repos + tag-priority lines
 │   ├── blacklist                   <- blacklist rules: [@repo] GLOB|REGEX | [@repo] series/
 │   └── distro-upgrade.conf         <- optional DISTRO_UPGRADE_MIRROR (local source for upgrade-dist)
-└── src/                            <- 18 modules
+└── src/                            <- 20 modules
     ├── main.rs        CLI + commands (38 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, blacklist freeze + pin/unpin, quarantine, history, distribution upgrade)
-    ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (glob-or-regex/@repo/series) + glob<->regex pattern compile + pins (@repo 100% name) + repo flags (official/immutable/subtree) + subtree download base + mirror/<subpath> URLs + DISTRO_UPGRADE_MIRROR (distro-upgrade.conf)
+    ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (glob-or-regex/@repo/series) + glob<->regex pattern compile + pins (@repo 100% name) + repo flags (official/immutable/subtree/insecure + credentials=NAME) + subtree download base + mirror/<subpath> URLs + DISTRO_UPGRADE_MIRROR (distro-upgrade.conf)
     ├── dist.rs        distribution-upgrade engine: Release/Route types, parse_release_from_os (os-release) + parse_release_from_url, the fail-closed route whitelist (dist_route), release suffix/target parsing (used by upgrade-dist and the release-mismatch guard)
     ├── pkg.rs         Slackware package-name splitting (name-version-arch-build) + build_tag()
     ├── repo.rs        PACKAGES.TXT/CHECKSUMS(.md5/.sha256) parsing (UTF-8-lossy), metadata fetch, series, arch filter, lazy MANIFEST, .dep fetch (+ PACKAGE REQUIRED fallback for repos without .dep), quarantine/trust markers (under STATE_DIR)
     ├── revert.rs      revert-pkg rollback helpers: previous official versions from removed_packages (strip -upgraded- suffix), cumulative PACKAGES.TXT location parse + .txz URL build
     ├── pkgdb.rs       unified DB, priority, pattern/series/@-matching, upgrade resolution, newly-added, orphans, baseline names (clean-system), blacklist source lookups + pin resolution
-    ├── download.rs    https/http (ureq+rustls) + file:// + md5 + sha256 (sha256sum); parallel batch downloads (std::thread::scope, MAX_PARALLEL, best-effort)
+    ├── download.rs    https/http (ureq+rustls) + file:// + md5 + sha256 (sha256sum); identifying User-Agent (tool/version + release + arch, zypper-style); HTTP Basic credentials registry (https-only unless insecure); parallel batch downloads (std::thread::scope, MAX_PARALLEL, best-effort)
+    ├── credentials.rs repository login credentials (HTTP Basic, zypper-modelled): named credentials.d/NAME sets + credentials.cat catalogue, 0600/root permission enforcement, longest-prefix URL matching, inline base64; https-only (http needs the per-repo insecure flag)
     ├── system.rs      installed DB (PKG_DB_DIR) + pkgtools wrappers (install/upgrade/reinstall/remove) + cached_pkg_path + version_codename/version_id (os-release, for revert-pkg's -current guard and the release-mismatch check)
     ├── history.rs     package-change timeline reconstructed from the pkgtools admin dirs (ADM_DIR: packages/ + removed_packages/), local-time calibration, upgrade/reinstall inference
     ├── manifest.rs    file-search (decompressed MANIFEST)
@@ -40,6 +41,7 @@ slacker/
     ├── template.rs    templates (generate/load/delete, includes)
     ├── newconfig.rs   .new config file handling
     ├── banner.rs      SLACKWARE block-art banner (include_str! .nfo, TTY-gated, 256-colour, NO_COLOR aware) for upgrade-dist/upgrade-all
+    ├── banner2.rs     secondary block-art banner variant
     └── ui.rs           minimal ANSI colouring (TTY + NO_COLOR aware), plan tables
 ```
 
@@ -67,7 +69,8 @@ slacker/
   http/https/file://).
 - **repos** - two kinds of line:
   - binary repo: `priority  name  url|mirror|mirror/<subpath>  [official]
-    [immutable] [subtree] [verify=...]`. The url field may be a literal URL, the
+    [immutable] [subtree] [insecure] [verify=...] [credentials=NAME]`. The url field
+    may be a literal URL, the
     keyword `mirror` (filled from the active line in `mirrors`), or
     `mirror/<subpath>` (the active mirror with a subpath appended, e.g.
     `mirror/extra`, `mirror/testing` - so a distribution subtree tracks whichever
@@ -78,7 +81,11 @@ slacker/
     clean-system), `subtree` (a Slackware distribution subtree - extra/, patches/,
     testing/, pasture/ - whose PACKAGES.TXT locations are root-relative, so
     packages and GPG-KEY are fetched from the parent/root URL while metadata comes
-    from the repo URL).
+    from the repo URL), `credentials=NAME` (authenticate to this repo with the
+    login stored in `credentials.d/NAME`; the flag holds only the name - see
+    Config_Model), and `insecure` (permit sending those credentials over plaintext
+    http for this repo - off by default; an explicit at-your-own-risk override,
+    since http exposes the login on the wire).
   - tag-priority: `priority  name  tag` (e.g. `100 SBo _SBo`). Gives packages
     carrying a build tag a priority on the same scale, so SBo/local/source
     packages are never silently migrated to another repo or downgraded by
@@ -104,6 +111,17 @@ slacker/
   validates it (matches the requested target + reachable) before the point of no
   return; absent/empty, `upgrade-dist` uses the configured mirrors. Parsed into
   `Config.distro_upgrade_mirror` (`parse_distro_upgrade_mirror`).
+- **credentials.d/** and **credentials.cat** (optional) - repository login
+  credentials (HTTP Basic). A named set is a file `credentials.d/NAME` holding
+  one `username`/`password` pair, referenced by a repo's `credentials=NAME` flag;
+  `credentials.cat` is a global catalogue of `[url-prefix]` sections applied to
+  any repo whose URL begins with a prefix. Lookup per repo: the `credentials=`
+  flag first, else the longest matching catalogue prefix, else anonymous. A
+  credential file is used only when it is a regular file owned by root with no
+  group/other bits (0600, refused otherwise -> anonymous). Credentials are sent
+  over https only; a plaintext-http repo needs its `insecure` flag or they are
+  withheld. Parsed and matched in `credentials.rs`; the secret travels only in an
+  `Authorization: Basic` header, never in `repos`, a URL, or a log.
 
 ### Build-tag priority model
 
@@ -169,7 +187,8 @@ distrust-repo   generate-template  install-template  remove-template  delete-tem
   `--since YYYY-MM-DD`. Paged on a TTY like `show-changelog`.
 - `add-repo`/`del-repo`/`add-tag`/`del-tag` - edit the `repos` file (validated,
   with confirmation). `add-repo` flags: `official`, `immutable`, `subtree`,
-  `verify=...`.
+  `insecure`, `verify=...`, `credentials=NAME`. Adding a `credentials=` repo over
+  plaintext http is refused unless `insecure` is also given.
 - `vet-repo`/`trust-repo`/`distrust-repo` - the quarantine model: re-vet a repo,
   lift a quarantine (override the verdict), or freeze a repo yourself.
 - `install-new [REPO...]` - official repos only by default; name repos to opt in.
