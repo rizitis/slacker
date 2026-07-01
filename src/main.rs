@@ -347,6 +347,18 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
     if matches!(cli.command, Cmd::FindMirror) {
         return cmd_find_mirror(&cli.config_dir);
     }
+    // new-config reconciles only the *.new files under /etc; it reads no repos
+    // and no mirror. It must therefore run even when the mirror config is broken
+    // — which is exactly the situation right after you replace the `mirrors`
+    // file THROUGH new-config and then want to run new-config again. Blocking it
+    // on the strict config load would lock you out of the one tool that fixes the
+    // mirror. It still writes under /etc, so it keeps the root check and the
+    // exclusive lock; it only skips the config load it never needed.
+    if matches!(cli.command, Cmd::NewConfig) {
+        ensure_privileged(&cli.command)?;
+        let _lock = acquire_lock()?;
+        return cmd_new_config(cli);
+    }
     let cfg = Config::load_dir(&cli.config_dir)?;
     migrate_state(&cfg);
     let privileged = requires_privilege(&cli.command);
@@ -381,7 +393,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::InstallNew { repos } => cmd_install_new(cli, &cfg, repos),
         Cmd::CleanSystem => cmd_clean_system(cli, &cfg),
         Cmd::CleanCache { repos } => cmd_clean_cache(cli, &cfg, repos),
-        Cmd::NewConfig => cmd_new_config(cli),
+        Cmd::NewConfig => unreachable!("new-config is dispatched before config load"),
         Cmd::CheckUpdates => cmd_check_updates(&cfg),
         Cmd::ShowChangelog { repo } => cmd_show_changelog(&cfg, repo.as_deref()),
         Cmd::FindMirror => unreachable!("find-mirror is dispatched before config load"),
@@ -3662,6 +3674,61 @@ fn ago(t: std::time::SystemTime) -> String {
     }
 }
 
+/// Tally the downloaded-package cache: (file count, total bytes, most-recent
+/// mtime). Only CACHE_DIR/packages/<repo>/<file> regular files are counted —
+/// repo metadata and GPG keys live elsewhere and are never touched by
+/// clean-cache. A missing/unreadable cache reads as empty. Never recurses below
+/// the per-repo directory and never follows symlinks.
+fn scan_package_cache(pkg_root: &Path) -> (u64, u64, Option<std::time::SystemTime>) {
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+    let mut newest: Option<std::time::SystemTime> = None;
+    let Ok(repos) = std::fs::read_dir(pkg_root) else {
+        return (0, 0, None);
+    };
+    for repo_ent in repos.flatten() {
+        let dir = repo_ent.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(inner) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for ent in inner.flatten() {
+            let Ok(meta) = std::fs::symlink_metadata(ent.path()) else {
+                continue;
+            };
+            if !meta.file_type().is_file() {
+                continue;
+            }
+            files += 1;
+            bytes += meta.len();
+            if let Ok(m) = meta.modified() {
+                newest = Some(match newest {
+                    Some(n) if n >= m => n,
+                    _ => m,
+                });
+            }
+        }
+    }
+    (files, bytes, newest)
+}
+
+/// Human-readable byte size (B / KiB / MiB / GiB), one decimal from MiB up.
+fn humanize_bytes(bytes: u64) -> String {
+    const K: f64 = 1024.0;
+    let b = bytes as f64;
+    if b >= K * K * K {
+        format!("{:.1} GiB", b / (K * K * K))
+    } else if b >= K * K {
+        format!("{:.1} MiB", b / (K * K))
+    } else if b >= K {
+        format!("{:.0} KiB", b / K)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 /// `status`: a one-shot health check of the whole setup. Every line reports a
 /// real, verifiable fact (config is already structurally validated at load, so
 /// here we check initialisation and reachability) and ends with a truthful
@@ -4032,6 +4099,12 @@ pub(crate) const FRESHNESS_MAX_LAG_SECS: i64 = 48 * 3600;
 /// How long to wait on each freshness probe before giving up (fail-open).
 const FRESHNESS_TIMEOUT_SECS: u64 = 8;
 
+/// The downloaded-package cache is reported in `status` as worth cleaning when it
+/// grows past this size, or when nothing has been fetched into it for this many
+/// days (large, or simply forgotten). `clean-cache` is the remedy.
+const CACHE_WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+const CACHE_STALE_DAYS: u64 = 30;
+
 /// Parse the timestamp from a PACKAGES.TXT header line into epoch seconds.
 /// The line is always `PACKAGES.TXT;  Wed Jun 24 22:11:34 UTC 2026` — a
 /// `date -u` stamp (`%a %b %e %H:%M:%S UTC %Y`). Any deviation returns None so
@@ -4307,6 +4380,37 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     }
 
     srow(&ok, "Repos", &ui::dim(&format!("{} configured, priorities distinct", repos.len())));
+
+    // Downloaded-package cache. It is never pruned automatically (only
+    // upgrade-dist deletes as it installs), so it grows and is easy to forget.
+    // Warn when it is large (>= CACHE_WARN_BYTES) OR stale (nothing fetched into
+    // it for CACHE_STALE_DAYS), pointing at clean-cache. Reads only local state.
+    {
+        let (files, bytes, newest) = scan_package_cache(&cfg.cache_dir.join("packages"));
+        if files == 0 {
+            srow(&ok, "Cache", &ui::dim("empty"));
+        } else {
+            let size = humanize_bytes(bytes);
+            let idle_secs = newest.and_then(|t| t.elapsed().ok()).map(|e| e.as_secs());
+            let too_big = bytes >= CACHE_WARN_BYTES;
+            let too_old = idle_secs.map_or(false, |s| s >= CACHE_STALE_DAYS * 86_400);
+            if too_big || too_old {
+                let age = match newest {
+                    Some(t) if too_old => format!(", untouched {}", ago(t)),
+                    _ => String::new(),
+                };
+                srow(
+                    &warn,
+                    "Cache",
+                    &ui::yellow(&format!(
+                        "{size} in {files} file(s){age} — run `slacker clean-cache`"
+                    )),
+                );
+            } else {
+                srow(&ok, "Cache", &ui::dim(&format!("{size} in {files} file(s)")));
+            }
+        }
+    }
 
     if !cfg.tag_priorities.is_empty() {
         let tags =
@@ -9763,6 +9867,40 @@ mod freshness_tests {
         assert_eq!(humanize_lag(3 * 86400 + 5 * 3600), "3d 5h");
         assert_eq!(humanize_lag(5 * 3600), "5h");
         assert_eq!(humanize_lag(40 * 60), "40m");
+    }
+
+    #[test]
+    fn humanize_bytes_scales() {
+        assert_eq!(humanize_bytes(0), "0 B");
+        assert_eq!(humanize_bytes(512), "512 B");
+        assert_eq!(humanize_bytes(1024), "1 KiB");
+        assert_eq!(humanize_bytes(1024 * 1024), "1.0 MiB");
+        assert_eq!(humanize_bytes(3 * 1024 * 1024 * 1024 / 2), "1.5 GiB");
+        assert_eq!(humanize_bytes(CACHE_WARN_BYTES), "2.0 GiB");
+    }
+
+    #[test]
+    fn scan_package_cache_counts_only_repo_package_files() {
+        let tmp = std::env::temp_dir().join("slacker_cache_scan_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkgs = tmp.join("packages");
+        std::fs::create_dir_all(pkgs.join("slackware")).unwrap();
+        std::fs::create_dir_all(pkgs.join("conraid")).unwrap();
+        std::fs::write(pkgs.join("slackware").join("a-1-x86_64-1.txz"), vec![0u8; 100])
+            .unwrap();
+        std::fs::write(pkgs.join("conraid").join("b-2-x86_64-1cf.txz"), vec![0u8; 50])
+            .unwrap();
+        // A stray file directly under packages/ is not inside a repo dir -> ignored.
+        std::fs::write(pkgs.join("stray"), vec![0u8; 9999]).unwrap();
+        let (files, bytes, newest) = scan_package_cache(&pkgs);
+        assert_eq!(files, 2);
+        assert_eq!(bytes, 150);
+        assert!(newest.is_some());
+        // A missing cache reads as empty, never an error.
+        let (f, b, n) = scan_package_cache(&tmp.join("nope"));
+        assert_eq!((f, b), (0, 0));
+        assert!(n.is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

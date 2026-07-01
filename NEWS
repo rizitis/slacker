@@ -1,3 +1,7 @@
+Update: slacker new-config command to escape blocking if a mirror is not set up already as it should be
+Update: slacker status command to check slacker cache for forgotten (old, huge) packages
+---
+
 Version Beta 0.9.4
 =====
 freeze-fallback: a frozen candidate is treated as absent

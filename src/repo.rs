@@ -835,6 +835,27 @@ mod dep_tests {
             vec!["glibc", "foo", "baz"]
         );
         assert!(parse_pkg_list("").is_empty());
+        // Real-world: slackware.lngn.net's DankMaterialShell PACKAGE REQUIRED line
+        // — plain comma-separated names, no spaces after the commas.
+        assert_eq!(
+            parse_pkg_list(
+                "brightnessctl,cava,cliphist,colloid-gtk-theme,colloid-icon-theme,\
+                 dgop,gammastep,material-design-icons,matugen,quickshell,wl-clipboard"
+            ),
+            vec![
+                "brightnessctl",
+                "cava",
+                "cliphist",
+                "colloid-gtk-theme",
+                "colloid-icon-theme",
+                "dgop",
+                "gammastep",
+                "material-design-icons",
+                "matugen",
+                "quickshell",
+                "wl-clipboard",
+            ]
+        );
     }
 }
 
