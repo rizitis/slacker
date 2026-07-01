@@ -382,6 +382,17 @@ impl Config {
         self.repos.iter().find(|r| r.official).map(|r| r.name.as_str())
     }
 
+    /// Priority of the official Slackware repo, if one is configured. A
+    /// distribution subtree (extra/patches/testing/pasture) the user has ranked
+    /// ABOVE this is part of the official baseline as far as `install-new` is
+    /// concerned: ranking a subtree over the base repo is an explicit "I want
+    /// its packages" (patches at 200, or a testing tree bumped over 100), so it
+    /// must be scanned like the official tree. A subtree left at or below the
+    /// base stays opt-in (`install-new <name>`).
+    pub fn official_repo_priority(&self) -> Option<i32> {
+        self.repos.iter().find(|r| r.official).map(|r| r.priority)
+    }
+
     pub fn repo_by_name(&self, name: &str) -> Option<&Repo> {
         self.repos.iter().find(|r| r.name == name)
     }
@@ -1394,5 +1405,64 @@ mod tests {
         assert!(cfg.blacklist_hit("firefox-1-x86_64-1", Some("xap"), Some("slackware")));
         // ...and the pinned packages are NOT frozen.
         assert!(!cfg.blacklist_hit("vlc-3-x86_64-1", Some("xap"), Some("alienbob")));
+    }
+
+    #[test]
+    fn install_new_scans_subtrees_ranked_above_official() {
+        // install-new (no arg) scans the official repo PLUS any distribution
+        // subtree ranked strictly above it; subtrees at or below the base stay
+        // opt-in. This mirrors the two live setups: r-tz (patches high, extras/
+        // testing low) and conraid (testing bumped over the base).
+        let repos = "\
+            100 slackware https://m/slackware64-current/ official\n\
+            200 patches https://m/slackware64-current/patches/ immutable subtree\n\
+            90 extras https://m/slackware64-current/extra/ immutable subtree\n\
+            85 testing https://m/slackware64-current/testing/ immutable subtree\n";
+        let (repos, _tags) = parse_repos(repos, None).unwrap();
+        let cfg = Config {
+            arch: "x86_64".into(),
+            cache_dir: std::path::PathBuf::new(),
+            state_dir: std::path::PathBuf::new(),
+            pkg_db_dir: std::path::PathBuf::new(),
+            adm_dir: std::path::PathBuf::new(),
+            blacklist: vec![],
+            repos,
+            resolve_deps: true,
+            ignore_tags: vec![],
+            tag_priorities: vec![],
+            config_dir: std::path::PathBuf::new(),
+            verify: VerifyPolicy::All,
+            max_parallel: 1,
+            revert_enabled: true,
+            cumulative_url: String::new(),
+            distro_upgrade_mirror: None,
+        };
+        assert_eq!(cfg.official_repo_priority(), Some(100));
+        // The exact predicate install-new applies for the no-arg scan.
+        let off = cfg.official_repo_priority();
+        let scanned: Vec<&str> = cfg
+            .repos
+            .iter()
+            .filter(|r| r.official || (r.subtree && off.is_some_and(|op| r.priority > op)))
+            .map(|r| r.name.as_str())
+            .collect();
+        // slackware (official) + patches (subtree @200 > 100); extras @90 and
+        // testing @85 stay opt-in.
+        assert_eq!(scanned, vec!["slackware", "patches"]);
+
+        // conraid's case: testing bumped over the base is scanned.
+        let repos2 = "\
+            100 slackware https://m/slackware64-current/ official\n\
+            105 testing https://m/slackware64-current/testing/ immutable subtree\n";
+        let (repos2, _t2) = parse_repos(repos2, None).unwrap();
+        let cfg2 = Config { repos: repos2, ..cfg };
+        let off2 = cfg2.official_repo_priority();
+        let scanned2: Vec<&str> = cfg2
+            .repos
+            .iter()
+            .filter(|r| r.official || (r.subtree && off2.is_some_and(|op| r.priority > op)))
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(scanned2, vec!["slackware", "testing"]);
     }
 }

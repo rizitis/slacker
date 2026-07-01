@@ -1,3 +1,6 @@
+Fix: bug with install-new thanks to @conraid
+- now install new will not skip testing/extras/patches/pasture IF having priority higher than slackware repo else keep looking only slackware repo.
+Update: cosmetic fix: add space between install-new,installs, new-config headers
 Update: slacker new-config command to escape blocking if a mirror is not set up already as it should be
 Update: slacker status command to check slacker cache for forgotten (old, huge) packages
 ---

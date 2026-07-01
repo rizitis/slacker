@@ -1971,10 +1971,17 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
     // Best-effort: an install error on one does not stop the rest.
     let mut install_failed: Vec<(String, String)> = Vec::new();
     let mut installed = 0usize;
+    // Separate each package's pkgtools output with a blank line so a multi-package
+    // run is readable (the installpkg blocks otherwise butt up against each other).
+    let mut printed_any = false;
     for (i, it) in items.iter().enumerate() {
         if !ready[i] {
             continue;
         }
+        if printed_any {
+            println!();
+        }
+        printed_any = true;
         let res = match plan[i].action {
             InstallAction::Install => system::install(&it.dest),
             InstallAction::Upgrade => system::upgrade_only(&it.dest),
@@ -6678,12 +6685,26 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
 
     // Which repos to scan for newly-added packages:
-    //   - no argument  -> official repo(s) only (slackpkg's behaviour: packages
-    //     the Slackware distribution itself added)
-    //   - repo name(s) -> exactly those, so the user can opt in to a third-party
-    //     repo explicitly (e.g. `slacker install-new alienbob`)
+    //   - no argument  -> the official repo(s) PLUS any Slackware distribution
+    //     subtree (extra/patches/testing/pasture) the user has ranked ABOVE the
+    //     base official repo. A subtree is part of the official distribution;
+    //     ranking it over the base is an explicit "I want its packages" (e.g.
+    //     patches at 200, or conraid's testing bumped to 105), so install-new
+    //     treats it as official too. A subtree left at or below the base stays
+    //     opt-in. `collect` then dedups per name to the priority winner (and
+    //     falls back off a frozen candidate), so the higher subtree wins only
+    //     when it actually offers the package and is not frozen.
+    //   - repo name(s) -> exactly those, so the user can opt in to any repo
+    //     explicitly (e.g. `slacker install-new alienbob`, or a low-ranked
+    //     subtree the default scan skips).
     let selected: Vec<&config::Repo> = if repos.is_empty() {
-        cfg.repos.iter().filter(|r| r.official).collect()
+        let off_prio = cfg.official_repo_priority();
+        cfg.repos
+            .iter()
+            .filter(|r| {
+                r.official || (r.subtree && off_prio.is_some_and(|op| r.priority > op))
+            })
+            .collect()
     } else {
         let mut out = Vec::new();
         for name in repos {
@@ -7415,9 +7436,18 @@ fn overwrite_with_orig(nc: &newconfig::NewConfig) -> Result<(), String> {
 
 /// Interactive per-file resolution for one differing config file: show the diff,
 /// then [K]eep both / [O]verwrite (old saved as .orig) / [R]emove .new / [M]erge /
-/// [D]iff. Used by the "(P)rompt one by one" path of `cmd_new_config`.
-fn review_one_config(nc: &newconfig::NewConfig) -> Result<(), String> {
-    println!("\n{}", ui::white(&nc.target.display().to_string()));
+/// [D]iff. Used by the "(P)rompt one by one" path of `cmd_new_config`. `idx`/
+/// `total` drive a per-file header so it's obvious which file is under review
+/// and where one ends and the next begins.
+fn review_one_config(nc: &newconfig::NewConfig, idx: usize, total: usize) -> Result<(), String> {
+    let bar = "─".repeat(60);
+    println!("\n{}", ui::dim(&bar));
+    println!(
+        "{}  {}",
+        ui::cyan(&format!("[{idx}/{total}]")),
+        ui::white(&nc.target.display().to_string())
+    );
+    println!("{}", ui::dim(&bar));
     show_config_diff(&nc.target, &nc.new_file);
     loop {
         print!(
@@ -7655,9 +7685,11 @@ fn cmd_new_config(cli: &Cli) -> Result<Outcome, String> {
             }
             "" | "p" => {
                 // ---- Phase 3: prompt for each one individually ----
-                for nc in &conflicts {
-                    review_one_config(nc)?;
+                let total = conflicts.len();
+                for (i, nc) in conflicts.iter().enumerate() {
+                    review_one_config(nc, i + 1, total)?;
                 }
+                println!("\n{}", ui::blue(&format!("done — reviewed {total} file(s).")));
                 return Ok(Outcome::Ok);
             }
             other => {
