@@ -7441,13 +7441,13 @@ fn overwrite_with_orig(nc: &newconfig::NewConfig) -> Result<(), String> {
 /// and where one ends and the next begins.
 fn review_one_config(nc: &newconfig::NewConfig, idx: usize, total: usize) -> Result<(), String> {
     let bar = "─".repeat(60);
-    println!("\n{}", ui::dim(&bar));
+    println!("\n{}", ui::orange(&bar));
     println!(
         "{}  {}",
         ui::cyan(&format!("[{idx}/{total}]")),
         ui::white(&nc.target.display().to_string())
     );
-    println!("{}", ui::dim(&bar));
+    println!("{}", ui::orange(&bar));
     show_config_diff(&nc.target, &nc.new_file);
     loop {
         print!(

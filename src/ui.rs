@@ -66,6 +66,11 @@ pub fn white(s: &str) -> String {
 pub fn cyan(s: &str) -> String {
     paint("36", s)
 }
+/// Orange — the slacker banner's accent (256-colour 208). Used for section
+/// separators so they carry the tool's identity rather than fading into grey.
+pub fn orange(s: &str) -> String {
+    paint("38;5;208", s)
+}
 /// Dim / grey, for secondary text (versions, table rules, separators).
 pub fn dim(s: &str) -> String {
     paint("90", s)
