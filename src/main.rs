@@ -1324,6 +1324,161 @@ fn show_plan(plan: &[PlanItem], frozen: &[String], protected: &[String]) {
     }
 }
 
+/// The system's foundational shared libraries: a major-version bump of one of
+/// these is best applied outside a running graphical session. Matched by exact
+/// name plus any `aaa*` package (aaa_base, aaa_glibc-solibs, aaa_libraries, ...).
+const FOUNDATIONAL_LIBS: &[&str] = &[
+    "glibc",
+    "glibc-solibs",
+    "glibc-i18n",
+    "icu4c",
+    "openssl",
+    "openssl-solibs",
+    "lmdb",
+    "ncurses",
+    "readline",
+    "zlib",
+    "libxml2",
+];
+
+fn is_foundational(name: &str) -> bool {
+    name.starts_with("aaa") || FOUNDATIONAL_LIBS.contains(&name)
+}
+
+/// The major-version token of a Slackware version: its first dot/underscore
+/// component when it starts with a digit ("74.2" -> "74", "3.1.4" -> "3",
+/// "2.40" -> "2"). None if the version is non-numeric (e.g. a date/hash).
+fn major_token(version: &str) -> Option<&str> {
+    let first = version.split(['.', '_']).next()?;
+    first
+        .chars()
+        .next()
+        .filter(char::is_ascii_digit)
+        .map(|_| first)
+}
+
+/// Whether the process appears to run inside a graphical session.
+fn in_graphical_session() -> bool {
+    std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
+/// After an upgrade plan is shown, advise doing the upgrade from a console when
+/// it bumps the MAJOR version of a foundational library. Purely advisory: the
+/// caller's confirmation prompt proceeds unchanged. No-op otherwise.
+fn advise_console_for_foundational(plan: &[PlanItem]) {
+    // (name, from-version, to-version) for foundational major-version bumps.
+    let mut hits: Vec<(&str, &str, &str)> = Vec::new();
+    for it in plan {
+        if !matches!(it.action, InstallAction::Upgrade) {
+            continue;
+        }
+        if !is_foundational(&it.pkg.id.name) {
+            continue;
+        }
+        let Some(from_vab) = &it.from else { continue };
+        let old_v = from_vab.split('-').next().unwrap_or("");
+        let new_v = it.pkg.id.version.as_str();
+        if let (Some(a), Some(b)) = (major_token(old_v), major_token(new_v)) {
+            if a != b {
+                hits.push((it.pkg.id.name.as_str(), old_v, new_v));
+            }
+        }
+    }
+    if hits.is_empty() {
+        return;
+    }
+
+    let wn = hits.iter().map(|(n, _, _)| n.len()).max().unwrap_or(0).max(7);
+    let wf = hits.iter().map(|(_, f, _)| f.len()).max().unwrap_or(0).max(4);
+    let wt = hits.iter().map(|(_, _, t)| t.len()).max().unwrap_or(0).max(2);
+    let bar = "━".repeat(70);
+
+    println!();
+    println!("{}", ui::orange(&format!("  {bar}")));
+    println!(
+        "{}",
+        ui::orange("  ►  FOUNDATIONAL UPGRADE — a core library changes major version")
+    );
+    println!("{}", ui::orange(&format!("  {bar}")));
+    println!();
+    println!(
+        "     {}   {}   {}",
+        ui::white(&format!("{:<wn$}", "Package")),
+        ui::white(&format!("{:<wf$}", "From")),
+        ui::white("To")
+    );
+    println!(
+        "     {}   {}   {}",
+        "─".repeat(wn),
+        "─".repeat(wf),
+        "─".repeat(wt)
+    );
+    for (n, f, t) in &hits {
+        println!(
+            "     {}   {}   {}",
+            ui::orange(&format!("{n:<wn$}")),
+            ui::white(&format!("{f:<wf$}")),
+            ui::white(t)
+        );
+    }
+    println!();
+    println!(
+        "  {}",
+        ui::white("These apply more cleanly with no graphical session running")
+    );
+    println!(
+        "  {}",
+        ui::white("(ldconfig/relinking and stateful services).")
+    );
+    if in_graphical_session() {
+        println!(
+            "  {}",
+            ui::orange("You are in a graphical session — logging out and upgrading from a")
+        );
+        println!("  {}", ui::orange("console (tty) is recommended."));
+    } else {
+        println!("  {}", ui::dim("You are on a console — good to go."));
+    }
+    println!("{}", ui::orange(&format!("  {bar}")));
+    println!();
+}
+
+/// A big red warning banner shown before a dangerous operation on a foundational
+/// package (used by revert-pkg). Adapts its advice to whether a graphical
+/// session is running; the caller's confirmation still gates the action.
+fn danger_banner_foundational(names: &[String]) {
+    let bar = "═".repeat(70);
+    let red = |s: &str| println!("{}", ui::red(s));
+    println!();
+    red(&format!("  {bar}"));
+    red("   !  DANGER — reverting a foundational package");
+    red(&format!("  {bar}"));
+    println!();
+    println!(
+        "  {}",
+        ui::white("glibc / openssl / icu4c / aaa* and other core libraries are linked by")
+    );
+    println!(
+        "  {}",
+        ui::white("nearly every running binary and service. Downgrading one can leave the")
+    );
+    println!(
+        "  {}",
+        ui::white("system unable to run programs — including your shell.")
+    );
+    println!();
+    println!("  {} {}", ui::dim("Package(s):"), ui::white(&names.join(", ")));
+    println!();
+    if in_graphical_session() {
+        red("   You are in a graphical session (startx / display manager).");
+        red("   Log out and run this from a console (tty) before proceeding.");
+    } else {
+        red("   This is a dangerous operation. Proceed only if you are certain.");
+    }
+    println!("{}", ui::red(&format!("  {bar}")));
+    println!();
+}
+
 /// Informational note (mirrors how frozen packages are surfaced): list any plan
 /// package whose name is pinned, so the user sees the pin steered the source.
 /// No-op when nothing in the plan is pinned.
@@ -5088,6 +5243,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     note_optional_suggests(&plan, resolve);
     let conflicts = detect_conflicts(&plan, &installed, resolve);
     report_conflicts(&conflicts);
+    advise_console_for_foundational(&plan);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -5148,6 +5304,7 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     note_optional_suggests(&plan, resolve);
     let conflicts = detect_conflicts(&plan, &installed, resolve);
     report_conflicts(&conflicts);
+    advise_console_for_foundational(&plan);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -5485,6 +5642,21 @@ fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String
         }
     };
 
+    // Danger gate: reverting a foundational package (glibc/openssl/icu4c/aaa*)
+    // gets a big banner and an extra confirmation, adapted to graphical/tty.
+    if is_foundational(name) {
+        danger_banner_foundational(&[name.to_string()]);
+        if !cli.dry_run
+            && !confirm(
+                &format!("Revert the foundational package '{name}' anyway?"),
+                cli.yes,
+            )
+        {
+            println!("Cancelled.");
+            return Ok(Outcome::Ok);
+        }
+    }
+
     // Locate it in the cumulative archive (series from the archive's PACKAGES.TXT).
     let pkgs_url = format!("{}/PACKAGES.TXT", cfg.cumulative_url.trim_end_matches('/'));
     println!("  {}", ui::dim(&format!("fetching {pkgs_url}")));
@@ -5720,10 +5892,16 @@ fn dist_install_new(
     db: &PkgDb,
     installed: &[pkg::PkgId],
 ) -> Result<Vec<PlanItem>, String> {
+    // A distribution upgrade takes new packages from the official tree and the
+    // `patches` subtree ONLY — never extra/testing/pasture, and never a
+    // third-party repo, regardless of priority. `patches` is recognised the same
+    // way the rest of the dist code does: a subtree whose URL is the patches/
+    // tree. This is deliberately NOT priority-based: a testing repo ranked above
+    // official must never be pulled into a dist-upgrade.
     let at: Vec<String> = cfg
         .repos
         .iter()
-        .filter(|r| r.official)
+        .filter(|r| r.official || (r.subtree && r.url.contains("/patches")))
         .map(|r| format!("@{}", r.name))
         .collect();
     if at.is_empty() {
@@ -6124,6 +6302,21 @@ fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome
     println!("{}", ui::red("  and frozen packages. The blacklist is backed up and emptied."));
     println!("{}", ui::red("  A half-finished dist-upgrade can leave the system unbootable."));
     println!("{}", ui::red("  Take a VM snapshot / full backup first."));
+    if in_graphical_session() {
+        println!("{}", ui::red(&bar));
+        println!(
+            "{}",
+            ui::red("  You are in a GRAPHICAL session. Run a dist-upgrade from a console:")
+        );
+        println!(
+            "{}",
+            ui::red("  log out of X/Wayland, switch to a tty (e.g. Ctrl+Alt+F2), and run it")
+        );
+        println!(
+            "{}",
+            ui::red("  there. Proceeding from a graphical session is at your own risk.")
+        );
+    }
     println!("{}", ui::red(&bar));
 
     if !cli.yes {
@@ -6706,6 +6899,7 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     note_optional_suggests(&plan, resolve);
     let conflicts = detect_conflicts(&plan, &installed, resolve);
     report_conflicts(&conflicts);
+    advise_console_for_foundational(&plan);
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -10193,3 +10387,40 @@ mod freshness_tests {
     }
 }
 
+
+#[cfg(test)]
+mod foundational_tests {
+    use super::*;
+
+    #[test]
+    fn foundational_matches_aaa_prefix_and_list() {
+        assert!(is_foundational("aaa_base"));
+        assert!(is_foundational("aaa_glibc-solibs"));
+        assert!(is_foundational("glibc-solibs"));
+        assert!(is_foundational("icu4c"));
+        assert!(is_foundational("openssl"));
+        assert!(!is_foundational("vlc"));
+        assert!(!is_foundational("firefox"));
+        // Not a false-positive on a name that merely contains "aaa".
+        assert!(!is_foundational("libraaa"));
+    }
+
+    #[test]
+    fn major_token_reads_first_numeric_component() {
+        assert_eq!(major_token("74.2"), Some("74"));
+        assert_eq!(major_token("3.1.4"), Some("3"));
+        assert_eq!(major_token("2.40"), Some("2"));
+        assert_eq!(major_token("76"), Some("76"));
+        // Non-numeric (date/hash-style) versions have no major token.
+        assert_eq!(major_token("20240101"), Some("20240101"));
+        assert_eq!(major_token("git"), None);
+    }
+
+    #[test]
+    fn major_bump_detected_across_versions() {
+        // A real icu4c-style bump.
+        assert_ne!(major_token("74.2"), major_token("76.1"));
+        // A patch bump is NOT a major bump.
+        assert_eq!(major_token("3.1.4"), major_token("3.2.0"));
+    }
+}

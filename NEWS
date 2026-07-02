@@ -1,5 +1,7 @@
 Version Beta 0.10.0
 =====
+Fresh bump release, binaries for current (x86_64 and i686) builded with new shipped rust 1.96.0
+
 Add: Credentials system — zypper-modeled
  - HTTP Basic authentication for repos that require login:
 Named sets: /etc/slacker/credentials.d/NAME (username/password), referenced with flag credentials=NAME in repos line.
