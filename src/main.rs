@@ -5226,7 +5226,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
         return Ok(Outcome::NothingFound);
     }
     note_frozen_excluded(&frozen);
-    let todo = select_packages(todo, "install", cli.yes, cli.dry_run);
+    let todo = select_packages(todo, "install", &installed, cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
         return Ok(Outcome::Ok);
@@ -5274,6 +5274,23 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
                 frozen.push(p.id.name.clone());
                 return false;
             }
+            // `upgrade` acts only on packages that actually have a newer
+            // revision available — or the same version from a HIGHER-priority
+            // source, a genuine source migration, kept consistent with
+            // `upgrade-all`. A package already at the offered version+build from
+            // an equal-priority source has nothing to do, so it is dropped here.
+            // Without this, `upgrade @repo` lists every installed package in the
+            // repo (and would re-run upgradepkg over each), not just those with a
+            // pending update. `reinstall` shares collect_installed_targets and
+            // deliberately KEEPS the same-version candidate — which is why this
+            // filter lives here, in the upgrade command, not in that function.
+            if let Some(inst) = system::installed_by_name(&installed, &p.id.name) {
+                let higher = db.repo_priority(&p.repo)
+                    > db.installed_priority(inst, &cfg.tag_priorities);
+                if !higher && !inst.is_other_revision_of(&p.id) {
+                    return false;
+                }
+            }
             true
         })
         .collect();
@@ -5290,7 +5307,7 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     pin_excluded.dedup();
     note_pin_excluded(&pin_excluded);
     note_frozen_excluded(&frozen);
-    let todo = select_packages(todo, "upgrade", cli.yes, cli.dry_run);
+    let todo = select_packages(todo, "upgrade", &installed, cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
         return Ok(Outcome::Ok);
@@ -5351,7 +5368,7 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     pin_excluded.dedup();
     note_pin_excluded(&pin_excluded);
     note_frozen_excluded(&frozen);
-    let todo = select_packages(todo, "reinstall", cli.yes, cli.dry_run);
+    let todo = select_packages(todo, "reinstall", &installed, cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
         return Ok(Outcome::Ok);
@@ -5748,7 +5765,7 @@ fn cmd_download(
     // Present the matched packages and let the user choose which to fetch — the
     // same numbered-selection UI as install/upgrade/reinstall. A single match,
     // or `-y`, takes everything without a prompt.
-    let matched = select_packages(matched, "download", cli.yes, cli.dry_run);
+    let matched = select_packages(matched, "download", &[], cli.yes, cli.dry_run);
     if matched.is_empty() {
         println!("Nothing selected.");
         return Ok(Outcome::Ok);
@@ -6875,6 +6892,7 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let chosen = select_packages(
         ups.iter().map(|u| u.available).collect(),
         "upgrade",
+        &installed,
         cli.yes,
         cli.dry_run,
     );
@@ -7007,7 +7025,7 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     // Let the user deselect before resolving deps (same select-before-resolve
     // step the other install paths use; skipped under --yes/--dry-run/single).
     note_frozen_excluded(&frozen);
-    let todo = select_packages(todo, "install", cli.yes, cli.dry_run);
+    let todo = select_packages(todo, "install", &installed, cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
         return Ok(Outcome::Ok);
@@ -7492,6 +7510,7 @@ fn parse_selection(input: &str, max: usize) -> HashSet<usize> {
 fn select_packages<'a>(
     pkgs: Vec<&'a repo::AvailPkg>,
     verb: &str,
+    installed: &[pkg::PkgId],
     assume_yes: bool,
     dry_run: bool,
 ) -> Vec<&'a repo::AvailPkg> {
@@ -7500,12 +7519,30 @@ fn select_packages<'a>(
     }
     println!("{}", ui::blue(&format!("'{verb}' matched {} packages:", pkgs.len())));
     for (i, p) in pkgs.iter().enumerate() {
-        println!(
-            "  {}) {} {}{}",
-            ui::dim(&format!("{:>3}", i + 1)),
-            ui::cyan(&format!("[{}]", p.repo)),
+        // The target build: name in white, the rest dim (as before).
+        let target = format!(
+            "{}{}",
             ui::white(&p.id.name),
             ui::dim(&format!("-{}-{}-{}", p.id.version, p.id.arch, p.id.build))
+        );
+        // When this name is already installed as a DIFFERENT build, show the
+        // full-tag transition `old -> new`, so the user sees exactly which build
+        // is being replaced — the case that matters when a name is offered by
+        // several repos and an accidental cross-repo change is the worry. A
+        // fresh install (nothing installed by this name) or a same-build
+        // reinstall shows the target alone. `download` passes an empty installed
+        // set here, since a download replaces nothing.
+        let shown = match system::installed_by_name(installed, &p.id.name) {
+            Some(inst) if inst.tag() != p.id.tag() => {
+                format!("{} {}", ui::dim(&format!("{} ->", inst.tag())), target)
+            }
+            _ => target,
+        };
+        println!(
+            "  {}) {} {}",
+            ui::dim(&format!("{:>3}", i + 1)),
+            ui::cyan(&format!("[{}]", p.repo)),
+            shown
         );
     }
     print!(

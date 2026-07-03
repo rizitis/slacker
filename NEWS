@@ -1,3 +1,9 @@
+Version Beta 0.10.1
+=====
+Fix: bug for upgrade @repo command, was not correctly filtering pakcage list, thanks to @danix
+Update: make upgrade list look more verbose, thanks to @danix
+---
+
 Version Beta 0.10.0
 =====
 Fresh bump release, binaries for current (x86_64 and i686) builded with new shipped rust 1.96.0
