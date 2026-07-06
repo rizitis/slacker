@@ -1,0 +1,215 @@
+Slacker respect everything...
++=======================================================================================================================================================+
+| Upgrading kernel-firmware-20260626_7e909c7-noarch-1 package using /var/cache/slacker/packages/slackware/kernel-firmware-20260703_c95059a-noarch-1.txz |
++=======================================================================================================================================================+
+
+Pre-installing package kernel-firmware-20260703_c95059a-noarch-1...
+Removing package: kernel-firmware-20260626_7e909c7-noarch-1-upgraded-2026-07-06,14:16:31
+Installing package kernel-firmware-20260703_c95059a-noarch-1.txz:
+PACKAGE DESCRIPTION:
+# kernel-firmware (Firmware for the kernel)
+#
+# These are firmware files for the Linux kernel.
+#
+# You'll need these to use certain hardware drivers with Linux.
+#
+# Upstream site:
+#
+# git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git
+#
+Executing install script for kernel-firmware-20260703_c95059a-noarch-1.txz.
+Package kernel-firmware-20260703_c95059a-noarch-1.txz installed.
+Package kernel-firmware-20260626_7e909c7-noarch-1 upgraded with new package /var/cache/slacker/packages/slackware/kernel-firmware-20260703_c95059a-noarch-1.txz.
+
+
++===================================================================================================================================+
+| Upgrading kernel-generic-6.18.37-x86_64-1 package using /var/cache/slacker/packages/slackware/kernel-generic-6.18.38-x86_64-1.txz |
++===================================================================================================================================+
+
+Pre-installing package kernel-generic-6.18.38-x86_64-1...
+Removing package: kernel-generic-6.18.37-x86_64-1-upgraded-2026-07-06,14:16:53
+Installing package kernel-generic-6.18.38-x86_64-1.txz:
+PACKAGE DESCRIPTION:
+# kernel-generic (general purpose Linux kernel/modules)
+#
+# This is a Linux kernel with built-in support for SATA, NVMe, and most
+# commonly used filesystems, as well as a large collection of loadable
+# kernel modules.
+#
+# It is recommended to use an initrd with this kernel for best results.
+# For more information about creating an initrd, see the README.initrd
+# file in the /boot directory.
+#
+Executing install script for kernel-generic-6.18.38-x86_64-1.txz.
+The kernel-source is not installed yet,
+skipping /etc/geninitrd.d/pre-install/dkms-bcachefs DKMS pre-install script.
+We'll run geninitrd again when the kernel-source package is installed.
+The kernel-source is not installed yet,
+skipping /etc/geninitrd.d/pre-install/dkms-nvidia DKMS pre-install script.
+We'll run geninitrd again when the kernel-source package is installed.
+Generating /boot/initrd-6.18.38.img for use with the 6.18.38 kernel
+(using dracut):
+dracut[I]: Executing: /usr/bin/dracut --force --hostonly --verbose /boot/initrd-6.18.38.img 6.18.38
+dracut[I]: 11systemd-pcrextend: Could not find any command of '/systemd-pcrextend /systemd-pcrphase'!
+dracut[I]: 11systemd-pcrextend: Could not find any command of '/systemd-pcrextend /systemd-pcrphase'!
+dracut[I]: *** Including module: bash ***
+dracut[I]: *** Including module: i18n ***
+dracut[I]: No KEYMAP configured.
+dracut[I]: *** Including module: devicetree-firmware ***
+dracut[I]: *** Including module: fs-lib ***
+dracut[I]: *** Including module: kernel-modules ***
+dracut[I]: *** Including module: kernel-modules-extra ***
+dracut[I]: *** Including module: rootfs-block ***
+dracut[I]: *** Including module: terminfo ***
+dracut[I]: *** Including module: udev-rules ***
+dracut[I]: *** Including module: initqueue ***
+dracut[I]: *** Including module: usrmount ***
+dracut[I]: *** Including module: base ***
+dracut[I]: *** Including module: shell-interpreter ***
+dracut[I]: *** Including module: shutdown ***
+dracut[I]: *** Including modules done ***
+dracut[I]: *** Installing kernel module dependencies ***
+dracut[I]: *** Installing kernel module dependencies done ***
+dracut[I]: *** Resolving dependencies for executables and libraries ***
+dracut[I]: *** Resolving dependencies for executables and libraries done ***
+dracut[I]: *** Generating early-microcode cpio image ***
+dracut[I]: *** Constructing GenuineIntel.bin ***
+dracut[I]: *** Store current command line parameters ***
+dracut[I]: Stored kernel commandline:
+dracut[I]:  root=UUID=6b907740-9a7e-4fb0-9e6b-de71d4ed380a rootfstype=ext4 rootflags=rw,relatime
+dracut[I]: *** Stripping files ***
+dracut[I]: *** Stripping files done ***
+dracut[I]: *** Creating image file '/boot/initrd-6.18.38.img' ***
+dracut[I]: *** Hardlinking files ***
+dracut[I]: *** Hardlinking files done ***
+dracut[I]: Using auto-determined compression method 'zstd'
+dracut[I]: *** Creating initramfs image file '/boot/initrd-6.18.38.img' done ***
+Removing orphaned initrd: /boot/initrd-6.18.37.img
+Running /usr/sbin/update-grub (please wait)...
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-6.18.38
+Found initrd image: /boot/intel-ucode.img /boot/amd-ucode.img /boot/initrd-6.18.38.img
+Warning: os-prober will be executed to detect other bootable partitions.
+Its output will be used to detect bootable binaries on them and create new boot entries.
+Adding boot menu entry for UEFI Firmware Settings ...
+done
+Package kernel-generic-6.18.38-x86_64-1.txz installed.
+Package kernel-generic-6.18.37-x86_64-1 upgraded with new package /var/cache/slacker/packages/slackware/kernel-generic-6.18.38-x86_64-1.txz.
+
+
++=============================================================================================================================+
+| Upgrading kernel-headers-6.18.37-x86-1 package using /var/cache/slacker/packages/slackware/kernel-headers-6.18.38-x86-1.txz |
++=============================================================================================================================+
+
+Pre-installing package kernel-headers-6.18.38-x86-1...
+Removing package: kernel-headers-6.18.37-x86-1-upgraded-2026-07-06,14:17:09
+Installing package kernel-headers-6.18.38-x86-1.txz:
+PACKAGE DESCRIPTION:
+# kernel-headers (Linux kernel include files)
+#
+# These are the include files from the Linux kernel.
+#
+# You'll need these to compile most system software for Linux.
+#
+Executing install script for kernel-headers-6.18.38-x86-1.txz.
+Package kernel-headers-6.18.38-x86-1.txz installed.
+Package kernel-headers-6.18.37-x86-1 upgraded with new package /var/cache/slacker/packages/slackware/kernel-headers-6.18.38-x86-1.txz.
+
+
++=================================================================================================================================+
+| Upgrading kernel-source-6.18.37-noarch-1 package using /var/cache/slacker/packages/slackware/kernel-source-6.18.38-noarch-1.txz |
++=================================================================================================================================+
+
+Pre-installing package kernel-source-6.18.38-noarch-1...
+Removing package: kernel-source-6.18.37-noarch-1-upgraded-2026-07-06,14:17:10
+Installing package kernel-source-6.18.38-noarch-1.txz:
+PACKAGE DESCRIPTION:
+# kernel-source (Linux kernel source)
+#
+# Source code for Linus Torvalds' Linux kernel.
+#
+# This is the complete and unmodified source code for the Linux kernel.
+#
+Executing install script for kernel-source-6.18.38-noarch-1.txz.
+Checking status of bcachefs kernel module...
+  No DKMS installed bcachefs kernel module found.
+Checking status of NVIDIA kernel module...
+  Found NVIDIA_MODULE = nvidia/595.58.03
+  Installing NVIDIA kernel module nvidia/595.58.03 for kernel version 6.18.38:
+The kernel is built without module signing facility, modules won't be signed
+
+Building module(s)............. done.
+Installing /lib/modules/6.18.38/kernel/drivers/video/nvidia.ko
+Installing /lib/modules/6.18.38/kernel/drivers/video/nvidia-uvm.ko
+Installing /lib/modules/6.18.38/kernel/drivers/video/nvidia-modeset.ko
+Installing /lib/modules/6.18.38/kernel/drivers/video/nvidia-drm.ko
+Installing /lib/modules/6.18.38/kernel/drivers/video/nvidia-peermem.ko
+Running depmod... done.
+Generating /boot/initrd-6.18.38.img for use with the 6.18.38 kernel
+(using dracut):
+dracut[I]: Executing: /usr/bin/dracut --force --hostonly --verbose /boot/initrd-6.18.38.img 6.18.38
+dracut[I]: 11systemd-pcrextend: Could not find any command of '/systemd-pcrextend /systemd-pcrphase'!
+dracut[I]: 11systemd-pcrextend: Could not find any command of '/systemd-pcrextend /systemd-pcrphase'!
+dracut[I]: *** Including module: bash ***
+dracut[I]: *** Including module: i18n ***
+dracut[I]: No KEYMAP configured.
+dracut[I]: *** Including module: devicetree-firmware ***
+dracut[I]: *** Including module: fs-lib ***
+dracut[I]: *** Including module: kernel-modules ***
+dracut[I]: *** Including module: kernel-modules-extra ***
+dracut[I]: *** Including module: rootfs-block ***
+dracut[I]: *** Including module: terminfo ***
+dracut[I]: *** Including module: udev-rules ***
+dracut[I]: *** Including module: initqueue ***
+dracut[I]: *** Including module: usrmount ***
+dracut[I]: *** Including module: base ***
+dracut[I]: *** Including module: shell-interpreter ***
+dracut[I]: *** Including module: shutdown ***
+dracut[I]: *** Including modules done ***
+dracut[I]: *** Installing kernel module dependencies ***
+dracut[I]: *** Installing kernel module dependencies done ***
+dracut[I]: *** Resolving dependencies for executables and libraries ***
+dracut[I]: *** Resolving dependencies for executables and libraries done ***
+dracut[I]: *** Generating early-microcode cpio image ***
+dracut[I]: *** Constructing GenuineIntel.bin ***
+dracut[I]: *** Store current command line parameters ***
+dracut[I]: Stored kernel commandline:
+dracut[I]:  root=UUID=6b907740-9a7e-4fb0-9e6b-de71d4ed380a rootfstype=ext4 rootflags=rw,relatime
+dracut[I]: *** Stripping files ***
+dracut[I]: *** Stripping files done ***
+dracut[I]: *** Creating image file '/boot/initrd-6.18.38.img.tmp' ***
+dracut[I]: *** Hardlinking files ***
+dracut[I]: *** Hardlinking files done ***
+dracut[I]: Using auto-determined compression method 'zstd'
+dracut[I]: *** Creating initramfs image file '/boot/initrd-6.18.38.img.tmp' done ***
+dracut[I]: *** Moving image file '/boot/initrd-6.18.38.img.tmp' to '/boot/initrd-6.18.38.img' ***
+dracut[I]: *** Moving image file '/boot/initrd-6.18.38.img.tmp' to '/boot/initrd-6.18.38.img' done ***
+No orphaned initrds found in /boot.
+Running /usr/sbin/update-grub (please wait)...
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-6.18.38
+Found initrd image: /boot/intel-ucode.img /boot/amd-ucode.img /boot/initrd-6.18.38.img
+Warning: os-prober will be executed to detect other bootable partitions.
+Its output will be used to detect bootable binaries on them and create new boot entries.
+Adding boot menu entry for UEFI Firmware Settings ...
+done
+Package kernel-source-6.18.38-noarch-1.txz installed.
+Package kernel-source-6.18.37-noarch-1 upgraded with new package /var/cache/slacker/packages/slackware/kernel-source-6.18.38-noarch-1.txz.
+
+
++=========================================================================================================================+
+| Upgrading libkexiv2-26.04.2-x86_64-1 package using /var/cache/slacker/packages/slackware/libkexiv2-26.04.3-x86_64-1.txz |
++=========================================================================================================================+
+
+Pre-installing package libkexiv2-26.04.3-x86_64-1...
+Removing package: libkexiv2-26.04.2-x86_64-1-upgraded-2026-07-06,14:18:04
+Installing package libkexiv2-26.04.3-x86_64-1.txz:
+PACKAGE DESCRIPTION:
+# libkexiv2 (wrapper library for exiv2)
+#
+# Libkexiv2 is a KDE wrapper around the Exiv2 library to manipulate
+# image metadata.
+#
+Executing install script for libkexiv2-26.04.3-x86_64-1.txz.
+Package libkexiv2-26.04.3-x86_64-1.txz installed.
+Package libkexiv2-26.04.2-x86_64-1 upgraded with new package /var/cache/slacker/packages/slackware/libkexiv2-26.04.3-x86_64-1.txz.
