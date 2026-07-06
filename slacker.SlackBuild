@@ -110,6 +110,11 @@ mkdir -p $PKG/usr/man/man8
 install -m0644 man/slacker.8 $PKG/usr/man/man8/slacker.8
 gzip -9 $PKG/usr/man/man8/slacker.8
 
+# bash-completion (lazy-loaded by command name)
+mkdir -p $PKG/usr/share/bash-completion/completions
+install -m0644 contrib/slacker-completion.bash \
+  $PKG/usr/share/bash-completion/completions/slacker
+
 # Copy the slack-desc and a custom doinst.sh
 mkdir -p $PKG/install
 cat $CWD/slack-desc > $PKG/install/slack-desc
