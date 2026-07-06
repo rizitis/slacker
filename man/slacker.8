@@ -935,6 +935,11 @@ Absent or empty, \fIupgrade-dist\fR uses the configured mirrors as usual.
 .TP
 .I /etc/slacker/templates/
 Generated and user\-created template files.
+.TP
+.I /usr/share/bash-completion/completions/slacker
+Bash completion for subcommands, flags, installed package names, repo names,
+.RI ( @repo / @_tag )
+selectors and template names. Loaded automatically by bash\-completion on first use.
 .SH DEPENDENCIES
 When a package in a repository is accompanied by a
 .I .dep

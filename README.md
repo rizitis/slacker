@@ -30,6 +30,13 @@ A Slackware package manager in Rust with full **slackpkg action parity**, plus
   system tools Slackware already ships, so no extra Rust deps.
 - Everything a user edits is plain text.
 
+## Shell completion
+
+A bash-completion ships with the package (installed to
+`/usr/share/bash-completion/completions/slacker`) and completes subcommands,
+flags, installed package names, repo names, `@repo`/`@_tag` selectors and
+template names. It loads automatically in a new shell.
+
 # Wiki
 
 Everything you need to know about slacker: [Wiki](https://forge.slackware.nl/rizitis/slacker/wiki)
