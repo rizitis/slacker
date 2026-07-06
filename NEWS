@@ -1,6 +1,8 @@
 Version Beta 0.10.2
 =====
 Fix: bug arch guard: accept fw and x86 packages, like the available-list filter
+ - upgrade | kernel-headers    | 6.18.37-x86-1 -> 6.18.38-x86-1                         | slackware
+is valid and should escape fro checks.
 Fix: bug in pin: store the pin name verbatim, not as a compiled pattern, thanks to Claude Fable 5
  - dotted/'+' pin names were silently inert
 ---
