@@ -30,7 +30,11 @@ _slacker_config_dir() {
 _slacker_installed_names() {
     local db=/var/adm/packages
     [[ -d $db ]] || return
-    command ls "$db" 2>/dev/null | sed -E 's/(-[^-]+){3}$//'
+    # Skip leftover `-upgraded-<timestamp>` records (interrupted upgradepkg);
+    # slacker itself skips them too (system.rs is_removed_record).
+    command ls "$db" 2>/dev/null \
+        | grep -Ev -- '-upgraded-[0-9]' \
+        | sed -E 's/(-[^-]+){3}$//'
 }
 
 # Repo NAMES from ${config}/repos: binary-repo lines only (3rd field is a
@@ -66,6 +70,7 @@ _slacker_build_tags() {
         fi
         if [[ -d $db ]]; then
             command ls "$db" 2>/dev/null \
+                | grep -Ev -- '-upgraded-[0-9]' \
                 | sed -E 's/.*-([^-]+)$/\1/; s/^[0-9]+//' \
                 | grep -v '^$'
         fi
