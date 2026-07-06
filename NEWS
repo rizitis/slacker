@@ -1,3 +1,21 @@
+Version Beta 0.10.3
+=====
+- Updates: Thanks to @danix !!!
+  - New: bash tab-completion for all 38 subcommands. Completes flags,
+  installed package names, repo names, @repo / @_tag selectors,
+  template names, and pin's `repo:` prefix. Installed by the package
+  to /usr/share/bash-completion/completions/slacker and loaded
+  automatically in new shells. First external contribution — thanks
+  to danix! (PR #3)
+  - Completion ignores leftover `-upgraded-<timestamp>` records in
+  /var/adm/packages, so an interrupted upgradepkg never produces
+  phantom names or garbage tags at the prompt.
+  - Developer tooling: contrib/check-completion-drift.sh verifies the
+  completion's command list against the live `slacker --help`; the
+  SlackBuild now runs it after the tests, so a stale completion
+  fails the build instead of shipping. (repo-only, not installed)
+---
+
 Version Beta 0.10.2
 =====
 Fix: bug arch guard: accept fw and x86 packages, like the available-list filter

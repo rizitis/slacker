@@ -70,6 +70,9 @@ fi
 # run tests
 cargo test
 
+# completion must list exactly the binary's subcommands
+sh contrib/check-completion-drift.sh target/release/slacker
+
 mkdir -p $PKG/usr/local/sbin
 install -m0755 target/release/slacker $PKG/usr/local/sbin/slacker
 
