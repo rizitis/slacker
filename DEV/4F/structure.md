@@ -41,7 +41,7 @@ slacker/
     ├── template.rs    templates (generate/load/delete, includes)
     ├── newconfig.rs   .new config file handling
     ├── banner.rs      SLACKWARE block-art banner (include_str! .nfo, TTY-gated, 256-colour, NO_COLOR aware) for upgrade-dist/upgrade-all
-    ├── banner2.rs     secondary block-art banner variant
+    ├── banner2.rs     the slacker masthead: generated Cretan-labyrinth emblem + wordmark + version (CARGO_PKG_VERSION), TTY-gated, shown once at the top of every command
     └── ui.rs           minimal ANSI colouring (TTY + NO_COLOR aware), plan tables
 ```
 
@@ -148,23 +148,28 @@ A PATTERN may be:
 An unknown `@repo`/`@tag` gives a helpful error with a "did you mean" suggestion
 (edit-distance) and lists the available repos and tags. When a pattern matches
 more than one package, install/upgrade/reinstall/remove show a numbered list
-(Enter = all, numbers/ranges like `1 3 5` or `2-4`, `n` = cancel).
+(Enter = all, numbers/ranges like `1 3 5` or `2-4`, `n` = cancel). Each row shows
+the candidate's `[repo]`; when that name is already installed as a different
+build, the row shows the full-tag transition `old-tag -> new-tag`, so exactly
+which build would be replaced (and from which repo) is visible at the moment of
+choice — the case that matters when a name overlaps several repos.
 There is **no `*` wildcard** for command-line selection: an unquoted `*` is
 expanded by the *shell* into the current directory's filenames before slacker
 runs, so when many arguments match no package (or carry whitespace) slacker treats
 it as a shell-expanded glob and **refuses the command without changing anything** —
 quote a literal pattern, or use `@repo`.
 
-### Actions (35; slackpkg parity + extras)
+### Actions (38; slackpkg parity + extras)
 
 ```
 update [gpg]    search        file-search   info         list-repos
 status          find-mirror   install       upgrade      reinstall
 remove          download      revert-pkg    clean-cache  upgrade-all
 install-new     upgrade-dist  clean-system  frozen       unfrozen
-new-config      check-updates show-changelog history     add-repo
-del-repo        add-tag       del-tag       vet-repo     trust-repo
-distrust-repo   generate-template  install-template  remove-template  delete-template
+pin             unpin         new-config    check-updates show-changelog
+history         add-repo      del-repo      pri-repo     add-tag
+del-tag         vet-repo      trust-repo    distrust-repo
+generate-template  install-template  remove-template  delete-template
 ```
 - `list-repos` / `status` - inspect repos (priority, verify, flags, installed
   counts) and health-check the whole setup. An installed package's build tag is
@@ -185,10 +190,13 @@ distrust-repo   generate-template  install-template  remove-template  delete-tem
   `--installed` (only currently-installed, with install date), `--removed`
   (left the system), `--upgraded` (upgrade/reinstall events), `--last N`,
   `--since YYYY-MM-DD`. Paged on a TTY like `show-changelog`.
-- `add-repo`/`del-repo`/`add-tag`/`del-tag` - edit the `repos` file (validated,
-  with confirmation). `add-repo` flags: `official`, `immutable`, `subtree`,
-  `insecure`, `verify=...`, `credentials=NAME`. Adding a `credentials=` repo over
-  plaintext http is refused unless `insecure` is also given.
+- `add-repo`/`del-repo`/`pri-repo`/`add-tag`/`del-tag` - edit the `repos` file
+  (validated, with confirmation). `add-repo` flags: `official`, `immutable`,
+  `subtree`, `insecure`, `verify=...`, `credentials=NAME`. Adding a
+  `credentials=` repo over plaintext http is refused unless `insecure` is also
+  given. `pri-repo PRIORITY NAME` changes one repo's priority in place; it
+  refuses an unknown repo (suggesting the closest match) or a priority already
+  in use (binary-repo priorities stay distinct).
 - `vet-repo`/`trust-repo`/`distrust-repo` - the quarantine model: re-vet a repo,
   lift a quarantine (override the verdict), or freeze a repo yourself.
 - `install-new [REPO...]` - official repos only by default; name repos to opt in.
@@ -210,6 +218,10 @@ distrust-repo   generate-template  install-template  remove-template  delete-tem
   partial name never matches a longer rule and the wrong line is never removed;
   with no argument it lists the current rules. Reuses `config::strip_comment` so
   canonicalisation matches the parser exactly.
+- `pin REPO:PACKAGE` / `unpin PACKAGE...` - add and remove `@repo 100% name` pin
+  lines in the `blacklist` file (take that package only from that repo, exact
+  name — a pin never freezes; see the blacklist section). `unpin` removes by
+  package name, literally.
 - `revert-pkg NAME` - roll an official package back to a previous -current
   version. Lists earlier builds from removed_packages, fetches the chosen one
   from the cumulative archive (CUMULATIVE_URL), GPG-verifies it against the
@@ -219,6 +231,12 @@ distrust-repo   generate-template  install-template  remove-template  delete-tem
   enters the priority model.
 - `show-changelog [REPO]` - print a ChangeLog: the official repo by default, or a
   named repo (fetched on demand if not cached).
+- `upgrade PATTERN...` acts only on packages with a **pending update**: a
+  package already installed at the offered version+build from an equal-priority
+  source is skipped (so `upgrade @slackware` lists the real updates, not every
+  installed package), while the same version offered by a **higher**-priority
+  repo still counts (a genuine source migration, consistent with `upgrade-all`).
+  `reinstall` is the command that acts on same-version packages.
 - `search` matches an **exact** package name (case-insensitive); use `info` or
   `file-search` for broader lookups.
 - `find-mirror` - probe the official Slackware mirror list and rank the fastest,
@@ -236,7 +254,11 @@ distrust-repo   generate-template  install-template  remove-template  delete-tem
   the blacklist, then upgrades **every** installed package to the target build
   **bypassing the priority/blacklist/frozen guards on purpose** (core first, the
   GnuPG verification chain last), runs install-new + clean-system + a second pass,
-  and ends with a kernel/initrd + bootloader reminder. Downloads in batches that
+  and ends with a kernel/initrd + bootloader reminder. The dist's install-new
+  step draws from the official tree **and its `patches/` subtree only** — never
+  priority-ranked, never a third-party repo — so `testing`/external packages are
+  not dragged into a release move (the everyday `install-new` command is the
+  priority-ranked one). Downloads in batches that
   are deleted as they install (no whole-release disk spike). With
   `DISTRO_UPGRADE_MIRROR` set it upgrades from a local tree/clone/ISO instead of
   the network. `--yes` non-interactive, `--dry-run` shows the plan + URL transform
@@ -301,7 +323,7 @@ reinstall, upgrade-all, install-new, install-template.
 ### Build_and_Tests
 
 > NO root needed for build & tests (only the mutating actions need root).
-> 170 unit tests (+1 ignored), all passing; `cargo build` is warning-clean.
+> 189 unit tests (188 run + 1 ignored [TLS]), all passing; `cargo build` is warning-clean.
 
 ```
 cargo build --release
@@ -365,6 +387,11 @@ sed -i 's|^CACHE_DIR=.*|CACHE_DIR=/tmp/slk/cache|' /tmp/slk/slacker.conf
   release-mismatch guard (it changes the release on purpose). Core packages go
   first and the GnuPG chain (`DIST_GPG_LAST`) last, so signature verification
   stays working throughout.
+- Foundational-package safety: a plan that bumps the **major version** of a
+  foundational library (glibc & co., any `aaa_*`) shows an orange advisory
+  before the confirm — apply from console/runlevel 3, not inside a running
+  graphical session (detected and warned). `revert-pkg` shows a red DANGER
+  banner before rolling one **back**. Advisory only; nothing is blocked.
 - `slacker ... | head` (and any piped, early-closed output) does not panic:
   SIGPIPE is reset to its default disposition at startup, so a broken pipe ends
   the process quietly instead of erroring on the next write.

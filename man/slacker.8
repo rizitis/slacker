@@ -1,4 +1,4 @@
-.TH SLACKER 8 "July 2026" "slacker 0.10.1" "Slackware Package Management"
+.TH SLACKER 8 "July 2026" "slacker 0.10.2" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -155,7 +155,17 @@ or
 instead).
 .TP
 .BI upgrade " PATTERN..."
-Upgrade installed packages to the newest available revision.
+Upgrade installed packages to the newest available revision. Only packages with
+a pending update are acted on: a package already installed at the offered
+version and build from an equal\-priority source is skipped (so
+.B upgrade @slackware
+lists the packages that actually have updates, not every installed package),
+while the same version offered by a
+.B higher\-priority
+repository still counts \(em a genuine source migration, consistent with
+.BR upgrade-all .
+To reinstall a package that is already current, use
+.BR reinstall .
 .TP
 .BI reinstall " PATTERN..."
 Reinstall the currently installed version.
@@ -197,7 +207,12 @@ successful revert it offers to
 .B frozen
 the package so a later
 .B upgrade-all
-will not pull it forward again. Requires
+will not pull it forward again. Reverting a
+.B foundational
+package (glibc and friends, any
+.IR aaa_* \|
+package) shows an unmissable DANGER banner first \(em rolling one of these back
+can break the running system. Requires
 .B REVERT
 enabled in
 .IR slacker.conf .
@@ -205,6 +220,17 @@ enabled in
 .TP
 .B upgrade-all
 Upgrade every installed package that has a newer revision available.
+.IP
+When a plan (from
+.BR install ", " upgrade " or " upgrade-all )
+bumps the
+.B major version
+of a foundational library (glibc and friends, any
+.IR aaa_* \|
+package), a prominent advisory is shown before the confirmation: such upgrades
+apply most cleanly from the console (runlevel 3), outside a running graphical
+session \(em which is detected and warned about. The advisory never blocks;
+it only informs.
 .TP
 .B install-new
 Install every package the selected repositories provide that is not already
@@ -734,7 +760,11 @@ or
 .IR 2-4 ,
 or
 .I n
-to cancel). A series name (a, ap, kde, y, ...) matches exactly that series
+to cancel). Each row shows the candidate's repository; when that package is
+already installed as a different build, the row shows the full transition
+.IR old\-tag " -> " new\-tag ,
+so exactly which installed build would be replaced \(em and from which
+repository \(em is visible at the moment of choice. A series name (a, ap, kde, y, ...) matches exactly that series
 rather than every package whose name contains those letters.
 .TP
 .I /etc/slacker/mirrors

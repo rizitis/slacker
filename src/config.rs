@@ -376,7 +376,7 @@ impl Config {
         self.blacklist
             .iter()
             .filter(|r| r.pin)
-            .find(|r| r.name.as_ref().map_or(false, |re| re.as_str() == name))
+            .find(|r| r.pin_name.as_deref() == Some(name))
             .and_then(|r| r.repo.as_deref())
     }
 
@@ -385,7 +385,7 @@ impl Config {
         self.blacklist
             .iter()
             .filter(|r| r.pin)
-            .filter_map(|r| Some((r.name.as_ref()?.as_str(), r.repo.as_deref()?)))
+            .filter_map(|r| Some((r.pin_name.as_deref()?, r.repo.as_deref()?)))
             .collect()
     }
 
@@ -580,6 +580,13 @@ pub struct BlacklistRule {
     repo: Option<String>,
     series: Option<String>,
     name: Option<Regex>,
+    /// For a PIN: the EXACT package name, verbatim as written in the rule. A pin
+    /// is not a pattern, so its name must never pass through `compile_pattern`
+    /// (glob_to_regex escapes `.`/`+`, turning `python3.11` into the regex
+    /// source `python3\.11` — which then never string-compares equal to the
+    /// real name, silently making every dotted/`+` pin inert). Stored and
+    /// compared as a plain string instead. None for freeze/series rules.
+    pin_name: Option<String>,
     /// True for a positive PIN (`@repo 100% pkg`): "only ever take pkg from this
     /// repo, ignoring priority". A pin is the opposite of a freeze, so it must
     /// NOT match in the freeze path (`matches` early-returns false on it); it is
@@ -629,6 +636,13 @@ impl BlacklistRule {
 
     /// A short human description of what this rule freezes.
     pub fn describe(&self) -> String {
+        // A pin is the positive rule, not a freeze — describe it as such (it can
+        // reach here via `frozen "@repo 100% pkg"`, which parses as a pin).
+        if self.pin {
+            let repo = self.repo.as_deref().unwrap_or("?");
+            let name = self.pin_name.as_deref().unwrap_or("?");
+            return format!("pins '{name}' to repo '{repo}' (not a freeze)");
+        }
         let scope = match &self.repo {
             Some(r) => format!("in repo '{r}' only"),
             None => "in all repos".to_string(),
@@ -748,9 +762,28 @@ pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
                     "'{raw}': '{name}' is not a valid package name (no leading/trailing '-')"
                 ));
             }
+            if name.contains('/') {
+                return Err(format!(
+                    "'{raw}': '{name}' is not a valid package name (a name never contains '/'; \
+                     to freeze a series use `frozen` with `{name}` instead)"
+                ));
+            }
             pin = true;
             rest = name;
         }
+    }
+    // A pin's name is EXACT and is never a pattern: return it verbatim, without
+    // ever passing it through compile_pattern (whose glob escaping would turn
+    // `python3.11` into the regex source `python3\.11` and break the exact
+    // string comparison in pinned_repo/pins — the dotted-pin bug).
+    if pin {
+        return Ok(BlacklistRule {
+            repo,
+            series: None,
+            name: None,
+            pin_name: Some(rest.to_string()),
+            pin: true,
+        });
     }
     if let Some(series) = rest.strip_suffix('/') {
         let series = series.trim();
@@ -761,11 +794,12 @@ pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
             repo,
             series: Some(series.to_string()),
             name: None,
+            pin_name: None,
             pin: false,
         });
     }
     let re = compile_pattern(rest).map_err(|e| format!("'{raw}': {e}"))?;
-    Ok(BlacklistRule { repo, series: None, name: Some(re), pin })
+    Ok(BlacklistRule { repo, series: None, name: Some(re), pin_name: None, pin: false })
 }
 
 /// Parse the whole `blacklist` file, warning about and skipping any malformed
@@ -1397,6 +1431,59 @@ mod tests {
         let anchored = parse_blacklist_rule("^vlc-[0-9]").unwrap();
         assert!(anchored.matches("vlc-3-x86_64-1", None, None));
         assert!(!anchored.matches("vlc-plugin-3-x86_64-1", None, None)); // anchored: no leading match
+    }
+
+    #[test]
+    fn dotted_pin_resolves_by_name() {
+        // Regression: a pin name must be stored VERBATIM, never through
+        // compile_pattern — glob escaping turned `python3.11` into the regex
+        // source `python3\.11`, so pinned_repo()/pins() (exact string compare)
+        // never found it and every dotted/`+` pin was silently inert, while the
+        // wiki advertises dotted names as valid. Names with '.' and '+' must
+        // resolve and display exactly as written.
+        let bl = parse_blacklist(
+            "@ponce 100% python3.11\n@gfs 100% webkit2gtk6.0\n@alienbob 100% gtk+\n",
+        );
+        let cfg = Config {
+            arch: "x86_64".into(),
+            cache_dir: std::path::PathBuf::new(),
+            state_dir: std::path::PathBuf::new(),
+            pkg_db_dir: std::path::PathBuf::new(),
+            adm_dir: std::path::PathBuf::new(),
+            blacklist: bl,
+            repos: vec![],
+            resolve_deps: true,
+            ignore_tags: vec![],
+            tag_priorities: vec![],
+            config_dir: std::path::PathBuf::new(),
+            verify: VerifyPolicy::All,
+            max_parallel: 1,
+            revert_enabled: true,
+            cumulative_url: String::new(),
+            distro_upgrade_mirror: None,
+        };
+        // Lookup by the real name works for dotted and '+' names.
+        assert_eq!(cfg.pinned_repo("python3.11"), Some("ponce"));
+        assert_eq!(cfg.pinned_repo("webkit2gtk6.0"), Some("gfs"));
+        assert_eq!(cfg.pinned_repo("gtk+"), Some("alienbob"));
+        // The dot is literal, not a wildcard: `python3x11` must NOT match.
+        assert_eq!(cfg.pinned_repo("python3x11"), None);
+        // pins() displays the exact names, never an escaped regex source.
+        let mut pins = cfg.pins();
+        pins.sort();
+        assert_eq!(
+            pins,
+            vec![
+                ("gtk+", "alienbob"),
+                ("python3.11", "ponce"),
+                ("webkit2gtk6.0", "gfs"),
+            ]
+        );
+        // A pin still never freezes.
+        assert!(!cfg.blacklist_hit("python3.11-3.11.9-x86_64-1", None, Some("ponce")));
+        // A '/' in a pin name is rejected (it would otherwise silently become a
+        // series FREEZE, losing the pin entirely).
+        assert!(parse_blacklist_rule("@ponce 100% kde/").is_err());
     }
 
     #[test]

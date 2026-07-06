@@ -18,7 +18,7 @@ Everything is synchronous. Errors are String (Result<_, String>) on purpose —
 simple, greppable messages, no error crates.
 
 --------------------------------------------------------------------------------
-pkg.rs            (~192 lines)   Slackware package-name parsing
+pkg.rs            (~255 lines)   Slackware package-name parsing
 --------------------------------------------------------------------------------
 Owns the PkgId type: a parsed "name-version-arch-build" 4-tuple, the atom the
 whole program passes around.
@@ -37,7 +37,7 @@ LOOK HERE IF: package names parse wrong (epoch, odd arch like fw/x86, names with
 dashes). Parsing is positional from the right, so unusual names are the risk.
 
 --------------------------------------------------------------------------------
-config.rs         (~1230 lines)  read & model /etc/slacker
+config.rs         (~1494 lines)  read & model /etc/slacker
 --------------------------------------------------------------------------------
 Parses the plain-text config files into typed structs. No network, no side
 effects beyond reading files.
@@ -104,7 +104,7 @@ repos-line form, or to change arch detection. Add a KEY in Config::load's
 key/val handling; add a struct field alongside.
 
 --------------------------------------------------------------------------------
-repo.rs           (~690 lines)   fetch + parse a repo's metadata
+repo.rs           (~911 lines)   fetch + parse a repo's metadata
 --------------------------------------------------------------------------------
 Turns a Repo's remote files into AvailPkg records and keeps the cache fresh.
 
@@ -144,7 +144,7 @@ GOTCHA: always route new metadata reads through read_text_lossy, or a single
 non-UTF-8 byte will crash a command (this was a real bug on the extras repo).
 
 --------------------------------------------------------------------------------
-revert.rs         (~227 lines)   rollback helpers for revert-pkg
+revert.rs         (~242 lines)   rollback helpers for revert-pkg
 --------------------------------------------------------------------------------
 Pure functions (no network, no side effects) behind the `revert-pkg` command.
 Heavily unit-tested; the command wiring + the guards live in main.rs.
@@ -165,7 +165,7 @@ URL is wrong. Data correctness lives here; the REVERT / -current / archive guard
 and the GPG verification live in main.rs (cmd_revert_pkg / revert_fetch_and_gpg_verify).
 
 --------------------------------------------------------------------------------
-pkgdb.rs          (~950 lines)   the unified, priority-ordered brain
+pkgdb.rs          (~1250 lines)   the unified, priority-ordered brain
 --------------------------------------------------------------------------------
 Merges every repo's AvailPkg list into one DB and answers the hard questions.
 This is where most behavioural bugs live — read carefully before changing.
@@ -228,7 +228,7 @@ There are unit tests pinning this (sbo_not_migrated, no_downgrade,
 genuine_self_upgrade, higher_priority_same_version) — keep them green.
 
 --------------------------------------------------------------------------------
-download.rs       (~360 lines)   bytes over http/https/file
+download.rs       (~455 lines)   bytes over http/https/file
 --------------------------------------------------------------------------------
 The only module that talks to the network (via ureq + rustls).
 
@@ -262,7 +262,7 @@ User-Agent. TLS is NO system OpenSSL (ureq's rustls TLS); a CA/proxy problem
 surfaces here. Credential POLICY lives in credentials.rs, not here.
 
 --------------------------------------------------------------------------------
-credentials.rs    (~300 lines)   repository login credentials (HTTP Basic)
+credentials.rs    (~327 lines)   repository login credentials (HTTP Basic)
 --------------------------------------------------------------------------------
 Repository authentication, modelled on zypper. A secret NEVER lives in `repos`;
 it lives in files the admin controls under /etc/slacker, and travels only in an
@@ -293,19 +293,33 @@ permissions), base64/header format, or the credentials.d / credentials.cat
 parsing. The http-vs-https decision is HERE (build_registry), not in download.rs.
 
 --------------------------------------------------------------------------------
-system.rs         (~117 lines)    the bridge to real pkgtools
+system.rs         (~212 lines)    the bridge to real pkgtools
 --------------------------------------------------------------------------------
 Reads the installed-package DB and shells out to the Slackware tools. This is
 the only module that mutates the system.
 
   installed_packages   parse PKG_DB_DIR (default ADM_DIR/packages, i.e.
-                   /var/adm/packages)
+                   /var/adm/packages). SKIPS `-upgraded-<timestamp>` leftovers
+                   (a crashed upgradepkg can strand one in the live DB dir);
+                   without this they pollute attribution and clean-system
   is_installed / installed_by_name   lookups over that list
   install / upgrade_only / reinstall / remove_package
                    thin wrappers over installpkg/upgradepkg/removepkg
+  upgrade_install_new   `upgradepkg --install-new` — what upgrade-dist uses for
+                   the core set (packages get RENAMED across releases, e.g. 15.0
+                   glibc-solibs -> -current aaa_glibc-solibs; plain upgradepkg
+                   would skip the new name as "not installed")
+  record_present   does PKG_DB_DIR contain this record? The dist core's
+                   post-install sanity check: upgradepkg/installpkg create the
+                   record on success, so its absence means the install did not
+                   take (disk full mid-extract) and the dist aborts instead of
+                   marching on. Reads system state only — never parses pkgtools.
   cached_pkg_path  CACHE_DIR/packages/<repo>/<filename> — the download target
   version_codename  read VERSION_CODENAME from /etc/os-release (None if absent);
                    revert-pkg's -current-only guard uses it (fail-closed)
+  version_id       read VERSION_ID the same way (e.g. "15.0"); upgrade-dist
+                   identifies the running release from codename + this
+                   (codename `current` wins — VERSION_ID reads "15.0+" there)
 
 LOOK HERE IF: install/upgrade/remove behaves differently from the native tools,
 or the installed-DB parse is wrong. slacker is intentionally a THIN layer here:
@@ -378,7 +392,7 @@ takes an optional repo name; the on-demand fetch for an uncached repo lives in
 repo::fetch_changelog_text.
 
 --------------------------------------------------------------------------------
-gpg.rs            (~280 lines)   key import + signature verify (fail-closed)
+gpg.rs            (~321 lines)   key import + signature verify (fail-closed)
 --------------------------------------------------------------------------------
   import_key           `update gpg`: fetch GPG-KEY (from the repo's download
                        base -> the root for a subtree repo) + gpg --import into
@@ -419,10 +433,16 @@ LOOK HERE IF: new-config misses a location or mishandles a .new pair. The
 interactive prompt itself is in main.rs (cmd_new_config).
 
 --------------------------------------------------------------------------------
-ui.rs             (~70 lines)    minimal ANSI colouring
+ui.rs             (~123 lines)    minimal ANSI colouring
 --------------------------------------------------------------------------------
-  blue/green/red/purple/yellow/white/cyan/dim   owned-String colour helpers
+  blue/green/red/purple/yellow/white/cyan/dim/orange   owned-String colour
+                   helpers (orange 256-colour 208 = the banner's accent, used for
+                   section separators and the foundational-upgrade advisory)
+  err_label        the red "error:" prefix for the top-level diagnostic — gated
+                   on STDERR being a TTY (the message goes to stderr, not stdout)
   enabled          colour only when stdout is a TTY and NO_COLOR is unset
+  paint_when       the pure colour gate (bool in, string out) so painting logic
+                   is unit-testable without a real terminal
 Used by the plan tables, search/info output, and prompts. Piped/redirected
 output and `NO_COLOR` stay plain text.
 
@@ -451,7 +471,28 @@ prints a 256-colour blue gradient by shade, NO_COLOR-aware. Called at the start 
 upgrade-dist and the end of upgrade-all (when an official/subtree package upgraded).
 
 --------------------------------------------------------------------------------
-main.rs           (~9050 lines)  CLI, planning, and every command
+banner2.rs        (~270 lines)   the slacker masthead (Cretan labyrinth)
+--------------------------------------------------------------------------------
+The tool's own emblem + wordmark banner, printed ONCE at the top of every command
+(from run(), before dispatch) — TTY-gated like banner.rs, so it never lands in a
+pipe or log. The emblem is GENERATED, not stored: build() lays concentric square
+walls with alternating gaps (a unicursal labyrinth — one path, no dead ends, like
+the resolver), trace() walks the single corridor (Ariadne's thread), glyph()
+picks box-drawing characters from each cell's neighbours, and the labrys heart
+marks the centre. VERSION comes from CARGO_PKG_VERSION at compile time, so the
+banner always shows the real crate version.
+
+  K_BANNER / VERSION   emblem size (circuits) + the compiled-in version string
+  banner(pretty, want_color)   render the horizontal banner (emblem left,
+                   wordmark + tagline + version right) as one string
+  show()           print it — interactive terminal only
+  should_color / term_256   the colour gates (NO_COLOR, TTY, 256-colour TERM)
+
+LOOK HERE IF: the masthead misrenders on some terminal (glyph/colour fallbacks
+live here), or you want to change the wordmark/tagline. Pure std, no deps.
+
+--------------------------------------------------------------------------------
+main.rs           (~10460 lines)  CLI, planning, and every command
 --------------------------------------------------------------------------------
 The orchestrator. clap definitions, the command dispatch, the install/upgrade
 PLAN builder, and one cmd_* function per action.
@@ -501,6 +542,18 @@ PLAN builder, and one cmd_* function per action.
     warn_unverified_repos   visible warning for repos whose policy does no checks
     report_pending_configs  after install/upgrade/upgrade-all, list any new *.new
                      files so the user can run `new-config`
+    FOUNDATIONAL_LIBS / is_foundational   the system's foundational shared
+                     libraries (glibc & co. + every aaa_* package) — the set the
+                     two safety banners below key off
+    advise_console_for_foundational   purely ADVISORY orange framed banner shown
+                     before the confirm when a plan bumps the MAJOR version of a
+                     foundational library: apply from console/runlevel 3, not
+                     inside a running graphical session. Never blocks.
+    danger_banner_foundational   big red DANGER banner in revert-pkg before
+                     rolling BACK a foundational package (a downgrade of glibc &
+                     co. can break the running system)
+    in_graphical_session   detect a graphical session (DISPLAY/WAYLAND/...);
+                     used by the advisories and upgrade-dist's warning
 
   BLACKLIST HELPERS (thin wrappers over Config::blacklist_hit):
     bl_avail / bl_installed / bl_frozen   does a rule match an available
@@ -526,6 +579,16 @@ PLAN builder, and one cmd_* function per action.
     collect          expand patterns -> winning packages (+ validates selectors).
                      collect / collect_installed_targets / cmd_remove all call
                      guard_shell_expansion before building any plan.
+                     NOTE cmd_upgrade filters collect_installed_targets' output
+                     to PENDING-ONLY: a candidate already installed at the
+                     offered version+build from an equal-priority source is
+                     dropped (so `upgrade @repo` lists real updates, not every
+                     installed package); a same-version candidate from a
+                     HIGHER-priority repo is kept (genuine source migration,
+                     consistent with upgrades_for). cmd_reinstall shares
+                     collect_installed_targets and deliberately KEEPS the
+                     same-version candidate — which is why the filter lives in
+                     the upgrade command, not in the shared function.
     guard_shell_expansion / looks_shell_expanded / note_shell_expansion
                      the safety gate: when the UNMATCHED args look like a
                      shell-expanded `*` (>=8, or whitespace tokens that can't be
@@ -536,14 +599,25 @@ PLAN builder, and one cmd_* function per action.
     validate_selector  the @repo/@_tag check with the "did you mean" suggestion
     edit_distance / closest   Levenshtein for suggestions
     select_packages / select_packages_pkgid / parse_selection
-                     the numbered multi-match chooser (Enter=all, ranges, n)
+                     the numbered multi-match chooser (Enter=all, ranges, n).
+                     select_packages takes the INSTALLED set: when a candidate's
+                     name is already installed as a different build, its row
+                     shows the full-tag transition `old-tag -> new-tag` (with the
+                     candidate's [repo]), so cross-repo overlap is visible at the
+                     moment of choice, not only in the later plan table. Fresh
+                     installs and same-build reinstalls show the target alone;
+                     cmd_download passes an empty set (a download replaces
+                     nothing).
 
   COMMANDS: cmd_update, cmd_search, cmd_file_search, cmd_info, cmd_install,
   cmd_upgrade, cmd_reinstall, cmd_remove, cmd_download, cmd_upgrade_all,
   cmd_install_new, cmd_clean_system, cmd_clean_cache, cmd_new_config,
   cmd_check_updates, cmd_show_changelog, cmd_history, cmd_generate_template,
   cmd_install_template, cmd_remove_template, cmd_delete_template, cmd_frozen,
-  cmd_unfrozen, cmd_pin, cmd_unpin, cmd_revert_pkg
+  cmd_unfrozen, cmd_pin, cmd_unpin, cmd_revert_pkg, cmd_upgrade_dist,
+  cmd_find_mirror, cmd_status, cmd_list_repos, cmd_add_repo, cmd_del_repo,
+  cmd_pri_repo, cmd_add_tag, cmd_del_tag, cmd_vet_repo, cmd_trust_repo,
+  cmd_distrust_repo  (38 subcommands in all — the Cmd enum is the authority)
 
   ROLLBACK (cmd_revert_pkg):  THREE fail-closed guards run FIRST — REVERT must
     be on; system::version_codename() must be exactly "current" (REFUSES on a
@@ -561,10 +635,14 @@ PLAN builder, and one cmd_* function per action.
                       counts (from installed_attribution)
     cmd_status        whole-setup health check (mirror, repos, keys, freshness,
                       reachability, pending) with "what to do next"
-    cmd_add_repo / cmd_del_repo / cmd_add_tag / cmd_del_tag   edit the `repos`
-                      file (validated via config::validate_repos_text, confirmed).
-                      cmd_add_repo REFUSES a `credentials=` repo over plaintext
-                      http unless the `insecure` flag is also given.
+    cmd_add_repo / cmd_del_repo / cmd_pri_repo / cmd_add_tag / cmd_del_tag
+                      edit the `repos` file (validated via
+                      config::validate_repos_text, confirmed). cmd_add_repo
+                      REFUSES a `credentials=` repo over plaintext http unless
+                      the `insecure` flag is also given. cmd_pri_repo changes one
+                      repo's priority in place — refuses an unknown repo (with a
+                      closest-match suggestion) or a priority already in use
+                      (binary-repo priorities stay distinct).
     cmd_vet_repo / cmd_trust_repo / cmd_distrust_repo   the quarantine model:
                       re-vet on demand, lift a quarantine (override), or freeze.
                       vet_repo does NOT freeze an http repo for its transport when
