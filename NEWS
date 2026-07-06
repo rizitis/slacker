@@ -1,3 +1,10 @@
+Version Beta 0.10.2
+=====
+Fix: bug arch guard: accept fw and x86 packages, like the available-list filter
+Fix: bug in pin: store the pin name verbatim, not as a compiled pattern, thanks to Claude Fable 5
+ - dotted/'+' pin names were silently inert
+---
+
 Version Beta 0.10.1
 =====
 Fix: bug for upgrade @repo command, was not correctly filtering pakcage list, thanks to @danix

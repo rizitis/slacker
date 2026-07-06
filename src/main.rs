@@ -2028,11 +2028,17 @@ fn arch_family(a: &str) -> &str {
 }
 
 /// Is a package built for `pkg_arch` safe to install on a `sys_arch` system?
-/// `noarch` always is; otherwise the families must match. (Note: multilib does
+/// `noarch` always is; so are `fw` (firmware) and `x86` (kernel-headers), which
+/// ship with those arch fields on EVERY Slackware architecture — the same rule
+/// the available-list filter applies (repo.rs), so whatever the picker offers,
+/// this guard accepts. Otherwise the families must match. (Note: multilib does
 /// NOT need an exception — compat32 packages carry an `x86_64` arch field, with
 /// `compat32` only in the name/build, so they pass trivially on x86_64.)
 fn arch_compatible(sys_arch: &str, pkg_arch: &str) -> bool {
-    pkg_arch == "noarch" || arch_family(sys_arch) == arch_family(pkg_arch)
+    pkg_arch == "noarch"
+        || pkg_arch == "fw"
+        || pkg_arch == "x86"
+        || arch_family(sys_arch) == arch_family(pkg_arch)
 }
 
 /// Refuse a plan that would install packages built for a DIFFERENT CPU
@@ -9473,6 +9479,14 @@ mod unfreeze_tests {
         // noarch always fits.
         assert!(arch_compatible("x86_64", "noarch"));
         assert!(arch_compatible("i686", "noarch"));
+        // `x86` (kernel-headers) and `fw` (firmware) ship on EVERY Slackware
+        // arch — the guard must accept them, exactly like the available-list
+        // filter (repo.rs) does. Regression for the live refusal of
+        // kernel-headers-6.18.38-x86-1 on an x86_64 upgrade-all.
+        assert!(arch_compatible("x86_64", "x86"));
+        assert!(arch_compatible("i586", "x86"));
+        assert!(arch_compatible("x86_64", "fw"));
+        assert!(arch_compatible("i686", "fw"));
         // Cross-family is refused, both directions.
         assert!(!arch_compatible("x86_64", "i686"));
         assert!(!arch_compatible("i586", "x86_64"));
