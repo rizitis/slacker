@@ -116,23 +116,7 @@ _slacker() {
                 return
             fi
             ;;
-        (upgrade-all)
-            if [[ $PREFIX == @* ]]; then
-                local -a sels
-                sels=( ${(f)"$(_slacker_repo_names $cfg)"} ${(f)"$(_slacker_build_tags $cfg)"} )
-                sels=( ${sels/#/@} )
-                compadd -a sels
-                return
-            fi
-            ;;
         (install-new)
-            if [[ $PREFIX == @* ]]; then
-                local -a sels
-                sels=( ${(f)"$(_slacker_repo_names $cfg)"} ${(f)"$(_slacker_build_tags $cfg)"} )
-                sels=( ${sels/#/@} )
-                compadd -a sels
-                return
-            fi
             compadd ${(f)"$(_slacker_repo_names $cfg)"}
             ;;
         (clean-cache)

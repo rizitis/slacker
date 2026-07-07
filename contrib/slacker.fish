@@ -139,7 +139,7 @@ complete -c slacker -s 'h'
 complete -c slacker -l 'version'
 complete -c slacker -s 'V'
 
-complete -c slacker -n '__slacker_using download install install-new reinstall remove upgrade upgrade-all' -f -a '(__slacker_selectors)'
+complete -c slacker -n '__slacker_using download install reinstall remove upgrade' -f -a '(__slacker_selectors)'
 complete -c slacker -n '__slacker_using history info reinstall remove revert-pkg unpin' -f -a '(__slacker_installed_names)'
 complete -c slacker -n '__slacker_using clean-cache del-repo distrust-repo install-new pri-repo show-changelog trust-repo vet-repo' -f -a '(__slacker_repo_names)'
 complete -c slacker -n '__slacker_using delete-template install-template remove-template' -f -a '(__slacker_template_names)'

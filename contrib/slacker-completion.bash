@@ -90,7 +90,7 @@ _slacker_dispatch() {
     fi
 
     case $sub in
-        install|upgrade|reinstall|remove|download|upgrade-all|install-new)
+        install|upgrade|reinstall|remove|download)
             if [[ $cur == @* ]]; then
                 local names tags list body
                 names=$(_slacker_repo_names "$config")
