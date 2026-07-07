@@ -129,7 +129,7 @@ complete -c slacker -n __slacker_no_sub -f -a 'trust-repo'
 complete -c slacker -n __slacker_no_sub -f -a 'distrust-repo'
 complete -c slacker -n __slacker_no_sub -f -a 'help'
 
-complete -c slacker -l 'config-dir'
+complete -c slacker -l config-dir -r -f -a '(__fish_complete_directories)'
 complete -c slacker -l 'yes'
 complete -c slacker -s 'y'
 complete -c slacker -l 'dry-run'

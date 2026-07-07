@@ -458,7 +458,11 @@ def emit_fish(spec):
     lines.append("")
     # global flags, always available
     for f in spec["_global_flags"]:
-        if f.startswith("--"):
+        if f == "--config-dir":
+            # takes a directory argument
+            lines.append("complete -c slacker -l config-dir "
+                         "-r -f -a '(__fish_complete_directories)'")
+        elif f.startswith("--"):
             lines.append("complete -c slacker -l '%s'" % f[2:])
         else:
             lines.append("complete -c slacker -s '%s'" % f[1:])
