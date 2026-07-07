@@ -32,10 +32,20 @@ A Slackware package manager in Rust with full **slackpkg action parity**, plus
 
 ## Shell completion
 
-A bash-completion ships with the package (installed to
-`/usr/share/bash-completion/completions/slacker`) and completes subcommands,
-flags, installed package names, repo names, `@repo`/`@_tag` selectors and
-template names. It loads automatically in a new shell.
+Completions for bash, zsh and fish ship with the package and complete
+subcommands, flags, installed package names, repo names, `@repo`/`@_tag`
+selectors and template names. They load automatically in a new shell:
+
+- bash: `/usr/share/bash-completion/completions/slacker`
+- zsh:  `/usr/share/zsh/site-functions/_slacker`
+- fish: `/usr/share/fish/vendor_completions.d/slacker.fish`
+
+All three are generated from a single source of truth,
+`contrib/completions.json`, by `contrib/gen-completions.py` (python3, standard
+library only). After editing the JSON, regenerate with `contrib/gen-completions.py`
+and commit the results; `contrib/gen-completions.py --check` fails if a committed
+file is out of date, and `contrib/check-completion-drift.sh` verifies the JSON
+lists exactly the subcommands the binary exposes.
 
 # Wiki
 

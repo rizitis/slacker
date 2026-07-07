@@ -967,9 +967,18 @@ Absent or empty, \fIupgrade-dist\fR uses the configured mirrors as usual.
 Generated and user\-created template files.
 .TP
 .I /usr/share/bash-completion/completions/slacker
-Bash completion for subcommands, flags, installed package names, repo names,
+.TQ
+.I /usr/share/zsh/site-functions/_slacker
+.TQ
+.I /usr/share/fish/vendor_completions.d/slacker.fish
+Shell completions for bash, zsh and fish: subcommands, flags, installed package
+names, repo names,
 .RI ( @repo / @_tag )
-selectors and template names. Loaded automatically by bash\-completion on first use.
+selectors and template names. Loaded automatically by each shell on first use.
+All three are generated from
+.I contrib/completions.json
+by
+.IR contrib/gen-completions.py .
 .SH DEPENDENCIES
 When a package in a repository is accompanied by a
 .I .dep
