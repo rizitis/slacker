@@ -335,11 +335,146 @@ _slacker "$@"
     return "#compdef slacker\n" + GEN_HEADER + body
 
 
-# --- fish / more emitters added in later tasks -----------------------------
+# --- fish -------------------------------------------------------------------
+
+FISH_PREAMBLE = r'''# fish completion for slacker
+
+function __slacker_config_dir
+    set -l toks (commandline -opc 2>/dev/null)
+    for i in (seq (count $toks))
+        if test "$toks[$i]" = --config-dir
+            set -l n (math $i + 1)
+            if test $n -le (count $toks)
+                echo $toks[$n]
+                return
+            end
+        end
+    end
+    echo /etc/slacker
+end
+
+function __slacker_installed_names
+    test -d /var/adm/packages; or return
+    command ls /var/adm/packages 2>/dev/null \
+        | grep -Ev -- '-upgraded-[0-9]' \
+        | sed -E 's/(-[^-]+){3}$//'
+end
+
+function __slacker_repo_names
+    set -l repos (__slacker_config_dir)/repos
+    test -f $repos; or return
+    awk '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*$/ { next }
+        { url = $3
+          if (url ~ /:\/\// || url == "mirror" || url ~ /^mirror\//) print $2 }' $repos
+end
+
+function __slacker_build_tags
+    set -l repos (__slacker_config_dir)/repos
+    begin
+        test -f $repos; and awk '
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*$/ { next }
+            { url = $3
+              if (!(url ~ /:\/\// || url == "mirror" || url ~ /^mirror\//) && NF >= 3) print $3 }' $repos
+        test -d /var/adm/packages; and command ls /var/adm/packages 2>/dev/null \
+            | grep -Ev -- '-upgraded-[0-9]' \
+            | sed -E 's/.*-([^-]+)$/\1/; s/^[0-9]+//' | grep -v '^$'
+    end | sort -u
+end
+
+function __slacker_selectors
+    printf '@%s\n' (__slacker_repo_names) (__slacker_build_tags)
+end
+
+function __slacker_template_names
+    set -l dir (__slacker_config_dir)/templates
+    test -d $dir; or return
+    command ls $dir 2>/dev/null | sed -E 's/\.template$//'
+end
+
+# true when no subcommand word has been typed yet
+function __slacker_no_sub
+    set -l toks (commandline -opc 2>/dev/null)
+    set -e toks[1]
+    for t in $toks
+        switch $t
+            case --config-dir '-*'
+                continue
+            case '*'
+                return 1
+        end
+    end
+    return 0
+end
+
+# true when the typed subcommand is one of $argv
+function __slacker_using
+    set -l toks (commandline -opc 2>/dev/null)
+    set -e toks[1]
+    for t in $toks
+        switch $t
+            case --config-dir '-*'
+                continue
+            case '*'
+                contains -- $t $argv; and return 0
+                return 1
+        end
+    end
+    return 1
+end
+'''
+
+
+def emit_fish(spec):
+    lines = [GEN_HEADER, FISH_PREAMBLE, ""]
+    # subcommands, only offered before a subcommand word is typed
+    for c in spec["commands"]:
+        lines.append("complete -c slacker -n __slacker_no_sub -f -a '%s'" % c)
+    lines.append("")
+    # global flags, always available
+    for f in spec["_global_flags"]:
+        if f.startswith("--"):
+            lines.append("complete -c slacker -l '%s'" % f[2:])
+        else:
+            lines.append("complete -c slacker -s '%s'" % f[1:])
+    lines.append("")
+
+    def using(names):
+        return "__slacker_using " + " ".join(sorted(names))
+
+    inst = positional(spec, "installed")
+    repo = positional(spec, "repo")
+    tmpl = positional(spec, "template")
+    sel = selectors(spec)
+
+    if sel:
+        lines.append("complete -c slacker -n '%s' -f -a '(__slacker_selectors)'" % using(sel))
+    if inst:
+        lines.append("complete -c slacker -n '%s' -f -a '(__slacker_installed_names)'" % using(inst))
+    if repo:
+        lines.append("complete -c slacker -n '%s' -f -a '(__slacker_repo_names)'" % using(repo))
+    if tmpl:
+        lines.append("complete -c slacker -n '%s' -f -a '(__slacker_template_names)'" % using(tmpl))
+    # pin: repo: prefixes
+    for c in positional(spec, "repo:pkg"):
+        lines.append("complete -c slacker -n '__slacker_using %s' -f "
+                     "-a '(printf \"%%s:\\n\" (__slacker_repo_names))'" % c)
+    # per-subcommand extra flags
+    for c, v in spec["commands"].items():
+        for f in v.get("flags", []):
+            if f.startswith("--"):
+                lines.append("complete -c slacker -n '__slacker_using %s' -l '%s'" % (c, f[2:]))
+            else:
+                lines.append("complete -c slacker -n '__slacker_using %s' -s '%s'" % (c, f[1:]))
+    return "\n".join(lines) + "\n"
+
 
 EMITTERS = {
     "slacker-completion.bash": emit_bash,
     "slacker-completion.zsh": emit_zsh,
+    "slacker.fish": emit_fish,
 }
 
 
