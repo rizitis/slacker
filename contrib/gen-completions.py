@@ -210,10 +210,136 @@ complete -F _slacker slacker
     return "".join(out)
 
 
-# --- zsh / fish added in later tasks ---------------------------------------
+# --- zsh --------------------------------------------------------------------
+
+ZSH_PREAMBLE = r'''_slacker_config_dir() {
+    local i
+    for (( i = 2; i <= $#words; i++ )); do
+        if [[ ${words[i]} == --config-dir && -n ${words[i+1]} ]]; then
+            print -r -- ${words[i+1]}
+            return
+        fi
+    done
+    print -r -- /etc/slacker
+}
+
+_slacker_installed_names() {
+    local db=/var/adm/packages
+    [[ -d $db ]] || return
+    command ls $db 2>/dev/null \
+        | grep -Ev -- '-upgraded-[0-9]' \
+        | sed -E 's/(-[^-]+){3}$//'
+}
+
+_slacker_repo_names() {
+    local repos=$1/repos
+    [[ -f $repos ]] || return
+    awk '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*$/ { next }
+        { url = $3
+          if (url ~ /:\/\// || url == "mirror" || url ~ /^mirror\//) print $2 }' $repos
+}
+
+_slacker_build_tags() {
+    local repos=$1/repos db=/var/adm/packages
+    {
+        [[ -f $repos ]] && awk '
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*$/ { next }
+            { url = $3
+              if (!(url ~ /:\/\// || url == "mirror" || url ~ /^mirror\//) && NF >= 3) print $3 }' $repos
+        [[ -d $db ]] && command ls $db 2>/dev/null \
+            | grep -Ev -- '-upgraded-[0-9]' \
+            | sed -E 's/.*-([^-]+)$/\1/; s/^[0-9]+//' | grep -v '^$'
+    } | sort -u
+}
+
+_slacker_template_names() {
+    local dir=$1/templates
+    [[ -d $dir ]] || return
+    command ls $dir 2>/dev/null | sed -E 's/\.template$//'
+}
+'''
+
+
+def emit_zsh(spec):
+    cmd_lines = " ".join("'%s'" % c for c in spec["commands"])
+    gflags = " ".join("'%s'" % f for f in spec["_global_flags"])
+    sel = set(selectors(spec))
+    installed = set(positional(spec, "installed"))
+    repo = set(positional(spec, "repo"))
+    tmpl = set(positional(spec, "template"))
+
+    def case_for(names, body):
+        if not names:
+            return ""
+        pat = "|".join(sorted(names))
+        return "        (%s)\n%s\n            ;;\n" % (pat, body)
+
+    # A command may complete @-selectors AND a bare positional (e.g. remove,
+    # install-new). Build one arm per command union so the case patterns stay
+    # disjoint.
+    arms = ""
+    for c in spec["commands"]:
+        is_sel = c in sel
+        pos = spec["commands"][c]["positional"]
+        if not is_sel and pos == "none":
+            continue
+        body_lines = []
+        if is_sel:
+            body_lines.append(
+                "            if [[ $PREFIX == @* ]]; then\n"
+                "                local -a sels\n"
+                "                sels=( ${(f)\"$(_slacker_repo_names $cfg)\"} ${(f)\"$(_slacker_build_tags $cfg)\"} )\n"
+                "                sels=( ${sels/#/@} )\n"
+                "                compadd -a sels\n"
+                "                return\n"
+                "            fi")
+        if pos == "installed":
+            body_lines.append("            compadd ${(f)\"$(_slacker_installed_names)\"}")
+        elif pos == "repo":
+            body_lines.append("            compadd ${(f)\"$(_slacker_repo_names $cfg)\"}")
+        elif pos == "template":
+            body_lines.append("            compadd ${(f)\"$(_slacker_template_names $cfg)\"}")
+        elif pos == "repo:pkg":
+            body_lines.append(
+                "            if [[ $PREFIX != *:* ]]; then\n"
+                "                local -a repos\n"
+                "                repos=( ${(f)\"$(_slacker_repo_names $cfg)\"} )\n"
+                "                compadd -S ':' -- $repos\n"
+                "            fi")
+        arms += case_for({c}, "\n".join(body_lines))
+
+    body = ZSH_PREAMBLE + r'''
+
+_slacker() {
+    local cfg; cfg=$(_slacker_config_dir)
+    local -a cmds; cmds=( ''' + cmd_lines + r''' )
+    local -a gflags; gflags=( ''' + gflags + r''' )
+
+    if (( CURRENT == 2 )); then
+        compadd -a cmds
+        compadd -a gflags
+        return
+    fi
+
+    local sub; sub=${words[2]}
+    case $sub in
+''' + arms + r'''    esac
+}
+
+_slacker "$@"
+'''
+    # zsh autoload requires #compdef on the very first line.
+    return "#compdef slacker\n" + GEN_HEADER + body
+
+
+# --- fish / more emitters added in later tasks -----------------------------
 
 EMITTERS = {
     "slacker-completion.bash": emit_bash,
+    "slacker-completion.zsh": emit_zsh,
 }
 
 
