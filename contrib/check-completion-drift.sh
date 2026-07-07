@@ -1,24 +1,23 @@
 #!/bin/sh
-# check-completion-drift.sh — verify contrib/slacker-completion.bash lists
-# exactly the subcommands the real binary exposes. Hand-written completions
-# drift silently when a subcommand is added or removed; this makes the drift
-# a visible failure instead. Run from the repo root after changing the clap
-# Cmd enum, or wire it into CI.
+# check-completion-drift.sh — verify contrib/completions.json lists exactly the
+# subcommands the real binary exposes. The JSON is the source of truth the three
+# shell completions are generated from (see contrib/gen-completions.py); it
+# drifts silently when a subcommand is added or removed. This makes the drift a
+# visible failure instead. Run from the repo root after changing the clap Cmd
+# enum, or wire it into CI.
 #
 # Usage: contrib/check-completion-drift.sh [path/to/slacker]
 #   SLACKER_BIN may also name the binary (default: `slacker` from PATH).
 
 set -u
 bin=${1:-${SLACKER_BIN:-slacker}}
-comp_file=contrib/slacker-completion.bash
+spec_file=contrib/completions.json
 
-[ -f "$comp_file" ] || { echo "error: $comp_file not found (run from the repo root)"; exit 2; }
+[ -f "$spec_file" ] || { echo "error: $spec_file not found (run from the repo root)"; exit 2; }
 command -v "$bin" >/dev/null 2>&1 || { echo "error: slacker binary '$bin' not found"; exit 2; }
 
-# List 1: the completion script's hardcoded _slacker_commands.
-comp=$(sed -n "/^_slacker_commands='/,/'/p" "$comp_file" \
-       | sed "s/^_slacker_commands=//" | tr -d "'" \
-       | tr ' ' '\n' | grep -v '^$' | sort)
+# List 1: the commands declared in the JSON source of truth.
+comp=$(python3 -c "import json;[print(k) for k in json.load(open('$spec_file'))['commands']]" | sort)
 
 # List 2: what the binary actually exposes (clap prints them indented
 # under "Commands:", first word of each line, until the next section).
@@ -33,7 +32,7 @@ if [ "$comp" = "$real" ]; then
     exit 0
 fi
 
-echo "DRIFT between $comp_file and '$bin --help':"
+echo "DRIFT between $spec_file and '$bin --help':"
 printf '%s\n' "$comp" > /tmp/.drift_comp.$$
 printf '%s\n' "$real" > /tmp/.drift_real.$$
 diff /tmp/.drift_comp.$$ /tmp/.drift_real.$$ | sed -n \
