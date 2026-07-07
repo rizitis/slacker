@@ -72,6 +72,8 @@ cargo test
 
 # completion must list exactly the binary's subcommands
 sh contrib/check-completion-drift.sh target/release/slacker
+# generated completions must match their JSON source
+python3 contrib/gen-completions.py --check
 
 mkdir -p $PKG/usr/local/sbin
 install -m0755 target/release/slacker $PKG/usr/local/sbin/slacker
