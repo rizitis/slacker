@@ -37,7 +37,7 @@ LOOK HERE IF: package names parse wrong (epoch, odd arch like fw/x86, names with
 dashes). Parsing is positional from the right, so unusual names are the risk.
 
 --------------------------------------------------------------------------------
-config.rs         (~1494 lines)  read & model /etc/slacker
+config.rs         (~1580 lines)  read & model /etc/slacker
 --------------------------------------------------------------------------------
 Parses the plain-text config files into typed structs. No network, no side
 effects beyond reading files.
@@ -54,7 +54,10 @@ effects beyond reading files.
                    itself is what history.rs walks (packages/ + removed_packages/).
   BlacklistRule    struct: optional @repo scope, optional series, optional
                    compiled glob-or-regex (matched against the full package id),
-                   + a `pin` flag. matches() EARLY-RETURNS false when pin is set,
+                   + a `pin` flag and, for a pin, pin_name: the EXACT package
+                   name stored VERBATIM — never through compile_pattern, whose
+                   glob escaping silently made dotted/`+` pins (python3.11,
+                   gtk+) inert before 0.10.2. matches() EARLY-RETURNS false when pin is set,
                    so a pin (`@repo 100% name`) never freezes. With
                    matches(id, series, repo) + repo()/pattern()/describe()
   compile_pattern  compile a freeze PATTERN: no regex syntax -> GLOB (via
@@ -64,9 +67,12 @@ effects beyond reading files.
                    verbatim. Both compile to one unanchored regex.
   parse_blacklist_rule  parse one `[@repo] GLOB|REGEX|series/` freeze line OR a
                    `@repo 100% NAME` pin (exact name; name_has_pattern_chars
-                   rejects a pattern but allows a literal `.`/`+`/`-`). pub: the
+                   rejects a pattern but allows a literal `.`/`+`/`-`; a `/` is
+                   rejected). The pin path RETURNS EARLY with pin_name set —
+                   only freeze patterns reach compile_pattern. pub: the
                    `frozen`/`pin` commands reuse it.
   pinned_repo/pins  the pin lookups: name -> its pinned repo / all (name,repo)
+                   — plain string comparison against pin_name, never a regex
   Repo             struct: priority, name, url, official, immutable, subtree,
                    verify (per-repo override), credentials (Option<NAME>),
                    insecure (allow http credentials) + verify_policy(global)
@@ -116,14 +122,21 @@ Turns a Repo's remote files into AvailPkg records and keeps the cache fresh.
   load_repo        read cached metadata -> Vec<AvailPkg>, arch-filtered
   parse_packages_txt / parse_checksums   the actual format parsers
   arch_compatible  keep native arch + noarch + fw (firmware) + x86 (32-bit
-                   headers); this mirrors slackpkg, do not narrow casually
+                   headers); this mirrors slackpkg, do not narrow casually.
+                   MIRRORED by main.rs's arch_compatible (the execute_plan
+                   guard) — keep the two rules IDENTICAL (0.10.2 bug: the
+                   guard's copy lacked fw/x86 and refused kernel-headers on
+                   x86_64)
   read_text_lossy  pub(crate): UTF-8-lossy reads — some repos (extras) have
                    non-UTF-8 bytes; use this for every metadata read
   fetch_dep / parse_dep   pull and parse a package's `.dep` file (slackpkg+);
   parse_required          .dep first, else fall back to PACKAGE REQUIRED: in
                           PACKAGES.TXT (slapt-get/SlackBuilds repos w/o .dep)
-  previous_names          the .prev snapshot install-new diffs against (by
-                          package NAME, so a version/build bump is not "new")
+  previous_names          HISTORICAL (#[allow(dead_code)]): install-new no
+                          longer diffs the .prev snapshot — it offers every
+                          package its repos provide that is NOT installed
+                          (catching distro re-additions and your removals too).
+                          update_repo still writes .prev; kept for future use
   fetch_changelog_text    on-demand ChangeLog fetch for show-changelog
   invalidate_metadata     drop a repo's cached PACKAGES.TXT/CHECKSUMS after a
                           failed GPG verification, so unverified data is unused
@@ -186,8 +199,12 @@ This is where most behavioural bugs live — read carefully before changing.
                    pinning (repo:name) is handled via split_pin
   installed_priority   given an installed PkgId, decide its "owning" priority:
                      1. user tag-priority line for its build_tag
-                     2. else highest-priority binary repo that ships that tag
-                        (cf->conraid, alien->alienbob auto-detected)
+                     2. else the highest-priority NON-FROZEN binary repo that
+                        ships THIS package (same name AND tag) — so a repo
+                        merely re-shipping another repo's tag (extras carrying
+                        one alien package) never inflates every alien package's
+                        floor; then a tag-only fallback (cf->conraid,
+                        alien->alienbob auto-detected)
                      3. else official priority for an empty tag
                      4. else i32::MAX (unknown -> protect, never touch)
   upgrades_for     produce the upgrade-all plan: a candidate is proposed only
@@ -201,8 +218,9 @@ This is where most behavioural bugs live — read carefully before changing.
   series_of / repo_for_tag   look up an installed package's series and source
                    repo (used to evaluate `series/` and `@repo` blacklist rules
                    against installed packages, which carry no series themselves)
-  newly_added      install-new: names present now but absent from .prev and not
-                   installed
+  newly_added      HISTORICAL (#[allow(dead_code)]): the old .prev-diff for
+                   install-new; the command now offers every not-installed name
+                   its repos provide (see cmd_install_new)
   names_provided_by  clean-system baseline: the set of package names provided
                    by a given set of repos (official + every immutable repo),
                    or all repos when no baseline is given. has_repo_packages
@@ -492,7 +510,7 @@ LOOK HERE IF: the masthead misrenders on some terminal (glyph/colour fallbacks
 live here), or you want to change the wordmark/tagline. Pure std, no deps.
 
 --------------------------------------------------------------------------------
-main.rs           (~10460 lines)  CLI, planning, and every command
+main.rs           (~10480 lines)  CLI, planning, and every command
 --------------------------------------------------------------------------------
 The orchestrator. clap definitions, the command dispatch, the install/upgrade
 PLAN builder, and one cmd_* function per action.
@@ -539,6 +557,12 @@ PLAN builder, and one cmd_* function per action.
                      stop). REFUSES to write through a pre-existing symlink.
     verify_unavailable_error   the "required method missing, here's how to relax
                      it" message (points at repos / slacker.conf)
+    enforce_arch_match / arch_compatible / arch_family   the execute_plan arch
+                     guard: refuse a plan containing another arch family's
+                     packages (wrong repo/mirror for this box); noarch, fw
+                     (firmware) and x86 (kernel-headers) are UNIVERSAL — the
+                     same rule as repo.rs's load filter, kept identical on
+                     purpose (0.10.2). --yes overrides.
     warn_unverified_repos   visible warning for repos whose policy does no checks
     report_pending_configs  after install/upgrade/upgrade-all, list any new *.new
                      files so the user can run `new-config`
@@ -681,6 +705,20 @@ wiring, exit codes, or adding a new command/flag. The per-command logic is small
 and self-contained; the shared complexity is in expand_with_deps/add_with_deps
 and in pkgdb.rs.
 
+--------------------------------------------------------------------------------
+contrib/          (outside src/, but load-bearing)
+--------------------------------------------------------------------------------
+Shell completions + the tooling that keeps them honest. completions.json is the
+SOURCE OF TRUTH (per command: does it take @repo/@_tag selectors, what its
+bare-word argument completes — installed | repo | template | repo:pkg | none —
+plus extra flags). gen-completions.py (python3 stdlib, build-time only) renders
+slacker-completion.bash / slacker-completion.zsh / slacker.fish from it; the
+three files are GENERATED — never edit them by hand, edit the JSON and rerun.
+Two gates, both wired into the SlackBuild: check-completion-drift.sh (the JSON
+lists exactly what `slacker --help` exposes) and `gen-completions.py --check`
+(the committed files match the JSON). The SlackBuild installs the bash/zsh/fish
+files; the generator and drift-check stay repo-only.
+
 ================================================================================
 General hints for a forker
 ================================================================================
@@ -692,7 +730,11 @@ General hints for a forker
 - ADDING A COMMAND: add a Cmd variant + a match arm in run() + a cmd_* fn. If it
   takes patterns, reuse collect() so it gets @-selector validation and the
   multi-match chooser for free. Update three docs by hand: slacker.8,
-  structure.md, CODE_MAP.txt (clap --help updates itself).
+  structure.md, CODE_MAP.txt (clap --help updates itself). THEN add the command
+  to contrib/completions.json and regenerate the shell completions
+  (contrib/gen-completions.py) — the SlackBuild runs two gates that FAIL THE
+  BUILD otherwise: check-completion-drift.sh (JSON == the binary's command set)
+  and gen-completions.py --check (generated bash/zsh/fish == the JSON).
 
 - THE PRIORITY MODEL is the heart and the easiest thing to break. Any change
   near installed_priority / upgrades_for (pkgdb.rs) should be checked against

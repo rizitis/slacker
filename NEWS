@@ -26,6 +26,7 @@ Version Beta 0.10.3
   generated completion that doesn't match its JSON source fails the
   build; together with the drift-check this means completions can
   never silently drift from the binary.
+Note: bash requires the bash-completion package (Slackware extra/) for automatic loading - install it with slacker install bash-completion from an extras subtree repo, or source the file from your shell rc. zsh and fish need nothing extra. If you have in use the old style "complete -cf sudo" sudo dont follow correctly you must disable it.
 ---
 
 Version Beta 0.10.2
