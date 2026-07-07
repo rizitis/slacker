@@ -453,6 +453,12 @@ end
 def emit_fish(spec):
     lines = [GEN_HEADER, FISH_PREAMBLE, ""]
     # subcommands, only offered before a subcommand word is typed
+    # Disable fish's default filename completion for slacker; every context
+    # that wants candidates adds them explicitly below. Without this, commands
+    # that take no argument (update, search, help, ...) fall back to completing
+    # files in the current directory.
+    lines.append("complete -c slacker -f")
+    lines.append("")
     for c in spec["commands"]:
         lines.append("complete -c slacker -n __slacker_no_sub -f -a '%s'" % c)
     lines.append("")

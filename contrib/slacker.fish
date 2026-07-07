@@ -89,6 +89,8 @@ function __slacker_using
 end
 
 
+complete -c slacker -f
+
 complete -c slacker -n __slacker_no_sub -f -a 'update'
 complete -c slacker -n __slacker_no_sub -f -a 'search'
 complete -c slacker -n __slacker_no_sub -f -a 'file-search'
