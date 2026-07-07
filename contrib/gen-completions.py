@@ -311,6 +311,13 @@ def emit_zsh(spec):
                 "            fi")
         arms += case_for({c}, "\n".join(body_lines))
 
+    # Per-subcommand extra flags, as a zsh case that appends to $flags.
+    flag_arms = ""
+    for c, v in spec["commands"].items():
+        if v.get("flags"):
+            extra = " ".join("'%s'" % f for f in v["flags"])
+            flag_arms += "        (%s) flags+=( %s ) ;;\n" % (c, extra)
+
     body = ZSH_PREAMBLE + r'''
 
 _slacker() {
@@ -325,6 +332,22 @@ _slacker() {
     fi
 
     local sub; sub=${words[2]}
+
+    # The value after --config-dir is a directory.
+    if [[ ${words[CURRENT-1]} == --config-dir ]]; then
+        _files -/
+        return
+    fi
+
+    # A flag is being typed: global flags plus any this subcommand adds.
+    if [[ $PREFIX == -* ]]; then
+        local -a flags; flags=( $gflags )
+        case $sub in
+''' + flag_arms + r'''        esac
+        compadd -a flags
+        return
+    fi
+
     case $sub in
 ''' + arms + r'''    esac
 }

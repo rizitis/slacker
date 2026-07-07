@@ -62,6 +62,24 @@ _slacker() {
     fi
 
     local sub; sub=${words[2]}
+
+    # The value after --config-dir is a directory.
+    if [[ ${words[CURRENT-1]} == --config-dir ]]; then
+        _files -/
+        return
+    fi
+
+    # A flag is being typed: global flags plus any this subcommand adds.
+    if [[ $PREFIX == -* ]]; then
+        local -a flags; flags=( $gflags )
+        case $sub in
+        (download) flags+=( '-o' '--output' ) ;;
+        (history) flags+=( '--last' '--since' '--installed' '--removed' '--upgraded' ) ;;
+        esac
+        compadd -a flags
+        return
+    fi
+
     case $sub in
         (info)
             compadd ${(f)"$(_slacker_installed_names)"}
