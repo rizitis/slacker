@@ -14,6 +14,18 @@ Version Beta 0.10.3
   completion's command list against the live `slacker --help`; the
   SlackBuild now runs it after the tests, so a stale completion
   fails the build instead of shipping. (repo-only, not installed)
+  - New: zsh and fish completions alongside bash — all three now
+  generated from a single source of truth (contrib/completions.json,
+  rendered by contrib/gen-completions.py; python3 at build time only,
+  nothing at runtime). Fixes two arg-type bugs of the hand-written
+  bash: install-new now completes bare repo names (not @repo), and
+  upgrade-all no longer offers selectors (it takes no argument).
+  Installed to /usr/share/zsh/site-functions/_slacker and
+  /usr/share/fish/vendor_completions.d/slacker.fish. (PR #4)
+  - The SlackBuild now also runs gen-completions.py --check, so a
+  generated completion that doesn't match its JSON source fails the
+  build; together with the drift-check this means completions can
+  never silently drift from the binary.
 ---
 
 Version Beta 0.10.2
