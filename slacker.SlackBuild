@@ -113,10 +113,20 @@ mkdir -p $PKG/usr/man/man8
 install -m0644 man/slacker.8 $PKG/usr/man/man8/slacker.8
 gzip -9 $PKG/usr/man/man8/slacker.8
 
-# bash-completion (lazy-loaded by command name)
+# shell completions, generated from contrib/completions.json (see
+# contrib/gen-completions.py). bash is lazy-loaded by command name; zsh and
+# fish autoload from their standard vendor dirs.
 mkdir -p $PKG/usr/share/bash-completion/completions
 install -m0644 contrib/slacker-completion.bash \
   $PKG/usr/share/bash-completion/completions/slacker
+
+mkdir -p $PKG/usr/share/zsh/site-functions
+install -m0644 contrib/slacker-completion.zsh \
+  $PKG/usr/share/zsh/site-functions/_slacker
+
+mkdir -p $PKG/usr/share/fish/vendor_completions.d
+install -m0644 contrib/slacker.fish \
+  $PKG/usr/share/fish/vendor_completions.d/slacker.fish
 
 # Copy the slack-desc and a custom doinst.sh
 mkdir -p $PKG/install
