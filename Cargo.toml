@@ -1,6 +1,6 @@
 [package]
 name = "slacker"
-version = "0.10.4"
+version = "0.11.0"
 edition = "2021"
 description = "A minimal and fast Slackware package manager combining slackpkg + slackpkg+ semantics"
 authors = ["Ioannis Anagnostakis (rizitis)"]
@@ -19,6 +19,7 @@ clap = { version = "4", features = ["derive"] }
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
 md-5 = "0.10"
 regex = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [profile.release]
 opt-level = 2

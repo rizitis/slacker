@@ -1,5 +1,46 @@
-Version Beta 0.10.4
+Version Beta 0.11.0
 =====
+Add: resolve-stock - pull an official package's STOCK deps on minimal/container systems
+
+WHAT IT DOES:
+Optional, OFF by default (RESOLVE_STOCK=no). When on, install augments an
+official package's deps with its stock deps, read from a precomputed sqlite db
+(depgraph.db, built by minotavros, fetched from STOCK_DB_URL). The extra deps go
+through the SAME plan/prompt path as everything else - shown as `new dep for
+<parent>`. slacker still never guesses: it reads a real linked+runtime dep graph,
+official packages still ship no auto-dep metadata.
+
+WHY:
+A full-ISO Slackware has every stock .so already, so it's a no-op there. But a
+minimal/container image (small Docker etc.) is missing them, and stock packages
+assume they're present and never declare them. resolve-stock closes that gap
+without dragging in a foreign package manager or changing the tradition.
+
+- New module src/stockdb.rs: the edges∪hints query (build-time hints EXCLUDED,
+  deduped), db validation, README/ChangeLog freshness stamps. Uses rusqlite with
+  the `bundled` feature so sqlite is compiled in - runtime stays glibc-only, no
+  system libsqlite3. (5th direct dep, only for this.)
+- install: add_with_deps appends the stock deps for official packages, gated
+  inside the existing `if resolve` block (--no-deps / RESOLVE_DEPS=no disables it
+  too). Missing db → one warning, continues without stock deps - never a silent
+  half-install, never a hard stop.
+- update: fetches + validates the db from STOCK_DB_URL on EVERY update (missing or
+  stale is always refreshed, even when all repos are up-to-date). Atomic
+  temp+rename so a bad download never clobbers a good db. Reports in-sync /
+  behind / failed by comparing the source README stamp to the official ChangeLog
+  head - never stops the run.
+- status: one `Stock-db` row in the Online section (present/valid/in-sync,
+  behind, invalid, or "no database installed"). Hidden when the switch is off.
+
+The stock-db is NOT a repo: no PACKAGES.TXT/CHECKSUMS, no priority, never in the
+install path. It's a read-only, stock-only source under STATE_DIR
+(/var/lib/slacker/stock/depgraph.db, persistent - not the disposable cache).
+
+New conf keys: RESOLVE_STOCK (default no) + STOCK_DB_URL.
+With RESOLVE_STOCK off, behaviour is unchanged in every command.
+
+Add: 9 unit tests in stockdb.rs (in-file sqlite, no network/root) - 201 total.
+Update: DEV docs (structure.md, CODE_MAP.txt).
 Update: cmd: `slacker status` now also check for mlocate if outdated and inform.
         Fix: AI suggest `re-run with sudo` but in slackware is better to suggest `re-run as root`
 ---
@@ -11,7 +52,7 @@ Version Beta 0.10.3
   installed package names, repo names, @repo / @_tag selectors,
   template names, and pin's `repo:` prefix. Installed by the package
   to /usr/share/bash-completion/completions/slacker and loaded
-  automatically in new shells. First external contribution — thanks
+  automatically in new shells. First external contribution - thanks
   to danix! (PR #3)
   - Completion ignores leftover `-upgraded-<timestamp>` records in
   /var/adm/packages, so an interrupted upgradepkg never produces
@@ -20,7 +61,7 @@ Version Beta 0.10.3
   completion's command list against the live `slacker --help`; the
   SlackBuild now runs it after the tests, so a stale completion
   fails the build instead of shipping. (repo-only, not installed)
-  - New: zsh and fish completions alongside bash — all three now
+  - New: zsh and fish completions alongside bash - all three now
   generated from a single source of truth (contrib/completions.json,
   rendered by contrib/gen-completions.py; python3 at build time only,
   nothing at runtime). Fixes two arg-type bugs of the hand-written
@@ -54,13 +95,13 @@ Version Beta 0.10.0
 =====
 Fresh bump release, binaries for current (x86_64 and i686) builded with new shipped rust 1.96.0
 
-Add: Credentials system — zypper-modeled
+Add: Credentials system - zypper-modeled
  - HTTP Basic authentication for repos that require login:
 Named sets: /etc/slacker/credentials.d/NAME (username/password), referenced with flag credentials=NAME in repos line.
 Global catalogue: /etc/slacker/credentials.cat with [url-prefix] sections.
 Order: credentials= flag → longest catalogue prefix → anonymous.
 Permissions enforced: root-owned 0600, otherwise refuse+warn+anonymous (fail-safe).
-Zero leak: secret only in Authorization: Basic header — never in repos file, URL, or logs.
+Zero leak: secret only in Authorization: Basic header - never in repos file, URL, or logs.
 New module credentials.rs with inline base64 (no new dependencies).
 https-only + insecure flag (new)
 Credentials only go over https (like apt). For http:
@@ -130,7 +171,7 @@ IMPLEMENTATION:
   served tagless by the higher-priority testing subtree (105); without excluding
   the frozen testing candidate the floor would read 105 and the slackware
   fallback (100) would look like a downgrade and be refused. (This was caught by
-  the scoped-fallback test — it is the crux that makes conraid's real case work.)
+  the scoped-fallback test - it is the crux that makes conraid's real case work.)
 - config.rs: a `@scope` blacklist rule matches the candidate's REPO name OR its
   build TAG, enabling `@_SBo`, `@cf`, etc.
 - main.rs: candidate freeze checks read the precomputed `p.frozen`; `upgrade-all`
@@ -158,19 +199,19 @@ INSTALLED id only (bl_installed on u.installed). A date/version rule such as
 `xf86-.*-202.*` only ever matches the INCOMING build (e.g.
 xf86-input-evdev-20260421_...), never the older installed one (2.11.0), so the
 very build the user froze was offered for upgrade. Meanwhile `info` (which tests
-bl_frozen on each candidate) correctly showed it [blacklisted] — the visible
+bl_frozen on each candidate) correctly showed it [blacklisted] - the visible
 inconsistency.
 
 THE FIX (src/main.rs, cmd_upgrade_all)
 --------------------------------------
-Filter with bl_frozen(cfg, &db, &installed, u.available) — the candidate-aware
+Filter with bl_frozen(cfg, &db, &installed, u.available) - the candidate-aware
 check every other path already uses (upgrade <pattern>, install, install-new,
 reinstall, info, add_with_deps). It covers both the candidate and any
 @repo-scoped rule on the installed source, so nothing the old installed-only
 test caught is lost. Frozen names are now collected and reported via
 note_frozen_excluded(), so the user sees "frozen (skipped)" instead of a silent
 drop. One change, one function. No behaviour change for remove/clean-system
-(those correctly stay installed-only — there is no candidate in a removal).
+(those correctly stay installed-only - there is no candidate in a removal).
 ---
 
 Version Beta 0.9.2
@@ -207,7 +248,7 @@ Fix: varius bugs
 Fix: bug in Multi-match chooser
 Update: Wiki
 Update: man pages
-Add: cmd slacker pin / unpin — permanent "positive" pin (the opposite of freeze)
+Add: cmd slacker pin / unpin - permanent "positive" pin (the opposite of freeze)
 - Save INSIDE the blacklist with @repo 100% pkgname syntax (no new files).
 - Commands: pin repo:package and unpin package (unpin with no argument = list).
 - Semantics: a pinned package is derived ONLY from the pinned repo, ignoring
@@ -264,7 +305,7 @@ BREAKING CHANGE: please update your conf file <slacker new-config>
 Update: new syntax in repos file: mirror/<subpath>
 Add: slacker history
 slacker history --help
-Show a chronological log of package changes — installed, upgraded and removed, and when — newest first. Derived from the pkgtools admin directories, so it also reflects changes made outside slacker
+Show a chronological log of package changes - installed, upgraded and removed, and when - newest first. Derived from the pkgtools admin directories, so it also reflects changes made outside slacker
 
 Usage: slacker history [OPTIONS] [NAME]
 

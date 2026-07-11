@@ -127,6 +127,12 @@ pub struct Config {
     pub repos: Vec<Repo>,
     /// Resolve .dep files and pull in dependencies (RESOLVE_DEPS, default on).
     pub resolve_deps: bool,
+    /// resolve-stock: also pull a stock package's stock deps from the
+    /// local depgraph.db (RESOLVE_STOCK, default off).
+    pub resolve_stock: bool,
+    /// Base URL of the stock dependency database source (STOCK_DB_URL);
+    /// slacker appends `depgraph.db` and `README.md`. Empty = unset.
+    pub stock_db_url: String,
     /// Build tags that clean-system treats as non-foreign (IGNORE_TAGS).
     pub ignore_tags: Vec<String>,
     /// Build-tag priorities for non-binary sources (SBo, local builds).
@@ -213,6 +219,12 @@ pub struct TagPriority {
 }
 
 impl Config {
+    /// Local path of the stock dependency database (persistent, under
+    /// state_dir, NOT cache which is FHS-disposable).
+    pub fn stock_db_path(&self) -> std::path::PathBuf {
+        self.state_dir.join("stock").join("depgraph.db")
+    }
+
     /// Load configuration from a directory of plain-text files.
     pub fn load_dir(dir: &Path) -> Result<Config, String> {
         let conf = parse_keyvals(&read_optional(&dir.join("slacker.conf"))?);
@@ -250,6 +262,19 @@ impl Config {
             Some(v) if v == "no" || v == "false" || v == "0" || v == "off" => false,
             _ => true,
         };
+
+        // RESOLVE_STOCK defaults OFF. yes/on/true/1 turns it on. The user's
+        // explicit declaration that this is a container/minimal system.
+        let resolve_stock = matches!(
+            conf.get("RESOLVE_STOCK").map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+            Some("yes") | Some("on") | Some("true") | Some("1")
+        );
+
+        // STOCK_DB_URL: base URL of the stock-db source (resolve-stock only).
+        let stock_db_url = conf
+            .get("STOCK_DB_URL")
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default();
 
         // IGNORE_TAGS: build tags clean-system should not treat as foreign
         // (e.g. _SBo cf alien _FRG). Space-separated.
@@ -321,6 +346,8 @@ impl Config {
             blacklist,
             repos,
             resolve_deps,
+            resolve_stock,
+            stock_db_url,
             ignore_tags,
             tag_priorities,
             config_dir: dir.to_path_buf(),
@@ -1453,6 +1480,8 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            resolve_stock: false,
+            stock_db_url: String::new(),
             ignore_tags: vec![],
             tag_priorities: vec![],
             config_dir: std::path::PathBuf::new(),
@@ -1498,6 +1527,8 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            resolve_stock: false,
+            stock_db_url: String::new(),
             ignore_tags: vec![],
             tag_priorities: vec![],
             config_dir: std::path::PathBuf::new(),
@@ -1541,6 +1572,8 @@ mod tests {
             blacklist: vec![],
             repos,
             resolve_deps: true,
+            resolve_stock: false,
+            stock_db_url: String::new(),
             ignore_tags: vec![],
             tag_priorities: vec![],
             config_dir: std::path::PathBuf::new(),

@@ -45,9 +45,10 @@ effects beyond reading files.
   Config           struct: arch, cache_dir, pkg_db_dir, adm_dir, resolve_deps,
                    ignore_tags, repos, tag_priorities, blacklist
                    (Vec<BlacklistRule>), config_dir, verify, max_parallel, revert_enabled,
-                   cumulative_url, + helpers
+                   cumulative_url, resolve_stock, stock_db_url, + helpers
                    (repo_by_name, repos_by_priority, blacklist_hit,
-                   official_repo_name, is_ignored_tag, pinned_repo, pins)
+                   official_repo_name, is_ignored_tag, pinned_repo, pins,
+                   stock_db_path)
   ADM_DIR/PKG_DB_DIR  ADM_DIR (slacker.conf, default /var/adm) is the pkgtools
                    admin root; pkg_db_dir is an explicit PKG_DB_DIR when set
                    (back-compat override), else adm_dir.join("packages"). adm_dir
@@ -88,6 +89,12 @@ effects beyond reading files.
                    revert-pkg on/off switch (default on), and the cumulative
                    -current archive URL revert-pkg pulls superseded official
                    packages from (a revert-only source, never used elsewhere)
+  RESOLVE_STOCK / STOCK_DB_URL   resolve-stock keys (default off / empty): the
+                   on/off switch for augmenting an official package's deps with
+                   its stock deps from the downloaded depgraph.db, and the base
+                   URL that DB + its README.md are fetched from. Config also
+                   gains stock_db_path() -> STATE_DIR/stock/depgraph.db. Neither
+                   is a repo; the DB is a stock-only data source (see stockdb.rs)
   Config::load     the entry point; ties all files together
   detect_arch      reads ARCH from the installed aaa_base package
   parse_repos      splits binary-repo lines from tag-priority lines: the 3rd
@@ -405,9 +412,66 @@ changelog.rs      (~77 lines)    check-updates / show-changelog
                        (smaller than PACKAGES.TXT, changes on any package change)
                        -> UpdateStatus
   UpdateStatus         enum used for the exit-100 "pending" signal
+NOTE: changelog_repo + cached_changelog are also reused by the resolve-stock
+freshness check (main.rs refresh_stock_db and status_full): the official
+ChangeLog head is compared against the stock-db source's README stamp.
 LOOK HERE IF: check-updates gives the wrong pending/exit status. show-changelog
 takes an optional repo name; the on-demand fetch for an uncached repo lives in
 repo::fetch_changelog_text.
+
+--------------------------------------------------------------------------------
+stockdb.rs        (~130 lines)   resolve-stock: the stock dependency database
+--------------------------------------------------------------------------------
+Optional feature (RESOLVE_STOCK, default off). Reads a precomputed SQLite
+database of the stock tree's real dependencies (depgraph.db, produced by the
+separate `minotavros` tool from the binaries and published at STOCK_DB_URL) so
+that on a MINIMAL/container system a stock package's missing stock deps can be
+pulled in through the normal flow. A no-op on full-ISO (those deps are already
+installed). Self-contained: only rusqlite + std; NO network here (main.rs does
+the fetching and orchestration).
+
+  deps_for          direct stock deps of a package: the edges∪hints query
+                    (linked + runtime, NEVER kind='build'), de-duped, self
+                    excluded, sorted. Empty on any problem; QUIET when the DB
+                    file is missing (the one-time "no database" warning is the
+                    caller's job) but reports a present-yet-corrupt DB.
+  is_valid_db       does this path open as sqlite AND have an `edges` table
+                    (status uses it to tell "invalid" from "valid")
+  validate_and_write  write freshly-downloaded bytes atomically: temp file ->
+                    validate (is_valid_db) -> rename into place, so a bad or
+                    partial download never replaces a good DB. Err if invalid.
+  readme_stamp      the sync stamp from the source README's first line
+                    (`ChangeLog.txt: <date>` -> `<date>`)
+  changelog_head    the -current head: first non-empty line of ChangeLog.txt
+
+THE QUERY is the whole point:
+  SELECT to_pkg FROM edges WHERE from_pkg=?1
+  UNION
+  SELECT to_pkg FROM hints WHERE from_pkg=?1 AND kind!='build'
+`edges` = certain (linked ELF NEEDED->SONAME); `hints` = runtime guesses
+(dlopen/exec/import/use); the `build` kind is excluded (build-time, not runtime).
+
+WHY A DB, NOT A REPO: the stock-db is not a Slackware repo - no PACKAGES.TXT, no
+CHECKSUMS, no priority, no verify policy, never in the install path. It is a
+read-only, stock-only data source at its own STOCK_DB_URL, stored under STATE_DIR
+(stock/depgraph.db - persistent, not the disposable cache), consulted only to
+AUGMENT the deps main.rs already gathers, and only when RESOLVE_STOCK=yes.
+
+WHY rusqlite BUNDLED: the `bundled` feature compiles SQLite INTO the binary, so
+the runtime still needs only glibc (no system libsqlite3) - the same "no new
+system dependency" discipline as the rustls TLS choice. It is the crate's fifth
+direct dependency, added solely for this feature.
+
+TESTS: 9 in-file unit tests (temp/in-memory SQLite, no network/root) - the
+edges∪hints query (build excluded, dedup), missing/edges-only/corrupt DB,
+validate_and_write (garbage rejected, good DB preserved), and stamp/head compare.
+
+LOOK HERE IF: the wrong stock deps are added (check the query, or the DB's own
+data), a downloaded DB is rejected (is_valid_db / validate_and_write), or the
+freshness line is wrong (readme_stamp vs changelog_head). The download itself,
+the refresh_stock_db orchestration, the add_with_deps hook, the status `Stock-db`
+row and the install-time "no database" warning all live in main.rs; the
+RESOLVE_STOCK / STOCK_DB_URL config keys and stock_db_path() live in config.rs.
 
 --------------------------------------------------------------------------------
 gpg.rs            (~321 lines)   key import + signature verify (fail-closed)
@@ -533,7 +597,19 @@ PLAN builder, and one cmd_* function per action.
     PlanItem       one package + action + optional dep_for (parent) + optional
                    from (installed version, so upgrades show old -> new)
     expand_with_deps / add_with_deps   recursively pull .dep dependencies,
-                     dedup, and attach dep_for so new deps can be shown up front
+                     dedup, and attach dep_for so new deps can be shown up front.
+                     RESOLVE-STOCK HOOK: when RESOLVE_STOCK=yes and the package is
+                     from the official repo, add_with_deps also appends
+                     stockdb::deps_for(stock_db_path, name) here, so stock deps
+                     flow through this same recursion/plan/prompt path (nothing
+                     new). expand_with_deps prints the one-time "stock-db not
+                     found" warning when the switch is on but the DB is absent.
+    refresh_stock_db   (resolve-stock) download depgraph.db from STOCK_DB_URL,
+                     validate + atomically install it (stockdb::validate_and_write),
+                     then print the in-sync / behind / failed line (README stamp
+                     vs official ChangeLog head). Called from cmd_update on BOTH
+                     the up-to-date early-return and the normal end. status_full
+                     renders the matching `Stock-db` row. Never aborts a run.
     ask_dep_conflict  the skip/replace/skip-all/abort prompt when an installed
                      dep from a LOWER-priority source differs from the repo
     resolve_protected_deps / ask_protected_dep   when an installed dep comes
@@ -772,5 +848,8 @@ General hints for a forker
   edition 2024, which only stabilised in Rust 1.85. `cargo msrv find` confirms
   this; declare it as `rust-version` and freeze deps (Cargo.lock + cargo vendor)
   before shipping to a distro. Direct deps: clap, ureq (rustls TLS — no system
-  OpenSSL), md-5, and regex; think hard before adding a fifth.
+  OpenSSL), md-5, and regex. A fifth, rusqlite (with the `bundled` feature), was
+  added for the optional resolve-stock feature - bundled so SQLite is compiled
+  into the binary and the runtime still needs only glibc (no system libsqlite3);
+  weigh a sixth just as hard.
 ================================================================================

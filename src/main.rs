@@ -4,6 +4,7 @@
 mod banner;
 mod banner2;
 mod changelog;
+mod stockdb;
 mod config;
 mod credentials;
 mod dist;
@@ -807,6 +808,14 @@ fn expand_with_deps(
     resolve: bool,
     assume_yes: bool,
 ) -> Result<Vec<PlanItem>, String> {
+    if cfg.resolve_stock && !cfg.stock_db_path().exists() {
+        eprintln!(
+            "  {} {}",
+            ui::yellow("!"),
+            ui::yellow("stock-db not found \u{2014} resolve-stock is on but has no database.")
+        );
+        eprintln!("    run `slacker update` first. continuing without stock deps.");
+    }
     let mut plan = Vec::new();
     let mut planned: HashSet<String> = HashSet::new();
     let mut visiting: HashSet<String> = HashSet::new();
@@ -866,7 +875,18 @@ fn add_with_deps(
 
     if resolve {
         if let Some(repo) = cfg.repo_by_name(&pkg.repo) {
-            for dep in repo::fetch_dep(repo, &pkg) {
+            let mut deps = repo::fetch_dep(repo, &pkg);
+            // resolve-stock: in a container/minimal system, also pull the
+            // stock deps this OFFICIAL package needs (linked + runtime, never
+            // build). Off by default -> deps == fetch_dep(), i.e. no change.
+            if cfg.resolve_stock && repo.official {
+                for e in stockdb::deps_for(&cfg.stock_db_path(), &name) {
+                    if !deps.contains(&e) {
+                        deps.push(e);
+                    }
+                }
+            }
+            for dep in deps {
                 // A blacklisted dependency is never pulled in — whether it would
                 // come fresh from this repo, or is already installed/frozen.
                 let bl = db
@@ -3126,6 +3146,63 @@ fn reload_repo(cfg: &Config, name: &str) -> Result<config::Repo, String> {
         .ok_or_else(|| format!("internal: repo '{name}' not found after writing config"))
 }
 
+/// resolve-stock: download the stock dependency DB and report whether it is in
+/// sync with -current. Never aborts — prints one visible line and returns.
+fn refresh_stock_db(cfg: &Config) {
+    let base = cfg.stock_db_url.trim_end_matches('/');
+    if base.is_empty() {
+        println!(
+            "  {} {}",
+            ui::yellow("!"),
+            ui::yellow("resolve-stock is on but STOCK_DB_URL is unset \u{2014} cannot fetch stock-db")
+        );
+        return;
+    }
+    let bytes = match download::get_bytes(&format!("{base}/depgraph.db")) {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "  {} {}",
+                ui::red("\u{2717}"),
+                ui::red(&format!(
+                    "stock-db download failed \u{2014} resolve-stock may be incomplete ({e})"
+                ))
+            );
+            return;
+        }
+    };
+    if let Err(e) = stockdb::validate_and_write(&bytes, &cfg.stock_db_path()) {
+        println!("  {} {}", ui::red("\u{2717}"), ui::red(&format!("stock-db invalid \u{2014} {e}")));
+        return;
+    }
+    // Freshness: stock-db README stamp vs the (now fresh) official ChangeLog head.
+    let stamp = download::get_bytes(&format!("{base}/README.md"))
+        .ok()
+        .and_then(|b| stockdb::readme_stamp(&String::from_utf8_lossy(&b)));
+    let head = changelog::changelog_repo(&cfg.repos)
+        .and_then(|r| changelog::cached_changelog(r, &cfg.cache_dir))
+        .and_then(|c| stockdb::changelog_head(&c));
+    match (stamp, head) {
+        (Some(s), Some(h)) if s == h => println!(
+            "  {} {}",
+            ui::green("\u{2713}"),
+            ui::green("stock-db updated (in sync with -current)")
+        ),
+        (Some(_), Some(_)) => println!(
+            "  {} {}",
+            ui::yellow("!"),
+            ui::yellow(
+                "stock-db updated but behind -current \u{2014} resolve-stock deps may be incomplete"
+            )
+        ),
+        _ => println!(
+            "  {} {}",
+            ui::green("\u{2713}"),
+            ui::dim("stock-db updated (could not verify sync with -current)")
+        ),
+    }
+}
+
 fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     if mode == Some("gpg") {
         let mut newly = 0;
@@ -3243,6 +3320,12 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
 
     if needing.is_empty() {
         println!("\n{}", ui::green("All up-to-date — no news is good news."));
+        // Even when no repo changed, the stock-db must still be checked/
+        // fetched: in a container it may be missing or stale regardless of
+        // repo state (repos up-to-date != stock-db present & in sync).
+        if cfg.resolve_stock {
+            refresh_stock_db(cfg);
+        }
         warn_unverified_repos(cfg);
         return Ok(Outcome::Ok);
     }
@@ -3340,6 +3423,9 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
                  once reachable. If one is gone for good, `slacker del-repo NAME`."
             )
         );
+    }
+    if cfg.resolve_stock {
+        refresh_stock_db(cfg);
     }
     warn_unverified_repos(cfg);
     Ok(Outcome::Ok)
@@ -5204,6 +5290,47 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
                     srow(&bad, "Reachable", &ui::red(&format!("{} unreachable: {e}", r.name)));
                     unreachable = true;
                 }
+            }
+        }
+    }
+
+    // ---------- Stock-db (resolve-stock only) ----------
+    if cfg.resolve_stock {
+        let path = cfg.stock_db_path();
+        if !path.exists() {
+            srow(
+                &bad,
+                "Stock-db",
+                &ui::red("no database installed \u{2014} run `slacker update`, then `slacker status`"),
+            );
+        } else if !stockdb::is_valid_db(&path) {
+            srow(
+                &bad,
+                "Stock-db",
+                &ui::red("present but invalid (not a database) \u{2014} run `slacker update`"),
+            );
+        } else {
+            let base = cfg.stock_db_url.trim_end_matches('/');
+            let stamp = if base.is_empty() {
+                None
+            } else {
+                download::get_bytes(&format!("{base}/README.md"))
+                    .ok()
+                    .and_then(|b| stockdb::readme_stamp(&String::from_utf8_lossy(&b)))
+            };
+            let head = changelog::changelog_repo(&cfg.repos)
+                .and_then(|r| changelog::cached_changelog(r, &cfg.cache_dir))
+                .and_then(|c| stockdb::changelog_head(&c));
+            match (stamp, head) {
+                (Some(s), Some(h)) if s == h => {
+                    srow(&ok, "Stock-db", &ui::green("present, valid, in sync with -current"))
+                }
+                (Some(_), Some(_)) => srow(
+                    &warn,
+                    "Stock-db",
+                    &ui::yellow("present but behind -current \u{2014} run `slacker update`"),
+                ),
+                _ => srow(&ok, "Stock-db", &ui::dim("present, valid (sync not verified)")),
             }
         }
     }

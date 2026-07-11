@@ -9,20 +9,23 @@ crate itself is edition 2021 for broad compatibility, but a dependency (clap_lex
 1.1.0) is written in edition 2024 — that is what sets the 1.85.1 floor, not any
 slacker code. Direct deps: clap, ureq (rustls TLS — no system OpenSSL needed),
 md-5, regex. Heavy lifting (bzip2 for MANIFEST, GPG) shells out to the system
-tools Slackware already ships - no extra Rust deps.
+tools Slackware already ships - no extra Rust deps. The optional resolve-stock
+feature (below) adds one further direct dep, rusqlite with the `bundled`
+feature: SQLite is compiled into the binary, so the runtime still needs only
+glibc (no system libsqlite3).
 
 ### Source_Tree
 ```
 slacker/
-├── Cargo.toml                      <- build manifest (deps: clap, ureq [rustls], md-5, regex; Apache-2.0)
+├── Cargo.toml                      <- build manifest (deps: clap, ureq [rustls], md-5, regex, rusqlite [bundled]; Apache-2.0)
 ├── slacker.8                       <- man page (section 8)
 ├── examples/etc-slacker/           <- config templates for /etc/slacker/
-│   ├── slacker.conf                <- globals (ARCH auto-detect, ADM_DIR, CACHE_DIR, STATE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY, MAX_PARALLEL, REVERT, CUMULATIVE_URL)
+│   ├── slacker.conf                <- globals (ARCH auto-detect, ADM_DIR, CACHE_DIR, STATE_DIR, PKG_DB_DIR, RESOLVE_DEPS, IGNORE_TAGS, VERIFY, MAX_PARALLEL, REVERT, CUMULATIVE_URL, RESOLVE_STOCK, STOCK_DB_URL)
 │   ├── mirrors                     <- catalogue of official mirrors - uncomment ONE (none by default)
 │   ├── repos                       <- binary repos + tag-priority lines
 │   ├── blacklist                   <- blacklist rules: [@repo] GLOB|REGEX | [@repo] series/
 │   └── distro-upgrade.conf         <- optional DISTRO_UPGRADE_MIRROR (local source for upgrade-dist)
-└── src/                            <- 20 modules
+└── src/                            <- 21 modules
     ├── main.rs        CLI + commands (38 actions, exit codes, prompts, dry-run, dep resolution, @-selectors, multi-match selection, repo/tag management, blacklist freeze + pin/unpin, quarantine, history, distribution upgrade)
     ├── config.rs      plain-text config + arch auto-detect + ADM_DIR/PKG_DB_DIR + tag-priorities + VerifyPolicy/Check + blacklist rules (glob-or-regex/@repo/series) + glob<->regex pattern compile + pins (@repo 100% name) + repo flags (official/immutable/subtree/insecure + credentials=NAME) + subtree download base + mirror/<subpath> URLs + DISTRO_UPGRADE_MIRROR (distro-upgrade.conf)
     ├── dist.rs        distribution-upgrade engine: Release/Route types, parse_release_from_os (os-release) + parse_release_from_url, the fail-closed route whitelist (dist_route), release suffix/target parsing (used by upgrade-dist and the release-mismatch guard)
@@ -42,7 +45,8 @@ slacker/
     ├── newconfig.rs   .new config file handling
     ├── banner.rs      SLACKWARE block-art banner (include_str! .nfo, TTY-gated, 256-colour, NO_COLOR aware) for upgrade-dist/upgrade-all
     ├── banner2.rs     the slacker masthead: generated Cretan-labyrinth emblem + wordmark + version (CARGO_PKG_VERSION), TTY-gated, shown once at the top of every command
-    └── ui.rs           minimal ANSI colouring (TTY + NO_COLOR aware), plan tables
+    ├── ui.rs           minimal ANSI colouring (TTY + NO_COLOR aware), plan tables
+    └── stockdb.rs      resolve-stock (optional, off by default): read the stock dependency DB (depgraph.db, SQLite via rusqlite) - the edges∪hints query, download-validate, and the README/ChangeLog freshness stamps
 ```
 
 ### Config_Model
@@ -63,7 +67,12 @@ slacker/
   `revert-pkg`) and CUMULATIVE_URL (default
   `https://slackware.uk/cumulative/slackware64-current`; the revert-only -current
   archive `revert-pkg` fetches old official packages from, never consulted by
-  update/upgrade/install/check-updates).
+  update/upgrade/install/check-updates). RESOLVE_STOCK (default no) and
+  STOCK_DB_URL (default empty) drive the optional resolve-stock feature (see
+  its section below): the on/off switch is the user's explicit declaration of a
+  minimal/container system, and the base URL is where the stock dependency
+  database (`depgraph.db`) and its `README.md` are fetched from. Neither is a
+  repo; the DB is stored under STATE_DIR (`stock/depgraph.db`).
 - **mirrors** - slackpkg-style catalogue; uncomment exactly ONE (none by
   default; 2+ -> error). Holds the official mirror URL (current/15.0 × 64/32,
   http/https/file://).
@@ -319,6 +328,78 @@ New deps are shown up front (before the confirm) in the same coloured plan table
 as everything else — a `new dep` row tagged `for <parent>`. On by default; off via
 `RESOLVE_DEPS=no` or per-run `--no-deps`. Applies to install, upgrade,
 reinstall, upgrade-all, install-new, install-template.
+
+### Stock dependency resolution (resolve-stock)
+
+Optional, **OFF by default** (`RESOLVE_STOCK=no`). It exists for one situation: a
+**minimal / container** Slackware (e.g. a small Docker image) that was NOT
+installed from the full ISO, where a stock package's *stock* dependencies are
+genuinely absent. On a normal full-ISO box every stock `.so` is already present,
+so the feature is a no-op there - the deps it would add are already installed and
+simply show as "kept". With the switch off, behaviour is unchanged in every
+command; the user turns it on to declare "I am on such a system" - their
+responsibility, there is no auto-detection.
+
+Why this keeps the Slackware tradition: slacker still never *guesses* a
+dependency, and official packages still ship no auto-dep metadata of their own.
+resolve-stock reads a *precomputed, external* database of the stock tree's real
+linked + runtime dependencies - produced by the separate `minotavros` tool from
+the binaries themselves and published at `STOCK_DB_URL` - and augments the
+EXISTING dep flow at the single point where a package's declared deps are
+gathered. Nothing new is invented, the plan -> list -> y/n -> `--yes` path is
+unchanged, and the extra packages appear as ordinary `new dep for <parent>` rows.
+
+- **The data.** `depgraph.db` - a SQLite database with two tables: `edges`
+  (linked ELF dependencies, from NEEDED->SONAME resolution - certain) and `hints`
+  (runtime dependencies beyond linking: dlopen / exec / import / use, plus a
+  `build` kind that is EXCLUDED). One query per package returns the union, minus
+  build-time:
+  `SELECT to_pkg FROM edges WHERE from_pkg=?  UNION  SELECT to_pkg FROM hints
+  WHERE from_pkg=? AND kind!='build'`.
+- **install.** When `RESOLVE_STOCK=yes` and the package being processed comes
+  from the `official` repo, `add_with_deps` appends the query's result to the
+  deps it already gathered from `.dep`/PACKAGE REQUIRED. The existing recursion
+  then resolves each against the official repo like any other dep - so in a
+  container a missing stock dep is pulled in, on full-ISO it is already installed
+  (kept). Gated inside the same `if resolve` block as `.dep`, so `--no-deps` /
+  `RESOLVE_DEPS=no` disables it too. If the DB is absent, one visible warning is
+  printed once per plan (in `expand_with_deps`) and the install continues without
+  stock deps - never a silent half-install, never a hard stop.
+- **update.** With `RESOLVE_STOCK=yes`, EVERY `slacker update` fetches the DB
+  from `STOCK_DB_URL` and prints one line - whether or not any repo changed
+  (called on both the "all up-to-date" early-return and the normal end, so a
+  missing or stale DB is always refreshed). The download is validated atomically:
+  written to a temp file, opened as SQLite, checked for an `edges` table, then
+  renamed into place, so a bad or partial download never replaces a good DB.
+  Freshness = compare the source README's first line (`ChangeLog.txt: <date>`,
+  the stamp) against the first line of the official `ChangeLog.txt` slacker just
+  refreshed. Result, never a stop: `stock-db updated (in sync with -current)` /
+  `... behind -current ...` / `stock-db download failed ...`.
+- **status.** With `RESOLVE_STOCK=yes`, one `Stock-db` row in the Online section:
+  `present, valid, in sync with -current` / `present but behind -current` /
+  `present but invalid (not a database)` / `no database installed - run
+  slacker update, then slacker status`. Hidden entirely when the switch is off
+  (zero change to the existing status output).
+- **Not a repo.** The stock-db never enters the `repos` model, priority, verify
+  policy, or install path; it has no PACKAGES.TXT/CHECKSUMS. It is a special,
+  read-only, stock-only data source at its own `STOCK_DB_URL`, stored under
+  STATE_DIR (`/var/lib/slacker/stock/depgraph.db` - persistent, not the
+  FHS-disposable cache), consulted only when `RESOLVE_STOCK=yes`.
+
+The freshness stamp deliberately lives OUTSIDE the DB (the DB carries no
+"when was I built" field): it is the source README's first line, compared to the
+official ChangeLog head. A manual 1-2 day lag in that README can only ever make
+the check say "behind" (safe) - never "in sync while stale", because a moved
+-current ChangeLog will not match.
+
+Code: `stockdb.rs` (the query + validation + stamp parsing, all pure and
+DB-only) + `refresh_stock_db` and three small hooks in `main.rs` (add_with_deps,
+cmd_update, status_full) + `resolve_stock`/`stock_db_url` in config.rs. rusqlite
+is built with the `bundled` feature so the runtime stays glibc-only. stockdb.rs ships 9
+unit tests (in-file temp/in-memory SQLite, no network, no root) covering the
+edges∪hints query with build-time excluded, dedup, the missing/edges-only/corrupt
+DB paths, validate_and_write (rejects garbage without clobbering a good DB), and
+the README-stamp vs ChangeLog-head freshness compare.
 
 ### Build_and_Tests
 
