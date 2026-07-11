@@ -1,3 +1,9 @@
+Version Beta 0.10.4
+=====
+Update: cmd: `slacker status` now also check for mlocate if outdated and inform.
+        Fix: AI suggest `re-run with sudo` but in slackware is better to suggest `re-run as root`
+---
+
 Version Beta 0.10.3
 =====
 - Updates: Thanks to @danix !!!

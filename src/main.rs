@@ -525,7 +525,7 @@ fn ensure_privileged(cmd: &Cmd) -> Result<(), String> {
     }
     let name = command_name(cmd);
     let hint = if in_wheel() {
-        format!("run it with: sudo slacker {name} ...")
+        format!("run it as root: slacker {name} ...")
     } else {
         "you are not in the 'wheel' group; ask a system administrator".to_string()
     };
@@ -3518,7 +3518,7 @@ fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
         } else {
             eprintln!("note: the MANIFEST for: {list} is not cached yet, and downloading it");
             eprintln!("      needs root (it is written into {}).", cfg.cache_dir.display());
-            eprintln!("      run once as: sudo slacker file-search {filename}");
+            eprintln!("      run once as root: slacker file-search {filename}");
         }
     }
 
@@ -4089,10 +4089,72 @@ fn fmt_symlink_sample(sample: &[(PathBuf, PathBuf)], total: usize) -> String {
 /// configuration is the very thing it must diagnose, so it first checks the
 /// environment and validates the config files, and only then — if they are
 /// sound — runs the full health report against a loaded `Config`.
+/// The official Slackware locate database (mlocate, a/ series). A single fixed
+/// path — plocate lives only on SBo and is not what the official system ships.
+const MLOCATE_DB: &str = "/var/lib/mlocate/mlocate.db";
+
+/// How old the locate database may be before `status` flags it. updatedb runs
+/// from /etc/cron.daily, so one missed daily slot (machine down at ~04:40) is
+/// tolerated; past this the daily job is probably not running.
+const LOCATE_DB_MAX_AGE_HOURS: u64 = 36;
+
+/// The verdict for the locate-database freshness check.
+#[derive(Debug, PartialEq, Eq)]
+enum LocateDb {
+    /// Database present and refreshed within the age budget; carries its age in hours.
+    Fresh(u64),
+    /// Database present but older than the budget; carries its age in hours.
+    Stale(u64),
+    /// No database file at all (updatedb has never run).
+    Missing,
+    /// The file exists but its metadata could not be read (root:slocate 0640,
+    /// so a non-root run cannot stat it) — reported as "not checked", never as a
+    /// problem.
+    Unreadable,
+}
+
+/// Pure verdict from the database's modified-time and the current time, both as
+/// seconds since the Unix epoch. Split out so the age/threshold logic is
+/// unit-testable without touching the filesystem or the clock. A modified time
+/// in the future (clock skew) is treated as age 0 (Fresh), never as underflow.
+fn locate_db_verdict(now_secs: u64, mtime_secs: u64) -> LocateDb {
+    let age_h = now_secs.saturating_sub(mtime_secs) / 3600;
+    if age_h <= LOCATE_DB_MAX_AGE_HOURS {
+        LocateDb::Fresh(age_h)
+    } else {
+        LocateDb::Stale(age_h)
+    }
+}
+
+/// Read the mlocate database's age, mapping the IO outcomes onto [`LocateDb`]:
+/// a missing file is `Missing`; a present file whose metadata/mtime cannot be
+/// read (permission denied for non-root, since it is root:slocate 0640) is
+/// `Unreadable`; otherwise the pure [`locate_db_verdict`] decides Fresh/Stale.
+fn locate_db_mtime_age() -> LocateDb {
+    let path = std::path::Path::new(MLOCATE_DB);
+    let md = match std::fs::metadata(path) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LocateDb::Missing,
+        Err(_) => return LocateDb::Unreadable, // permission denied &c.
+    };
+    let mtime = match md.modified().ok().and_then(|t| {
+        t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
+    }) {
+        Some(s) => s,
+        None => return LocateDb::Unreadable,
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(mtime); // clock unreadable -> treat as fresh, never panic
+    locate_db_verdict(now, mtime)
+}
+
 fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
     let ok = ui::green("\u{2713}"); // ✓
     let bad = ui::red("\u{2717}"); // ✗
     let warn = ui::yellow("!");
+    let info_env = ui::blue("\u{00B7}"); // ·
     let srow = |mark: &str, label: &str, detail: &str| {
         println!("  {} {} {}", mark, ui::white(&format!("{:<10}", label)), detail);
     };
@@ -4140,6 +4202,44 @@ fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
         srow(&ok, "Tools", &ui::dim("gpg, bzip2, sha256sum, diff present"));
     } else {
         srow(&warn, "Tools", &ui::yellow(&format!("missing: {}", missing_aux.join(", "))));
+    }
+
+    // The locate(1) database. Slackware ships mlocate (a/ series); its updatedb
+    // runs from /etc/cron.daily, so a database older than a day means the daily
+    // job has not run (cron off, or the machine was down at ~04:40) and locate
+    // results are stale. This is advisory only — mlocate is not needed by
+    // slacker itself. The DB is root:slocate 0640, so a non-root run usually
+    // cannot stat it: report that honestly ("needs root") rather than guessing,
+    // exactly as elsewhere. Only checked when mlocate is actually installed.
+    if tool_on_path("updatedb") || tool_on_path("locate") {
+        match locate_db_mtime_age() {
+            LocateDb::Fresh(age_h) => {
+                srow(&ok, "Locate DB", &ui::dim(&format!("mlocate database is current ({age_h}h old)")));
+            }
+            LocateDb::Stale(age_h) => {
+                srow(
+                    &warn,
+                    "Locate DB",
+                    &ui::yellow(&format!(
+                        "mlocate database is {age_h}h old — the daily updatedb may not be running; refresh it with `updatedb` as root"
+                    )),
+                );
+            }
+            LocateDb::Missing => {
+                srow(
+                    &warn,
+                    "Locate DB",
+                    &ui::yellow("mlocate database not built yet — create it with `updatedb` as root"),
+                );
+            }
+            LocateDb::Unreadable => {
+                srow(
+                    &info_env,
+                    "Locate DB",
+                    &ui::dim("not checked (the mlocate database is readable only by root — re-run as root)"),
+                );
+            }
+        }
     }
 
     // Config syntax + cross-checks, via the SAME validator the `add-repo`/`add-tag`
@@ -4946,12 +5046,12 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     if audit.severe() {
         security_problem = true;
     }
-    let fix_own = format!("sudo chown -R root:root {} {}", cfg.config_dir.display(), cfg.cache_dir.display());
-    let fix_w = format!("sudo chmod -R go-w {} {}", cfg.config_dir.display(), cfg.cache_dir.display());
+    let fix_own = format!("chown -R root:root {} {}", cfg.config_dir.display(), cfg.cache_dir.display());
+    let fix_w = format!("chmod -R go-w {} {}", cfg.config_dir.display(), cfg.cache_dir.display());
     if audit.clean() {
         let tail = if audit.unreadable > 0 {
             format!(
-                " ({} checked, {} dir(s) need root to read — re-run with sudo for a full audit)",
+                " ({} checked, {} dir(s) need root to read — re-run as root for a full audit)",
                 audit.checked, audit.unreadable
             )
         } else {
@@ -5012,7 +5112,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
                 &info,
                 "Integrity",
                 &ui::dim(&format!(
-                    "{} dir(s) need root to read — re-run with sudo for a full audit",
+                    "{} dir(s) need root to read — re-run as root for a full audit",
                     audit.unreadable
                 )),
             );
@@ -10473,5 +10573,46 @@ mod foundational_tests {
         assert_ne!(major_token("74.2"), major_token("76.1"));
         // A patch bump is NOT a major bump.
         assert_eq!(major_token("3.1.4"), major_token("3.2.0"));
+    }
+}
+
+#[cfg(test)]
+mod locate_db_tests {
+    use super::*;
+
+    const H: u64 = 3600;
+
+    #[test]
+    fn fresh_within_budget() {
+        let now = 1_000_000 * H;
+        // just built
+        assert_eq!(locate_db_verdict(now, now), LocateDb::Fresh(0));
+        // a normal daily run, ~5h ago
+        assert_eq!(locate_db_verdict(now, now - 5 * H), LocateDb::Fresh(5));
+        // exactly at the 36h boundary is still fresh (one missed slot tolerated)
+        assert_eq!(
+            locate_db_verdict(now, now - LOCATE_DB_MAX_AGE_HOURS * H),
+            LocateDb::Fresh(LOCATE_DB_MAX_AGE_HOURS)
+        );
+    }
+
+    #[test]
+    fn stale_past_budget() {
+        let now = 1_000_000 * H;
+        // one hour past the boundary -> stale
+        assert_eq!(
+            locate_db_verdict(now, now - (LOCATE_DB_MAX_AGE_HOURS + 1) * H),
+            LocateDb::Stale(LOCATE_DB_MAX_AGE_HOURS + 1)
+        );
+        // a week old -> stale
+        assert_eq!(locate_db_verdict(now, now - 24 * 7 * H), LocateDb::Stale(168));
+    }
+
+    #[test]
+    fn future_mtime_is_fresh_not_underflow() {
+        // Clock skew: DB mtime slightly in the future must not underflow into a
+        // huge "stale" age; saturating_sub pins it to age 0 (Fresh).
+        let now = 1_000_000 * H;
+        assert_eq!(locate_db_verdict(now, now + 5 * H), LocateDb::Fresh(0));
     }
 }
