@@ -1,23 +1,27 @@
 //! stockdb.rs — `resolve-stock` support for slacker.
 //!
 //! Reads a minotavros `depgraph.db` and returns the STOCK dependencies of a
-//! package: linked (`edges`) + runtime hints (`hints`, kinds dlopen/exec/import/
-//! use) — NEVER build-time. The database is a special stock-only source, not a
-//! repo: opened READ-ONLY, never part of repo verification, priority, or install.
+//! package from its PRECOMPUTED `closure` table: "what this package needs to
+//! RUN on a bare system". The closure is computed at database-build time from
+//! the real ELF files (level-1 = the whole package's NEEDED + its runtime
+//! hints; deeper = ONLY the library-loader chains, so tool-only deps of other
+//! packages are never dragged in). slacker itself does NO graph walking and
+//! NO guessing — one SELECT, the repository's data is the resolver.
 //!
-//! Self-contained (only `rusqlite` + std). Networking and slacker's ChangeLog
-//! access stay in `main.rs`; this module only does the local, testable pieces:
-//! the dependency query, validating a downloaded DB, and parsing the two
-//! one-line "heads" used for the freshness check.
+//! The database is a special stock-only source, not a repo: opened READ-ONLY,
+//! never part of repo verification, priority, or install. Self-contained
+//! (only `rusqlite` + std). Networking and slacker's ChangeLog access stay in
+//! `main.rs`; this module only does the local, testable pieces.
 
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 
-/// Direct stock deps of `pkg` from the depgraph DB at `db_path`: linked (edges)
-/// + runtime hints (not build), de-duplicated, self excluded, sorted. Empty on
-/// any problem (missing file, unreadable, unknown package). QUIET on a missing
-/// file — the one-time "no database" warning is printed by the caller — but
-/// reports a genuinely corrupt DB (present yet unreadable).
+/// The full runtime closure of `pkg` from the depgraph DB at `db_path`:
+/// one row per needed package, precomputed (see module docs), de-duplicated,
+/// self excluded, sorted. Empty on any problem (missing file, unreadable,
+/// old-schema DB without a `closure` table, unknown package). QUIET on a
+/// missing file — the one-time "no database" warning is printed by the
+/// caller — but reports a present-yet-unusable DB.
 pub fn deps_for(db_path: &Path, pkg: &str) -> Vec<String> {
     if !db_path.exists() {
         return Vec::new(); // caller warns once; don't spam per package
@@ -34,21 +38,9 @@ pub fn deps_for(db_path: &Path, pkg: &str) -> Vec<String> {
 fn query(db_path: &Path, pkg: &str) -> Result<Vec<String>, String> {
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| format!("open {}: {e}", db_path.display()))?;
-    let has_hints: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='hints'",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let sql = if has_hints > 0 {
-        "SELECT to_pkg FROM edges WHERE from_pkg=?1
-         UNION
-         SELECT to_pkg FROM hints WHERE from_pkg=?1 AND kind!='build'"
-    } else {
-        "SELECT to_pkg FROM edges WHERE from_pkg=?1"
-    };
-    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT to_pkg FROM closure WHERE from_pkg=?1")
+        .map_err(|e| format!("{e} (stock-db too old? run `slacker update`)"))?;
     let rows = stmt
         .query_map([pkg], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
@@ -63,14 +55,15 @@ fn query(db_path: &Path, pkg: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Is the file at `path` a usable stock DB (opens as sqlite, has an `edges`
-/// table)? Used by `status` to tell "present but invalid" from "valid".
+/// Is the file at `path` a usable stock DB (opens as sqlite, has a `closure`
+/// table)? An older depgraph.db that predates the closure table is NOT usable
+/// by resolve-stock — status reports it and `update` refetches it.
 pub fn is_valid_db(path: &Path) -> bool {
     let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
         return false;
     };
     conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='edges'",
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='closure'",
         [],
         |r| r.get::<_, i64>(0),
     )
@@ -79,8 +72,8 @@ pub fn is_valid_db(path: &Path) -> bool {
 }
 
 /// Validate freshly-downloaded `bytes` as a depgraph DB (opens as sqlite, has
-/// `edges`), then atomically put it at `dest` (temp + rename, so a partial or
-/// bad download never replaces a good DB). Err if the bytes are not a valid DB.
+/// `closure`), then atomically put it at `dest` (temp + rename, so a partial
+/// or bad download never replaces a good DB). Err if the bytes are not usable.
 pub fn validate_and_write(bytes: &[u8], dest: &Path) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
@@ -89,7 +82,7 @@ pub fn validate_and_write(bytes: &[u8], dest: &Path) -> Result<(), String> {
     std::fs::write(&tmp, bytes).map_err(|e| format!("write {}: {e}", tmp.display()))?;
     if !is_valid_db(&tmp) {
         // leave the .new behind (overwritten next attempt); never touch `dest`.
-        return Err("downloaded file is not a valid depgraph database".into());
+        return Err("downloaded file is not a usable depgraph database (no closure table)".into());
     }
     std::fs::rename(&tmp, dest).map_err(|e| format!("install {}: {e}", dest.display()))
 }
@@ -117,19 +110,27 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
-    // A tiny in-file DB: 2 linked edges + 1 runtime hint + 1 build hint, so the
-    // tests exercise the exact rules (edges∪hints, build excluded, dedup) without
-    // any network or the real depgraph.db.
+    // A tiny in-file DB with the closure schema: precomputed rows, so the
+    // tests exercise exactly what slacker reads — no network, no real db.
     fn make_db(path: &std::path::Path) {
         let c = Connection::open(path).unwrap();
         c.execute_batch(
+            "CREATE TABLE closure(from_pkg TEXT, to_pkg TEXT, via TEXT);
+             INSERT INTO closure VALUES ('foo','glibc','linked');
+             INSERT INTO closure VALUES ('foo','zlib','linked');
+             INSERT INTO closure VALUES ('foo','nettle','lib');
+             INSERT INTO closure VALUES ('foo','helper','hint:exec');
+             INSERT INTO closure VALUES ('foo','zlib','lib');",
+        )
+        .unwrap();
+    }
+
+    // An OLD-schema DB (edges/hints only, pre-closure) — must be rejected.
+    fn make_old_db(path: &std::path::Path) {
+        let c = Connection::open(path).unwrap();
+        c.execute_batch(
             "CREATE TABLE edges(from_pkg TEXT, soname TEXT, to_pkg TEXT);
-             CREATE TABLE hints(from_pkg TEXT, kind TEXT, target TEXT, to_pkg TEXT, confidence TEXT);
-             INSERT INTO edges VALUES ('foo','libc.so.6','glibc');
-             INSERT INTO edges VALUES ('foo','libz.so.1','zlib');
-             INSERT INTO hints VALUES ('foo','exec','/usr/bin/helper','helper','guess');
-             INSERT INTO hints VALUES ('foo','build','Cython','Cython','guess');
-             INSERT INTO hints VALUES ('foo','dlopen','libz.so.1','zlib','guess');",
+             INSERT INTO edges VALUES ('foo','libc.so.6','glibc');",
         )
         .unwrap();
     }
@@ -137,18 +138,20 @@ mod tests {
     fn tmp(name: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!("stockdb_test_{}_{}", std::process::id(), name));
+        let _ = std::fs::remove_file(&p);
         p
     }
 
     #[test]
-    fn deps_union_excludes_build_and_dedups() {
-        let db = tmp("union.db");
+    fn deps_come_from_closure_sorted_and_deduped() {
+        let db = tmp("closure.db");
         make_db(&db);
         let d = deps_for(&db, "foo");
-        // linked: glibc, zlib ; runtime hint: helper ; dlopen zlib dedups with edge
-        // build hint Cython is EXCLUDED.
-        assert_eq!(d, vec!["glibc".to_string(), "helper".to_string(), "zlib".to_string()]);
-        assert!(!d.contains(&"Cython".to_string()), "build-time must be excluded");
+        // the duplicate zlib row (linked + lib) collapses to one entry
+        assert_eq!(
+            d,
+            vec!["glibc".to_string(), "helper".to_string(), "nettle".to_string(), "zlib".to_string()]
+        );
     }
 
     #[test]
@@ -165,20 +168,17 @@ mod tests {
     }
 
     #[test]
-    fn edges_only_db_still_works() {
-        // A DB predating the hints table falls back to edges only.
-        let db = tmp("edgesonly.db");
-        let c = Connection::open(&db).unwrap();
-        c.execute_batch(
-            "CREATE TABLE edges(from_pkg TEXT, soname TEXT, to_pkg TEXT);
-             INSERT INTO edges VALUES ('foo','libc.so.6','glibc');",
-        )
-        .unwrap();
-        assert_eq!(deps_for(&db, "foo"), vec!["glibc".to_string()]);
+    fn old_schema_db_is_invalid_and_yields_no_deps() {
+        // A pre-closure depgraph.db must be reported invalid (status) and give
+        // no deps (install falls back to warn-and-continue via the caller).
+        let db = tmp("oldschema.db");
+        make_old_db(&db);
+        assert!(!is_valid_db(&db), "old edges-only schema must NOT validate");
+        assert!(deps_for(&db, "foo").is_empty());
     }
 
     #[test]
-    fn is_valid_db_true_for_real_false_for_garbage() {
+    fn is_valid_db_true_for_closure_false_for_garbage() {
         let db = tmp("valid.db");
         make_db(&db);
         assert!(is_valid_db(&db));
@@ -190,7 +190,6 @@ mod tests {
 
     #[test]
     fn validate_and_write_accepts_good_rejects_garbage_and_keeps_old() {
-        // Build a valid DB's bytes.
         let src = tmp("src.db");
         make_db(&src);
         let good = std::fs::read(&src).unwrap();
@@ -200,9 +199,15 @@ mod tests {
         assert!(is_valid_db(&dest));
 
         // Garbage is rejected AND the existing good DB is left intact.
-        let err = validate_and_write(b"not a database", &dest);
-        assert!(err.is_err(), "garbage must be rejected");
+        assert!(validate_and_write(b"not a database", &dest).is_err());
         assert!(is_valid_db(&dest), "a rejected download must not clobber the good db");
+
+        // An OLD-schema download is also rejected (no closure table).
+        let old = tmp("olddl.db");
+        make_old_db(&old);
+        let old_bytes = std::fs::read(&old).unwrap();
+        assert!(validate_and_write(&old_bytes, &dest).is_err());
+        assert!(is_valid_db(&dest), "an old-schema download must not clobber the good db");
     }
 
     #[test]
@@ -211,9 +216,7 @@ mod tests {
             readme_stamp("ChangeLog.txt: Fri Jul 10 22:25:39 UTC 2026\n---\nrest"),
             Some("Fri Jul 10 22:25:39 UTC 2026".to_string())
         );
-        // no stamp prefix -> None
         assert_eq!(readme_stamp("some other readme\nChangeLog.txt: x"), None);
-        // empty stamp -> None
         assert_eq!(readme_stamp("ChangeLog.txt:   "), None);
     }
 
@@ -230,6 +233,6 @@ mod tests {
     fn stamp_and_head_agree_when_in_sync() {
         let readme = "ChangeLog.txt: Fri Jul 10 22:25:39 UTC 2026\n";
         let clog = "Fri Jul 10 22:25:39 UTC 2026\n+----+\n";
-        assert_eq!(readme_stamp(readme), changelog_head(clog)); // -> in sync
+        assert_eq!(readme_stamp(readme), changelog_head(clog));
     }
 }

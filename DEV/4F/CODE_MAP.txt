@@ -430,7 +430,7 @@ pulled in through the normal flow. A no-op on full-ISO (those deps are already
 installed). Self-contained: only rusqlite + std; NO network here (main.rs does
 the fetching and orchestration).
 
-  deps_for          direct stock deps of a package: the edges∪hints query
+  deps_for          direct stock deps of a package: the edgesUhints query
                     (linked + runtime, NEVER kind='build'), de-duped, self
                     excluded, sorted. Empty on any problem; QUIET when the DB
                     file is missing (the one-time "no database" warning is the
@@ -463,7 +463,7 @@ system dependency" discipline as the rustls TLS choice. It is the crate's fifth
 direct dependency, added solely for this feature.
 
 TESTS: 9 in-file unit tests (temp/in-memory SQLite, no network/root) - the
-edges∪hints query (build excluded, dedup), missing/edges-only/corrupt DB,
+edgesUhints query (build excluded, dedup), missing/edges-only/corrupt DB,
 validate_and_write (garbage rejected, good DB preserved), and stamp/head compare.
 
 LOOK HERE IF: the wrong stock deps are added (check the query, or the DB's own

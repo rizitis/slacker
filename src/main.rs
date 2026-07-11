@@ -877,9 +877,14 @@ fn add_with_deps(
         if let Some(repo) = cfg.repo_by_name(&pkg.repo) {
             let mut deps = repo::fetch_dep(repo, &pkg);
             // resolve-stock: in a container/minimal system, also pull the
-            // stock deps this OFFICIAL package needs (linked + runtime, never
-            // build). Off by default -> deps == fetch_dep(), i.e. no change.
-            if cfg.resolve_stock && repo.official {
+            // stock deps this OFFICIAL package needs. The stock-db's `closure`
+            // table is PRECOMPUTED and COMPLETE (level-1 + library-loader
+            // chains), so it is consulted ONLY for the package the user asked
+            // for (dep_for is None). Deps added from it must NOT consult it
+            // again: each dep's own closure would re-add that package's
+            // tool-only deps (e.g. sasl plugins -> mariadb) and cascade into
+            // pulling half the distribution. Off by default -> no change.
+            if cfg.resolve_stock && repo.official && dep_for.is_none() {
                 for e in stockdb::deps_for(&cfg.stock_db_path(), &name) {
                     if !deps.contains(&e) {
                         deps.push(e);
@@ -7794,6 +7799,7 @@ fn select_packages<'a>(
         return Vec::new();
     }
     if t.is_empty() {
+        note_selected(&pkgs);
         return pkgs;
     }
     let sel = parse_selection(t, pkgs.len());
@@ -7801,11 +7807,28 @@ fn select_packages<'a>(
         println!("    {}", ui::blue(&format!("didn't understand {t:?} — nothing selected.")));
         return Vec::new();
     }
-    pkgs.into_iter()
+    let chosen: Vec<&repo::AvailPkg> = pkgs
+        .into_iter()
         .enumerate()
         .filter(|(i, _)| sel.contains(&(i + 1)))
         .map(|(_, p)| p)
-        .collect()
+        .collect();
+    note_selected(&chosen);
+    chosen
+}
+
+/// Close the numbered picker visually: one dim line confirming what was
+/// selected. Without it, the "Enter numbers ..." prompt sits directly above
+/// the (unnumbered) dependency plan and reads as if the numbers applied to
+/// the deps — with resolve-stock, official installs now print large dep
+/// tables, so that misreading would hit everyone.
+fn note_selected(chosen: &[&repo::AvailPkg]) {
+    if chosen.is_empty() {
+        return;
+    }
+    let names: Vec<String> =
+        chosen.iter().map(|p| format!("{} ({})", p.id.name, p.repo)).collect();
+    println!("  {}", ui::dim(&format!("-> selected: {}", names.join(", "))));
 }
 
 /// Byte-for-byte comparison. A missing/unreadable file counts as "not
