@@ -3,7 +3,7 @@ Version Beta 0.11.0
 Add: resolve-stock - pull an official package's STOCK deps on minimal/container systems (only for x86_64)
 https://github.com/rizitis/slackware64-current-ci/pkgs/container/slackware64-current-ci
 
-WHAT IT DOES:
+WHAT IT DOES :
 Optional, OFF by default (RESOLVE_STOCK=no). When on, install augments an
 official package's deps with its stock deps, read from a precomputed sqlite db
 (depgraph.db, built by minotavros, fetched from STOCK_DB_URL). The extra deps go
