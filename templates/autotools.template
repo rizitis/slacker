@@ -1,0 +1,12 @@
+include base
+autoconf
+autoconf-archive
+automake
+libtool
+m4
+gettext
+gettext-tools
+texinfo
+bison
+flex
+perl

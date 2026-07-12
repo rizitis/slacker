@@ -1,0 +1,2 @@
+# SBo perl-template.SlackBuild: Makefile.PL / Build.PL + make test
+include perl

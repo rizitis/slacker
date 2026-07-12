@@ -1,0 +1,5 @@
+# SBo haskell-template.SlackBuild: runghc Setup configure/build/copy
+# NOTE: ghc is NOT in stock Slackware — install ghc from SBo first.
+# This template provides only the stock prerequisites.
+include base
+include cxx

@@ -1,0 +1,4 @@
+include base
+vala
+glib2
+gobject-introspection

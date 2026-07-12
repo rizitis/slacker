@@ -1,0 +1,3 @@
+# SBo meson-template.SlackBuild: meson + ninja (sets CXXFLAGS)
+include meson
+include cxx

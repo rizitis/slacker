@@ -86,7 +86,9 @@ install -m0644 README.md NEWS $PKG/usr/doc/$PRGNAM-$VERSION/
 install -m0644 examples/etc-slacker/"$DIR"/"$ARCH"/* $PKG/usr/doc/$PRGNAM-$VERSION/examples/
 cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
 
-mkdir -p $PKG/etc/slacker/templates
+mkdir -p $PKG/etc/slacker
+cp -R $CWD/templates $PKG/etc/slacker
+chmod 644 $PKG/etc/slacker/templates/*
 for f in slacker.conf distro-upgrade.conf mirrors repos blacklist; do
   install -m0644 examples/etc-slacker/"$DIR"/"$ARCH"/$f $PKG/etc/slacker/$f.new
 done

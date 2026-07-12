@@ -1,0 +1,14 @@
+include base
+gtk+3
+gtk4
+glib2
+gobject-introspection
+gdk-pixbuf2
+pango
+cairo
+at-spi2-core
+# dlopen/runtime deps invisible to ELF scan:
+librsvg            # gdk-pixbuf SVG loader (icon themes are SVG)
+glib-networking    # GIO TLS modules (HTTPS for anything GLib-based)
+shared-mime-info   # GIO content-type detection
+hicolor-icon-theme # icon theme fallback base

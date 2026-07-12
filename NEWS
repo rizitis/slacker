@@ -1,3 +1,11 @@
+Version Beta 0.11.1
+=====
+Add: templates for resolve-stock on minimal/container systems
+- example: `slacker install-template cmake` , will install all needed for build using cmake
+           `slacker install-template sbo_autotools` will install everything needed to run a SlackBuild
+           `slacker install-template sbo_python` for python SlackBuilds etc...
+The real questinon now is: should slacker also start building from SBo(I dont like this idea) or use one other sbo-package manager?
+---
 Version Beta 0.11.0
 =====
 Add: resolve-stock - pull an official package's STOCK deps on minimal/container systems (only for x86_64)
