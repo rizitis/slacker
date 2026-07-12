@@ -1,6 +1,7 @@
 Version Beta 0.11.0
 =====
-Add: resolve-stock - pull an official package's STOCK deps on minimal/container systems
+Add: resolve-stock - pull an official package's STOCK deps on minimal/container systems (only for x86_64)
+https://github.com/rizitis/slackware64-current-ci/pkgs/container/slackware64-current-ci
 
 WHAT IT DOES:
 Optional, OFF by default (RESOLVE_STOCK=no). When on, install augments an
@@ -41,6 +42,7 @@ With RESOLVE_STOCK off, behaviour is unchanged in every command.
 
 Add: 9 unit tests in stockdb.rs (in-file sqlite, no network/root) - 201 total.
 Update: DEV docs (structure.md, CODE_MAP.txt).
+Update: Add wiki docker page.
 Update: cmd: `slacker status` now also check for mlocate if outdated and inform.
         Fix: AI suggest `re-run with sudo` but in slackware is better to suggest `re-run as root`
 ---
