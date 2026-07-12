@@ -195,7 +195,7 @@ package is authentic and untampered.
 
 ## Docker image
 
-A minimal, bootstrappable Slackware64-current container built on [Slackware64-Current-sofiles](https://github.com/rizitis/Slackware64-Current-sofiles)
+A minimal, bootstrappable [Slackware64-current container](https://github.com/rizitis/slackware64-current-ci/pkgs/container/slackware64-current-ci) built on [Slackware64-Current-sofiles](https://github.com/rizitis/Slackware64-Current-sofiles)
 repository's dependency database. ~54MB pull, 31 packages + [slacker](https://github.com/rizitis/slacker).
 
 ```
