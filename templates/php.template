@@ -1,4 +1,3 @@
 include base
 php
-pcre2
 libxml2

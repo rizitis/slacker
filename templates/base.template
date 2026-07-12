@@ -5,15 +5,5 @@ kernel-headers
 make
 pkgconf
 patch
-file
-gawk
-sed
-grep
-tar
-gzip
-xz
-bzip2
-findutils
 diffutils
-coreutils
 which

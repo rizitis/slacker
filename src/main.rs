@@ -381,7 +381,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         None
     };
     match &cli.command {
-        Cmd::Update { mode } => cmd_update(&cfg, mode.as_deref()),
+        Cmd::Update { mode } => cmd_update(cli, &cfg, mode.as_deref()),
         Cmd::Search { pattern } => cmd_search(&cfg, pattern),
         Cmd::FileSearch { filename } => cmd_file_search(&cfg, filename),
         Cmd::Info { name } => cmd_info(&cfg, name),
@@ -3208,7 +3208,7 @@ fn refresh_stock_db(cfg: &Config) {
     }
 }
 
-fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
+fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     if mode == Some("gpg") {
         let mut newly = 0;
         for r in cfg.repos_by_priority() {
@@ -3336,17 +3336,31 @@ fn cmd_update(cfg: &Config, mode: Option<&str>) -> Result<Outcome, String> {
     }
 
     // ---- selection: update many, one, or none ----
-    print!(
-        "\n{} ",
-        hilite_keys(&format!(
-            "{} repo(s) have updates. Update [a]ll / numbers (e.g. 1 2) / [n]one? [a]:",
-            needing.len()
-        ))
-    );
-    std::io::stdout().flush().ok();
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line).ok();
-    let trimmed = line.trim();
+    // --yes: non-interactive (CI / containers) — take them all, exactly like
+    // pressing Enter at the prompt. Without this, the unconditional stdin read
+    // below blocks forever in an interactive container where every repo is
+    // fresh, and only *accidentally* proceeds when stdin is closed (CI EOF).
+    let trimmed_owned: String;
+    let trimmed: &str = if cli.yes {
+        println!(
+            "\n{}",
+            ui::dim(&format!("--yes: updating all {} repo(s).", needing.len()))
+        );
+        ""
+    } else {
+        print!(
+            "\n{} ",
+            hilite_keys(&format!(
+                "{} repo(s) have updates. Update [a]ll / numbers (e.g. 1 2) / [n]one? [a]:",
+                needing.len()
+            ))
+        );
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).ok();
+        trimmed_owned = line.trim().to_string();
+        &trimmed_owned
+    };
     let chosen: Vec<&config::Repo> = match trimmed.to_lowercase().as_str() {
         "n" | "no" | "none" | "q" => {
             println!("Nothing updated.");
@@ -5464,10 +5478,17 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
         return Ok(Outcome::NothingFound);
     }
     note_frozen_excluded(&frozen);
+    // Did the picker actually prompt? (same condition select_packages uses to
+    // skip asking). Only then print the "-> selected:" closer below, so the
+    // numbered prompt is never read as referring to the dependency plan.
+    let picker_asked = todo.len() > 1 && !cli.yes && !cli.dry_run;
     let todo = select_packages(todo, "install", &installed, cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
         return Ok(Outcome::Ok);
+    }
+    if picker_asked {
+        note_selected(&todo);
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
@@ -7799,7 +7820,6 @@ fn select_packages<'a>(
         return Vec::new();
     }
     if t.is_empty() {
-        note_selected(&pkgs);
         return pkgs;
     }
     let sel = parse_selection(t, pkgs.len());
@@ -7807,21 +7827,20 @@ fn select_packages<'a>(
         println!("    {}", ui::blue(&format!("didn't understand {t:?} — nothing selected.")));
         return Vec::new();
     }
-    let chosen: Vec<&repo::AvailPkg> = pkgs
-        .into_iter()
+    pkgs.into_iter()
         .enumerate()
         .filter(|(i, _)| sel.contains(&(i + 1)))
         .map(|(_, p)| p)
-        .collect();
-    note_selected(&chosen);
-    chosen
+        .collect()
 }
 
-/// Close the numbered picker visually: one dim line confirming what was
-/// selected. Without it, the "Enter numbers ..." prompt sits directly above
-/// the (unnumbered) dependency plan and reads as if the numbers applied to
-/// the deps — with resolve-stock, official installs now print large dep
-/// tables, so that misreading would hit everyone.
+/// Close the numbered picker visually (plain `install` only): one dim line
+/// confirming what was selected. Without it, the "Enter numbers ..." prompt
+/// sits directly above the (unnumbered) dependency plan and reads as if the
+/// numbers applied to the deps — with resolve-stock, official installs now
+/// print large dep tables, so that misreading would hit everyone. The other
+/// picker users (upgrade / reinstall / download / install-new) keep their
+/// output exactly as before.
 fn note_selected(chosen: &[&repo::AvailPkg]) {
     if chosen.is_empty() {
         return;
