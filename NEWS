@@ -2,7 +2,7 @@ Version Beta 0.11.1
 =====
 Fix: Bug: `slacker update --yes` or `slacker --yes update` now respect the flag --yes no more questions.
 Add: Templates in `/etc/slacker/templates/` these needed when slacker runs in container systems.
-Add: minimal/container images can be found:
+Add: minimal/container sackeware64-currnet images (slacker included in image) can be found:
      - https://hub.docker.com/r/rizitis/slackware-slacker
      - https://github.com/rizitis/slackware64-current-ci
 ---
