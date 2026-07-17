@@ -6,3 +6,5 @@ docker pull rizitis/slackware-slacker:sbopkg-ci_slacker-very_mini-testing
 
 Usage:
 slacker update --yes; slacker upgrade-all --yes; slacker install-template <sbo_*>; sbopkg-ci -a -i <pkg_name>
+
+Info: When foo.info file mention in required a package that not exist in ponce repo, because slackware64-current already ships in installation. sbopkg-ci ask slacker to search and install it from official slackware repo before start building the rest of queue.
