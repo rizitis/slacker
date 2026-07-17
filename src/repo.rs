@@ -92,7 +92,8 @@ pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Res
         let _ = std::fs::copy(&pkgs_path, dir.join(PACKAGES_PREV));
     }
 
-    for fname in [PACKAGES_TXT] {
+    {
+        let fname = PACKAGES_TXT;
         print!("  {fname} ... ");
         std::io::stdout().flush().ok();
         let url = repo.join_url(fname);
@@ -569,9 +570,9 @@ fn parse_packages_txt(text: &str, repo_name: &str) -> Vec<AvailPkg> {
             // informational only — never parsed into package names.
             cur_suggests = rest.trim().to_string();
         } else if let Some(rest) = line.strip_prefix("PACKAGE SIZE (compressed):") {
-            cur_size = rest.trim().split_whitespace().next().and_then(|n| n.parse().ok());
+            cur_size = rest.split_whitespace().next().and_then(|n| n.parse().ok());
         } else if let Some(rest) = line.strip_prefix("PACKAGE SIZE (uncompressed):") {
-            cur_size_unc = rest.trim().split_whitespace().next().and_then(|n| n.parse().ok());
+            cur_size_unc = rest.split_whitespace().next().and_then(|n| n.parse().ok());
         } else if line.starts_with("PACKAGE DESCRIPTION:") {
             in_desc = true;
         } else if in_desc {
@@ -786,7 +787,7 @@ fn parse_pkg_list(value: &str) -> Vec<String> {
             // First alternative of `a|b|c`.
             let tok = tok.split('|').next().unwrap_or(tok).trim();
             // Drop a trailing version constraint: name>=1.2, name = 1.2, name<3 ...
-            tok.split(|c: char| matches!(c, '>' | '<' | '=' | ' ' | '\t'))
+            tok.split(['>', '<', '=', ' ', '\t'])
                 .next()
                 .unwrap_or(tok)
                 .trim()

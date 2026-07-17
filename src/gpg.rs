@@ -287,7 +287,7 @@ fn verify_against_pin(
     let signer = status
         .lines()
         .find_map(|l| l.strip_prefix("[GNUPG:] GOODSIG "))
-        .and_then(|rest| rest.splitn(2, ' ').nth(1))
+        .and_then(|rest| rest.split_once(' ').map(|x| x.1))
         .map(|s| s.to_string())
         .unwrap_or_else(|| repo_.name.clone());
     Ok(Verify::Good(signer))

@@ -409,10 +409,10 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::InstallTemplate { name } => cmd_install_template(cli, &cfg, name),
         Cmd::RemoveTemplate { name } => cmd_remove_template(cli, &cfg, name),
         Cmd::DeleteTemplate { name } => cmd_delete_template(cli, &cfg, name),
-        Cmd::Frozen { names } => cmd_frozen(&cli, &cfg, names),
-        Cmd::Unfrozen { names } => cmd_unfrozen(&cli, &cfg, names),
-        Cmd::Pin { spec } => cmd_pin(&cli, &cfg, spec.as_deref()),
-        Cmd::Unpin { names } => cmd_unpin(&cli, &cfg, names),
+        Cmd::Frozen { names } => cmd_frozen(cli, &cfg, names),
+        Cmd::Unfrozen { names } => cmd_unfrozen(cli, &cfg, names),
+        Cmd::Pin { spec } => cmd_pin(cli, &cfg, spec.as_deref()),
+        Cmd::Unpin { names } => cmd_unpin(cli, &cfg, names),
         Cmd::AddRepo { priority, name, url, flags } => {
             cmd_add_repo(cli, &cfg, priority, name, url, flags)
         }
@@ -900,9 +900,9 @@ fn add_with_deps(
                 // come fresh from this repo, or is already installed/frozen.
                 let bl = db
                     .resolve(&format!("{}:{}", pkg.repo, dep))
-                    .map_or(false, |o| o.frozen)
+                    .is_some_and(|o| o.frozen)
                     || system::installed_by_name(installed, &dep)
-                        .map_or(false, |i| bl_installed(cfg, Some(db), i));
+                        .is_some_and(|i| bl_installed(cfg, Some(db), i));
                 if bl {
                     continue;
                 }
@@ -2406,7 +2406,7 @@ fn closest<'a>(term: &str, candidates: impl Iterator<Item = &'a str>) -> Option<
     let mut best: Option<(usize, String)> = None;
     for c in candidates {
         let d = edit_distance(term, c);
-        if d <= 2 && best.as_ref().map_or(true, |(bd, _)| d < *bd) {
+        if d <= 2 && best.as_ref().is_none_or(|(bd, _)| d < *bd) {
             best = Some((d, c.to_string()));
         }
     }
@@ -3289,7 +3289,7 @@ fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<Outcome, St
     println!("Checking repositories for updates ...");
     let statuses: Vec<changelog::UpdateStatus> = repos
         .iter()
-        .map(|r| changelog::check_repo_updates(*r, &cfg.cache_dir))
+        .map(|r| changelog::check_repo_updates(r, &cfg.cache_dir))
         .collect();
 
     let needs = |s: &changelog::UpdateStatus| {
@@ -3393,7 +3393,7 @@ fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<Outcome, St
     println!();
     for r in &chosen {
         let track = changelog_repo.as_deref() == Some(r.name.as_str());
-        update_one_repo(cfg, *r, track, &mut out);
+        update_one_repo(cfg, r, track, &mut out);
     }
 
     if !out.failed_verify.is_empty() {
@@ -3589,7 +3589,7 @@ fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
     // file-search is a plain substring match over MANIFEST paths, not a glob.
     // If the query carries shell-wildcard characters the user almost certainly
     // meant them as globs, so flag that they are taken literally.
-    let has_glob = filename.contains(|c| matches!(c, '*' | '?' | '[' | ']'));
+    let has_glob = filename.contains(['*', '?', '[', ']']);
     if has_glob {
         eprintln!(
             "{}",
@@ -4788,7 +4788,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
             let size = humanize_bytes(bytes);
             let idle_secs = newest.and_then(|t| t.elapsed().ok()).map(|e| e.as_secs());
             let too_big = bytes >= CACHE_WARN_BYTES;
-            let too_old = idle_secs.map_or(false, |s| s >= CACHE_STALE_DAYS * 86_400);
+            let too_old = idle_secs.is_some_and(|s| s >= CACHE_STALE_DAYS * 86_400);
             if too_big || too_old {
                 let age = match newest {
                     Some(t) if too_old => format!(", untouched {}", ago(t)),
@@ -7039,7 +7039,7 @@ fn set_active_mirror_line(text: &str, url: &str) -> String {
             out.push(line.to_string());
         }
     }
-    out.push(format!("# --- upgrade-dist: local mirror (DISTRO_UPGRADE_MIRROR) ---"));
+    out.push("# --- upgrade-dist: local mirror (DISTRO_UPGRADE_MIRROR) ---".to_string());
     out.push(url.to_string());
     let mut joined = out.join("\n");
     joined.push('\n');
@@ -7401,7 +7401,7 @@ fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
                 // IGNORE_TAGS, or if its owning repo is immutable.
                 let tag = p.build_tag();
                 let owned_by_immutable =
-                    db.repo_for_tag(tag).map_or(false, |r| immutable.contains(r));
+                    db.repo_for_tag(tag).is_some_and(|r| immutable.contains(r));
                 !(cfg.is_ignored_tag(tag) || owned_by_immutable)
             } else {
                 // Official: tagless (-current) OR a `_slack<version>` stable patch
@@ -8580,7 +8580,7 @@ fn cmd_remove_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, S
     let todo: Vec<&String> = names
         .iter()
         .filter(|n| {
-            system::installed_by_name(&installed, n).map_or(false, |i| !bl_installed(cfg, Some(&db), i))
+            system::installed_by_name(&installed, n).is_some_and(|i| !bl_installed(cfg, Some(&db), i))
         })
         .collect();
     if todo.is_empty() {
@@ -8745,7 +8745,7 @@ fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
                 let mut msg = format!("{:<22} {detail}", format!("\"{raw}\""));
                 // Bare `@repo` followed by a separate argument => the user likely
                 // forgot to quote them as one rule.
-                if n.starts_with('@') && !n.contains(char::is_whitespace) && repo_tok.map_or(false, |r| active.contains(&r)) {
+                if n.starts_with('@') && !n.contains(char::is_whitespace) && repo_tok.is_some_and(|r| active.contains(&r)) {
                     if let Some(next) = names.get(idx + 1) {
                         msg.push_str(&format!("  (did you mean \"{n} {next}\" ?)"));
                     }
@@ -9014,7 +9014,7 @@ fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Outcome, Strin
         return Err(format!("pin takes a single package name, not \"{name}\""));
     }
     if config::name_has_pattern_chars(name) {
-        let is_glob = name.contains(|c| matches!(c, '*' | '?'));
+        let is_glob = name.contains(['*', '?']);
         return Err(format!(
             "pin takes an EXACT package name — no {} (got \"{name}\"). \
              For pattern freezing use `slacker frozen`, which accepts both globs \

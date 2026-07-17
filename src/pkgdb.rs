@@ -168,7 +168,7 @@ impl PkgDb {
         self.all
             .iter()
             .filter(|p| p.id.name == name)
-            .filter(|p| forced.map_or(true, |r| p.repo == r))
+            .filter(|p| forced.is_none_or(|r| p.repo == r))
             .max_by(|a, b| self.repo_priority(&a.repo).cmp(&self.repo_priority(&b.repo)))
     }
 
@@ -186,7 +186,7 @@ impl PkgDb {
         self.all
             .iter()
             .filter(|p| p.id.name == name)
-            .filter(|p| forced.map_or(true, |r| p.repo == r))
+            .filter(|p| forced.is_none_or(|r| p.repo == r))
             .filter(|p| !p.frozen)
             .max_by(|a, b| self.repo_priority(&a.repo).cmp(&self.repo_priority(&b.repo)))
     }
@@ -577,7 +577,7 @@ impl PkgDb {
             .filter(|p| {
                 new_by_repo
                     .get(&p.repo)
-                    .map_or(false, |set| set.contains(&p.id.name))
+                    .is_some_and(|set| set.contains(&p.id.name))
                     && !inst_names.contains(p.id.name.as_str())
             })
             .collect();
@@ -603,7 +603,7 @@ impl PkgDb {
     ) -> HashSet<&'a str> {
         self.all
             .iter()
-            .filter(|p| scope_repos.map_or(true, |set| set.contains(p.repo.as_str())))
+            .filter(|p| scope_repos.is_none_or(|set| set.contains(p.repo.as_str())))
             .map(|p| p.id.name.as_str())
             .collect()
     }

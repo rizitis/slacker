@@ -637,7 +637,7 @@ impl BlacklistRule {
             // from the full id; a non-parseable id simply doesn't match by tag.
             let repo_hit = repo == Some(want.as_str());
             let tag_hit = crate::pkg::PkgId::parse(id)
-                .map_or(false, |p| p.build_tag() == want.as_str());
+                .is_some_and(|p| p.build_tag() == want.as_str());
             if !repo_hit && !tag_hit {
                 return false;
             }
