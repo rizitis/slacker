@@ -1,0 +1,8 @@
+WIP:
+- Read: sbopkg-ci/slack-desc
+
+- TESTING:
+docker pull rizitis/slackware-slacker:sbopkg-ci_slacker-very_mini-testing
+
+Usage:
+slacker update --yes; slacker upgrade-all --yes; slacker install-template <sbo_*>; sbopkg-ci -a -i <pkg_name>

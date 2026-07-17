@@ -1,2 +1,3 @@
 # SBo Go builds: go build with vendored modules (GOFLAGS=-mod=vendor)
+include sbo_base
 include go

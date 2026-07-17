@@ -1,3 +1,4 @@
 # SBo Rust builds: cargo build --offline with vendored crates
 # (gcc-g++/cmake come via cargo template for -sys crates)
+include sbo_base
 include cargo

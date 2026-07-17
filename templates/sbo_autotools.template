@@ -1,3 +1,4 @@
 # SBo autotools-template.SlackBuild: ./configure && make (sets CXXFLAGS)
+include sbo_base
 include autotools
 include cxx

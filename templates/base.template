@@ -1,3 +1,4 @@
+include sbo_base
 gcc
 binutils
 glibc

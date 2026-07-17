@@ -1,0 +1,577 @@
+#!/bin/bash
+# sbopkg-ci - docker edition
+#
+# A single-file, unattended, CLI-only rewrite of sbopkg-ci for Slackware docker
+# images. Command-line interface is compatible with the classic sbopkg-ci
+# (sbopkg-ci -a -i foo, -r, -k, -e, ...), but everything runs without prompts.
+#
+# Hard dependencies: bash, pkgtools, coreutils, wget.
+# Optional: git (only for -r), slacker (only for distribution-provided deps).
+#
+# Dependency resolution (-a) is done in memory - no sqg, no queuefiles, no
+# GNU parallel. Dependencies present in the REQUIRES chain but missing from
+# the SlackBuilds repository are installed from the distribution with:
+#     slacker install <pkgs> --yes
+#
+# Copyright 2026 Ioannis Anagnostakis (rizitis)
+# Based on sbopkg-ci, Copyright 2007-2026 Chess Griffin, slakmagik,
+# Willy Sudiarto Raharjo, and contributors.
+# Licensed under the same terms as sbopkg-ci (BSD-style, see upstream).
+
+SCRIPT=${0##*/}
+SBOVER=0.0.2-docker
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+SBOPKG_CI_CONF="/etc/sbopkg-ci/sbopkg-ci.conf"
+
+# Defaults; the config file (a plain bash fragment) overrides these.
+REPO_ROOT=/var/lib/sbopkg-ci
+REPO_NAME=SBo
+REPO_BRANCH=current
+SRCDIR=/var/cache/sbopkg-ci
+OUTPUT=/tmp
+TMP=/tmp/SBo
+TAG=_SBo
+LOGDIR=/var/log/sbopkg-ci
+ON_ERROR=continue
+SRCARCH_URL=https://slackware.uk/sbosrcarch
+WGETFLAGS="--continue --timeout=30 --tries=2 --no-verbose"
+SLACKER=yes
+HOOKS_DIR=/etc/sbopkg-ci/hooks.d
+AUTO_USERS=yes
+
+# ---------------------------------------------------------------------------
+# CLI parsing (same letters as classic sbopkg-ci; UI-only flags are no-ops)
+# ---------------------------------------------------------------------------
+
+usage() {
+    cat << EOF
+$SCRIPT $SBOVER (single-file docker edition)
+Usage: $SCRIPT [OPTIONS] <packagename(s)>
+Options are:
+  -a              Auto-resolve dependencies (in memory, deps-first order).
+                  Dependencies missing from the SlackBuilds repo are
+                  installed from the distribution via 'slacker ... --yes'.
+  -b pkg/queue(s) Download and build the specified package(s)/queuefile(s).
+  -d pkg/queue(s) Like -b, but only download the sources.
+  -i pkg/queue(s) Like -b, but also install/upgrade the built packages.
+  -k              Skip packages that are already installed.
+  -r              Sync the local SlackBuilds mirror (git) and quit.
+  -e action       On build error: continue (default) or stop.
+  -f file         Use an alternative configuration file.
+  -g pattern      Search the repository for package names matching pattern.
+  -p              List installed packages from the active repository (\$TAG).
+  -q              Quieter output.
+  -v              Print version. -h: this help.
+Accepted for compatibility and ignored: -B -c -D -l -n -o -P -R -S -s -u -V -W
+Configuration: $SBOPKG_CI_CONF (override with -f or \$SBOPKG_CI_CONF)
+EOF
+}
+
+unset TYPE RESOLVE_DEPS SKIP_INSTALLED SYNC QUIET SEARCH_PAT LISTPKGS
+declare -a BUILDLIST
+
+set_type() {
+    # -b/-d/-i are mutually exclusive, as in classic sbopkg-ci.
+    if [[ $TYPE && $TYPE != $1 ]]; then
+        echo "$SCRIPT: -b, -d and -i are mutually exclusive." >&2
+        exit 1
+    fi
+    TYPE=$1
+}
+
+[[ $# -eq 0 ]] && { usage; exit 1; }
+
+while getopts ":ab:BcD:d:e:f:g:hi:klnoPpqRrSs:uV:vW:" OPT; do
+    case $OPT in
+        a) RESOLVE_DEPS=1 ;;
+        b) set_type build;    BUILDLIST+=($OPTARG) ;;
+        d) set_type download; BUILDLIST+=($OPTARG) ;;
+        i) set_type install;  BUILDLIST+=($OPTARG) ;;
+        k) SKIP_INSTALLED=1 ;;
+        r) SYNC=1 ;;
+        e) ON_ERROR_CLI=$OPTARG ;;
+        f) SBOPKG_CI_CONF=$OPTARG ;;
+        g) SEARCH_PAT=$OPTARG ;;
+        p) LISTPKGS=1 ;;
+        q) QUIET=1 ;;
+        v) echo $SBOVER; exit 0 ;;
+        h) usage; exit 0 ;;
+        B|c|D|l|n|o|P|R|S|s|u|V|W) : ;;  # classic flags without meaning here
+        *) usage; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+if [[ $# -gt 0 ]]; then
+    echo "$SCRIPT: unknown token \"$*\"" >&2
+    exit 1
+fi
+
+# Load the config file (plain bash), then apply CLI overrides on top.
+if [[ -r $SBOPKG_CI_CONF ]]; then
+    . "$SBOPKG_CI_CONF"
+fi
+[[ $ON_ERROR_CLI ]] && ON_ERROR=$ON_ERROR_CLI
+case $ON_ERROR in
+    continue|stop) ;;
+    ask) ON_ERROR=continue ;;   # no prompts exist in this edition
+    *) echo "$SCRIPT: unknown -e value \"$ON_ERROR\" (continue|stop)" >&2
+       exit 1 ;;
+esac
+
+REPO_DIR=$REPO_ROOT/$REPO_NAME/$REPO_BRANCH
+QUEUEDIR=${QUEUEDIR:-$REPO_ROOT/queues}
+LOGFILE=$LOGDIR/build-log
+
+# Repository sources, following the classic sbopkg-ci repos.d mapping:
+#   current -> Ponce's fork (SBo adapted for slackware-current)
+#   master  -> SBo git master (approved, queued for the next stable update)
+#   15.0    -> SBo stable release branch
+# Both can be overridden explicitly in the config file.
+if [[ -z $REPO_GIT_URL ]]; then
+    if [[ $REPO_BRANCH == current ]]; then
+        REPO_GIT_URL=https://github.com/Ponce/slackbuilds.git
+    else
+        REPO_GIT_URL=https://github.com/SlackBuildsOrg/slackbuilds.git
+    fi
+fi
+GIT_BRANCH=${REPO_GIT_BRANCH:-$REPO_BRANCH}
+
+# ---------------------------------------------------------------------------
+# Environment checks and helpers
+# ---------------------------------------------------------------------------
+
+if [[ $(id -u) != 0 ]]; then
+    echo "$SCRIPT: must be run as root." >&2
+    exit 1
+fi
+
+PKGDB=/var/lib/pkgtools/packages
+[[ -d $PKGDB ]] || PKGDB=/var/adm/packages
+
+if [[ -z $ARCH ]]; then
+    case "$(uname -m)" in
+        i?86) ARCH=i586 ;;
+        arm*) ARCH=arm ;;
+        *)    ARCH=$(uname -m) ;;
+    esac
+fi
+
+mkdir -p "$SRCDIR" "$OUTPUT" "$TMP" "$LOGDIR" "$REPO_ROOT" || {
+    echo "$SCRIPT: cannot create working directories." >&2
+    exit 1
+}
+
+log() {
+    # Everything important goes to stdout and the permanent log.
+    echo "$@" | tee -a "$LOGFILE"
+}
+
+info() {
+    [[ $QUIET ]] || log "$@"
+}
+
+die() {
+    log "$SCRIPT: ERROR: $*"
+    exit 1
+}
+
+pkg_installed() {
+    # $1 = package name. True if any version is in the pkgtools database
+    # (with or without a tag, so it matches both distro and SBo packages).
+    ls "$PKGDB" 2>/dev/null | grep -q "^$1-[^-]*-[^-]*-[^-]*$"
+}
+
+find_pkg_dir() {
+    # $1 = package name -> echoes category/name path under $REPO_DIR.
+    find "$REPO_DIR" -mindepth 2 -maxdepth 2 -type d -name "$1" \
+        -not -path '*/.git/*' 2>/dev/null | head -n1
+}
+
+# ---------------------------------------------------------------------------
+# Repository sync (-r): git only - one tool for stable and current
+# ---------------------------------------------------------------------------
+
+sync_repo() {
+    command -v git &>/dev/null ||
+        die "-r needs git; install it in the image or bake the repo in."
+    if [[ -d $REPO_DIR/.git ]]; then
+        log "Updating $REPO_DIR ($GIT_BRANCH)..."
+        git -C "$REPO_DIR" fetch --depth 1 origin "$GIT_BRANCH" &&
+        git -C "$REPO_DIR" checkout -q "$GIT_BRANCH" 2>/dev/null ||
+        git -C "$REPO_DIR" checkout -qb "$GIT_BRANCH" FETCH_HEAD
+        git -C "$REPO_DIR" reset --hard FETCH_HEAD ||
+            die "git update failed."
+    else
+        log "Cloning $REPO_GIT_URL ($GIT_BRANCH) into $REPO_DIR..."
+        mkdir -p "$REPO_DIR"
+        git clone --depth 1 --branch "$GIT_BRANCH" \
+            "$REPO_GIT_URL" "$REPO_DIR" || die "git clone failed."
+    fi
+    log "Repository sync complete."
+}
+
+# ---------------------------------------------------------------------------
+# .info handling
+# ---------------------------------------------------------------------------
+
+read_info() {
+    # $1 = package dir, $2 = package name.
+    # Sets: INFO_DOWNLOAD, INFO_MD5SUM, INFO_REQUIRES, INFO_VERSION
+    # Applies the standard SBo ARCH override and the UNSUPPORTED/UNTESTED
+    # fallback (warn and try the generic source, like classic sbopkg-ci's
+    # unattended "Proceed" answer).
+    local D M
+    eval "$(
+        PRGNAM= VERSION= DOWNLOAD= MD5SUM= DOWNLOAD_x86_64= MD5SUM_x86_64= \
+        REQUIRES=
+        . "$1/$2.info"
+        printf 'INFO_VERSION=%q\n'  "$VERSION"
+        printf 'INFO_REQUIRES=%q\n' "$REQUIRES"
+        printf 'D_GENERIC=%q\n'     "$DOWNLOAD"
+        printf 'M_GENERIC=%q\n'     "$MD5SUM"
+        printf 'D_X86_64=%q\n'      "$DOWNLOAD_x86_64"
+        printf 'M_X86_64=%q\n'      "$MD5SUM_x86_64"
+    )"
+    if [[ $ARCH == x86_64 && -n $D_X86_64 ]]; then
+        D=$D_X86_64; M=$M_X86_64
+    else
+        D=$D_GENERIC; M=$M_GENERIC
+    fi
+    if [[ $D == UNSUPPORTED || $D == UNTESTED ]]; then
+        log "  WARNING: $2 is marked $D on $ARCH; trying the generic source."
+        D=$D_GENERIC; M=$M_GENERIC
+        [[ $D == UNSUPPORTED || $D == UNTESTED || -z $D ]] &&
+            { log "  No usable source for $2 on $ARCH."; return 1; }
+    fi
+    INFO_DOWNLOAD=$D
+    INFO_MD5SUM=$M
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Dependency resolution (in memory - this replaces sqg entirely)
+# ---------------------------------------------------------------------------
+
+declare -A SEEN                # package name -> 1 (visited)
+declare -a BUILD_ORDER         # "path|name|options" deps-first
+declare -a DISTRO_DEPS         # names not present in the SlackBuilds repo
+declare -a DISTRO_FAILED       # distro deps that could not be installed
+
+resolve() {
+    # $1 = package name, $2 = build options (from queuefile/CLI), $3 = depth
+    local NAME=$1 OPTS=$2 DEPTH=${3:-0} DIR REQ DEP
+    [[ ${SEEN[$NAME]} ]] && return 0
+    SEEN[$NAME]=1
+
+    DIR=$(find_pkg_dir "$NAME")
+    if [[ -z $DIR ]]; then
+        # Not in the SlackBuilds repository: a distribution candidate.
+        DISTRO_DEPS+=("$NAME")
+        return 0
+    fi
+    if [[ $RESOLVE_DEPS ]]; then
+        REQ=$(. "$DIR/$NAME.info" 2>/dev/null; echo "$REQUIRES")
+        for DEP in $REQ; do
+            if [[ $DEP == %README% ]]; then
+                info "  NOTE: $NAME has optional dependencies - see its README."
+                continue
+            fi
+            resolve "$DEP" "" $((DEPTH + 1))
+        done
+    fi
+    BUILD_ORDER+=("$DIR|$NAME|$OPTS")
+}
+
+parse_target() {
+    # $1 = a CLI target: "name", "name:OPT=val:OPT2=val", "queue.sqf" or a
+    # queuefile name present in $QUEUEDIR. Queuefiles are still supported
+    # for compatibility ("commands stay the same"), including sqg's
+    # "# %DISTRO% name" markers and "name | OPTIONS" lines.
+    local T=$1 QF LINE NAME OPTS
+    if [[ $T == *.sqf && -r $T ]]; then
+        QF=$T
+    elif [[ -r $QUEUEDIR/${T%.sqf}.sqf ]]; then
+        QF=$QUEUEDIR/${T%.sqf}.sqf
+    fi
+    if [[ $QF ]]; then
+        info "Reading queuefile $QF..."
+        while read -r LINE; do
+            if [[ $LINE == "# %DISTRO% "* ]]; then
+                DISTRO_DEPS+=("${LINE#\# %DISTRO% }")
+                continue
+            fi
+            [[ -z $LINE || $LINE == \#* ]] && continue
+            OPTS=""
+            if [[ $LINE == *"|"* ]]; then
+                OPTS=${LINE#*|}; OPTS=${OPTS# }
+                LINE=${LINE%%|*}
+            fi
+            NAME=$(echo $LINE)          # trim
+            [[ $NAME == *OFF ]] && continue
+            resolve "${NAME% *}" "$OPTS"
+        done < "$QF"
+        return 0
+    fi
+    # 'app:opt1=val1:opt2=val2' CLI options syntax
+    OPTS=""
+    if [[ $T == *:* ]]; then
+        OPTS=${T#*:}; OPTS=${OPTS//:/ }
+        T=${T%%:*}
+    fi
+    resolve "$T" "$OPTS"
+}
+
+# ---------------------------------------------------------------------------
+# Distribution-provided dependencies via slacker
+# ---------------------------------------------------------------------------
+
+install_distro_deps() {
+    local DEP
+    local -a NEEDED MISSING
+    [[ ${#DISTRO_DEPS[*]} -eq 0 ]] && return 0
+
+    for DEP in $(printf '%s\n' "${DISTRO_DEPS[@]}" | sort -u); do
+        pkg_installed "$DEP" || NEEDED+=("$DEP")
+    done
+    [[ ${#NEEDED[*]} -eq 0 ]] && return 0
+
+    log ""
+    log "Not in the $REPO_NAME/$REPO_BRANCH repository; installing from" \
+        "the distribution: ${NEEDED[*]}"
+    if [[ $SLACKER != yes ]] || ! command -v slacker &>/dev/null; then
+        log "WARNING: slacker unavailable; cannot install: ${NEEDED[*]}."
+        log "Continuing - builds depending on them may fail."
+        DISTRO_FAILED+=("${NEEDED[@]}")
+        return 1
+    fi
+
+    slacker install "${NEEDED[@]}" --yes 2>&1 | tee -a "$LOGFILE"
+
+    for DEP in "${NEEDED[@]}"; do
+        pkg_installed "$DEP" || MISSING+=("$DEP")
+    done
+    if [[ ${#MISSING[*]} -gt 0 ]]; then
+        log "WARNING: slacker could not install: ${MISSING[*]}."
+        DISTRO_FAILED+=("${MISSING[@]}")
+        [[ $ON_ERROR == stop ]] && die "stopping (-e stop)."
+        return 1
+    fi
+    log "All distribution-provided dependencies are installed."
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Pre/post hooks and automatic user/group creation
+# ---------------------------------------------------------------------------
+
+run_hook() {
+    # $1 = pre|post, $2 = package name.
+    # Runs $HOOKS_DIR/<name>.pre before the build and <name>.post after a
+    # successful install. Use these for anything a package needs prepared
+    # in advance: groups, users, directories, permissions, sysctl, ...
+    local HOOK=$HOOKS_DIR/$2.$1
+    [[ -x $HOOK || -r $HOOK ]] || return 0
+    log "  Running $1-hook: $HOOK"
+    bash "$HOOK" 2>&1 | tee -a "$LOGFILE"
+    local RC=${PIPESTATUS[0]}
+    if [[ $RC != 0 ]]; then
+        log "  WARNING: hook $HOOK exited with $RC."
+        return 1
+    fi
+    return 0
+}
+
+auto_users() {
+    # $1 = package dir. SBo READMEs conventionally list the exact
+    # groupadd/useradd commands a package needs (with the assigned uid/gid
+    # from https://slackbuilds.org/uid_gid.txt). When AUTO_USERS=yes, parse
+    # them out of the README and run them if the group/user is missing.
+    # Only lines that strictly match a plain groupadd/useradd command are
+    # executed - no shell metacharacters allowed.
+    local README=$1/README LINE CMD NAME
+    [[ $AUTO_USERS == yes && -r $README ]] || return 0
+
+    grep -E '^[[:space:]#]*(groupadd|useradd)[[:space:]]' "$README" |
+    while IFS= read -r LINE; do
+        CMD=$(echo "$LINE" | sed 's/^[[:space:]#]*//')
+        # strict allow-list of characters; reject anything shell-active
+        [[ $CMD =~ ^(groupadd|useradd)[[:space:]][A-Za-z0-9_./,[:space:]-]+$ ]] ||
+            continue
+        NAME=${CMD##* }
+        if [[ $CMD == groupadd* ]]; then
+            getent group "$NAME" > /dev/null && continue
+        else
+            getent passwd "$NAME" > /dev/null && continue
+        fi
+        log "  Creating (from README): $CMD"
+        $CMD 2>&1 | tee -a "$LOGFILE"
+    done
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Download, build, install
+# ---------------------------------------------------------------------------
+
+fetch_sources() {
+    # Uses INFO_DOWNLOAD/INFO_MD5SUM. Verifies md5 with coreutils' md5sum;
+    # on failure retries once from the SBo source archive. Returns 1 if any
+    # source is missing or fails verification.
+    local URL SUM FILE OK
+    local -a URLS=($INFO_DOWNLOAD) SUMS=($INFO_MD5SUM)
+
+    for ((i = 0; i < ${#URLS[*]}; i++)); do
+        URL=${URLS[$i]}
+        SUM=${SUMS[$i]}
+        FILE=$SRCDIR/${URL##*/}
+        OK=""
+        if [[ -f $FILE ]] &&
+                echo "$SUM  $FILE" | md5sum -c --status 2>/dev/null; then
+            info "  $(basename $FILE): cached, md5 OK."
+            continue
+        fi
+        info "  Downloading ${URL##*/}..."
+        wget $WGETFLAGS -O "$FILE" "$URL" 2>&1 | tee -a "$LOGFILE"
+        if [[ -s $FILE ]] &&
+                echo "$SUM  $FILE" | md5sum -c --status 2>/dev/null; then
+            OK=1
+        else
+            log "  Download or md5 failed; trying the SBo source archive."
+            wget $WGETFLAGS -O "$FILE" \
+                "$SRCARCH_URL/by-md5/${SUM:0:1}/${SUM:1:1}/$SUM/${URL##*/}" \
+                2>&1 | tee -a "$LOGFILE"
+            if [[ -s $FILE ]] &&
+                    echo "$SUM  $FILE" | md5sum -c --status 2>/dev/null; then
+                OK=1
+            fi
+        fi
+        if [[ ! $OK ]]; then
+            rm -f "$FILE"
+            log "  FAILED to fetch a verified ${URL##*/}."
+            return 1
+        fi
+    done
+    return 0
+}
+
+build_one() {
+    # $1 = pkg dir, $2 = name, $3 = build options. Returns nonzero on error.
+    local DIR=$1 NAME=$2 OPTS=$3 PKG
+
+    read_info "$DIR" "$NAME" || return 1
+
+    log ""
+    log "=== $NAME $INFO_VERSION ($TYPE) ==="
+    fetch_sources || return 1
+    [[ $TYPE == download ]] && return 0
+
+    auto_users "$DIR"
+    run_hook pre "$NAME"
+
+    # Sources are expected in $CWD of the SlackBuild; link them in.
+    local URL
+    for URL in $INFO_DOWNLOAD; do
+        ln -sf "$SRCDIR/${URL##*/}" "$DIR/${URL##*/}"
+    done
+
+    ( cd "$DIR" &&
+      eval env OUTPUT="$OUTPUT" TMP="$TMP" TAG="$TAG" $OPTS \
+          bash "./$NAME.SlackBuild" ) 2>&1 | tee -a "$LOGFILE"
+    local RC=${PIPESTATUS[0]}
+
+    # Clean the source symlinks out of the repo tree again.
+    for URL in $INFO_DOWNLOAD; do
+        rm -f "$DIR/${URL##*/}"
+    done
+    [[ $RC != 0 ]] && { log "  BUILD FAILED: $NAME (exit $RC)"; return 1; }
+
+    PKG=$(ls -t "$OUTPUT/$NAME"-*"$TAG".t?z 2>/dev/null | head -n1)
+    [[ -z $PKG ]] && { log "  No package produced for $NAME."; return 1; }
+    log "  Built: $PKG"
+
+    if [[ $TYPE == install ]]; then
+        /sbin/upgradepkg --reinstall --install-new "$PKG" 2>&1 |
+            tee -a "$LOGFILE"
+        pkg_installed "$NAME" ||
+            { log "  INSTALL FAILED: $NAME"; return 1; }
+        run_hook post "$NAME"
+    fi
+    return 0
+}
+
+process_all() {
+    local ENTRY DIR NAME OPTS
+    local -a FAILED DONE
+
+    for ENTRY in "${BUILD_ORDER[@]}"; do
+        IFS='|' read -r DIR NAME OPTS <<< "$ENTRY"
+        if [[ $SKIP_INSTALLED ]] && pkg_installed "$NAME"; then
+            info "Skipping $NAME (already installed)."
+            continue
+        fi
+        if build_one "$DIR" "$NAME" "$OPTS"; then
+            DONE+=("$NAME")
+        else
+            FAILED+=("$NAME")
+            if [[ $ON_ERROR == stop ]]; then
+                log ""
+                log "Stopping on first error (-e stop). Failed: $NAME"
+                exit 1
+            fi
+        fi
+    done
+
+    FAILED+=("${DISTRO_FAILED[@]}")
+    log ""
+    log "###########################################"
+    log "Queue process complete."
+    log "  OK:     ${DONE[*]:-none}"
+    log "  FAILED: ${FAILED[*]:-none}"
+    log "###########################################"
+    [[ ${#FAILED[*]} -gt 0 ]] && exit 1
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+if [[ $SYNC ]]; then
+    sync_repo
+    exit 0
+fi
+
+if [[ $SEARCH_PAT ]]; then
+    [[ -d $REPO_DIR ]] || die "no repository at $REPO_DIR - run '$SCRIPT -r'."
+    find "$REPO_DIR" -mindepth 2 -maxdepth 2 -type d -iname "*$SEARCH_PAT*" \
+            -not -path '*/.git/*' 2>/dev/null |
+        sed "s|^$REPO_DIR/||" | sort
+    exit 0
+fi
+
+if [[ $LISTPKGS ]]; then
+    ls "$PKGDB" 2>/dev/null | grep -- "$TAG$" | sort
+    exit 0
+fi
+
+[[ $TYPE ]] || { usage; exit 1; }
+[[ -d $REPO_DIR ]] || die "no repository at $REPO_DIR - run '$SCRIPT -r'."
+
+> "$LOGFILE.tmp" 2>/dev/null
+log "$SCRIPT $SBOVER: $(date)"
+log "Repository: $REPO_NAME/$REPO_BRANCH ($REPO_DIR), ARCH: $ARCH"
+
+for T in "${BUILDLIST[@]}"; do
+    parse_target "$T"
+done
+
+if [[ ${#BUILD_ORDER[*]} -eq 0 && ${#DISTRO_DEPS[*]} -eq 0 ]]; then
+    die "nothing to do: no valid package or queuefile given."
+fi
+
+install_distro_deps
+process_all
