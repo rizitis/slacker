@@ -1,3 +1,7 @@
+Version Beta 0.11.2
+=====
+Update: clippy: apply 26 machine-applicable fixes, all tests pass
+Add: container folder for testing sbopkg-ci (docker image version)
 Add: Vendor folder, start palying with static offline builds...
 ---
 
