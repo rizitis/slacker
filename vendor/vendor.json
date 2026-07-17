@@ -1,7 +1,7 @@
 {
   "archive": {
     "name": "vendor.tar.gz",
-    "sha256": "6736d156697bccb9d9e053d40c951beef691b1459c0e58e73693470aefa950d6"
+    "sha256": "62469b2644bb3a55e3d41e04bb580336eab33140dac1d1c62b18980b5ddd6e58"
   },
   "cargo_lock_sha256": "16f6f13a8ab1e660bfeae3f1273adc062d0406ea0fd794aa2036bf5a12f3da41",
   "counts": {
@@ -680,5 +680,5 @@
   "git_deps": [],
   "package": "slacker",
   "schema": "sbo-vendor/1",
-  "vendor_tree_sha256": "be2d21c11be6f1e885b0b9353668f4854b6d7e7b068eca511e0cc04263f1c75c"
+  "vendor_tree_sha256": "70a6eb548f3b707a85b03d28500ab83310796e06d9fb3f6d98552171455d01be"
 }
