@@ -452,6 +452,10 @@ fn acquire_lock() -> Result<Lock, String> {
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
+        // Deliberately NOT truncating at open: if another instance holds the
+        // flock, its PID must survive in the file so we can report it. We
+        // truncate manually (set_len) only after the lock is acquired.
+        .truncate(false)
         .open(LOCK_PATH)
         .map_err(|e| format!("cannot open lock file {LOCK_PATH}: {e}"))?;
 
