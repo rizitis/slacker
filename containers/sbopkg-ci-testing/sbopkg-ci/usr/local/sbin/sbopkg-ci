@@ -1,22 +1,23 @@
 #!/bin/bash
-# sbopkg-ci - docker edition
+# sbopkg-ci - sbopkg docker edition
 #
-# A single-file, unattended, CLI-only rewrite of sbopkg-ci for Slackware docker
-# images. Command-line interface is compatible with the classic sbopkg-ci
+# A single-file, unattended, CLI-only rewrite of sbopkg for Slackware docker
+# images. Command-line interface is compatible with the classic sbopkg
 # (sbopkg-ci -a -i foo, -r, -k, -e, ...), but everything runs without prompts.
 #
 # Hard dependencies: bash, pkgtools, coreutils, wget.
 # Optional: git (only for -r), slacker (only for distribution-provided deps).
+# `slacker install-template sbo_base` will fix this.
 #
 # Dependency resolution (-a) is done in memory - no sqg, no queuefiles, no
 # GNU parallel. Dependencies present in the REQUIRES chain but missing from
-# the SlackBuilds repository are installed from the distribution with:
+# the SlackBuilds repository (ponce) are installed from the distribution with:
 #     slacker install <pkgs> --yes
 #
-# Copyright 2026 Ioannis Anagnostakis (rizitis)
-# Based on sbopkg-ci, Copyright 2007-2026 Chess Griffin, slakmagik,
+# 2026 Ioannis Anagnostakis (rizitis)
+# Based on sbopkg, Copyright 2007-2026 Chess Griffin, slakmagik,
 # Willy Sudiarto Raharjo, and contributors.
-# Licensed under the same terms as sbopkg-ci (BSD-style, see upstream).
+# Licensed under the same terms as sbopkg (BSD-style, see upstream).
 
 SCRIPT=${0##*/}
 SBOVER=0.0.2-docker
@@ -44,7 +45,7 @@ HOOKS_DIR=/etc/sbopkg-ci/hooks.d
 AUTO_USERS=yes
 
 # ---------------------------------------------------------------------------
-# CLI parsing (same letters as classic sbopkg-ci; UI-only flags are no-ops)
+# CLI parsing (same letters as classic sbopkg; UI-only flags are no-ops)
 # ---------------------------------------------------------------------------
 
 usage() {
@@ -126,7 +127,7 @@ REPO_DIR=$REPO_ROOT/$REPO_NAME/$REPO_BRANCH
 QUEUEDIR=${QUEUEDIR:-$REPO_ROOT/queues}
 LOGFILE=$LOGDIR/build-log
 
-# Repository sources, following the classic sbopkg-ci repos.d mapping:
+# Repository sources, following the classic sbopkg repos.d mapping:
 #   current -> Ponce's fork (SBo adapted for slackware-current)
 #   master  -> SBo git master (approved, queued for the next stable update)
 #   15.0    -> SBo stable release branch
@@ -222,7 +223,7 @@ read_info() {
     # $1 = package dir, $2 = package name.
     # Sets: INFO_DOWNLOAD, INFO_MD5SUM, INFO_REQUIRES, INFO_VERSION
     # Applies the standard SBo ARCH override and the UNSUPPORTED/UNTESTED
-    # fallback (warn and try the generic source, like classic sbopkg-ci's
+    # fallback (warn and try the generic source, like classic sbopkg's
     # unattended "Proceed" answer).
     local D M
     eval "$(
@@ -258,7 +259,7 @@ read_info() {
 
 declare -A SEEN                # package name -> 1 (visited)
 declare -a BUILD_ORDER         # "path|name|options" deps-first
-declare -a DISTRO_DEPS         # names not present in the SlackBuilds repo
+declare -a DISTRO_DEPS         # names not present in the SlackBuilds repo (ponce)
 declare -a DISTRO_FAILED       # distro deps that could not be installed
 
 resolve() {
@@ -326,7 +327,7 @@ parse_target() {
 }
 
 # ---------------------------------------------------------------------------
-# Distribution-provided dependencies via slacker
+# Distribution-provided dependencies via slacker (slackware-current)
 # ---------------------------------------------------------------------------
 
 install_distro_deps() {
@@ -365,7 +366,7 @@ install_distro_deps() {
 }
 
 # ---------------------------------------------------------------------------
-# Pre/post hooks and automatic user/group creation
+# Pre/post hooks and automatic user/group creation | This is real in testing mode
 # ---------------------------------------------------------------------------
 
 run_hook() {
