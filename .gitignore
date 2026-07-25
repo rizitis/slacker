@@ -24,3 +24,6 @@ target
 
 # kate
 *.kate-swp
+
+# Plasma directory icons
+.directory
