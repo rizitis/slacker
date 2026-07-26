@@ -5,3 +5,4 @@ cyrus-sasl
 git
 wget
 wget2
+protobuf

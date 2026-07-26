@@ -1,2 +1,3 @@
 include cxx
 qt6
+protobuf

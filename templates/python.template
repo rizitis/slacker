@@ -8,3 +8,4 @@ python-installer
 python-flit-core
 python-scikit-build-core
 Cython
+protobuf

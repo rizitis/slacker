@@ -1,0 +1,7 @@
+include base
+include sbo_perl
+include sbo_autotools
+include sbo_meson
+include sbo_python
+include sbo_cargo
+include docs
