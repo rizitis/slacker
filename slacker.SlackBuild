@@ -75,6 +75,9 @@ sh contrib/check-completion-drift.sh target/release/slacker
 # generated completions must match their JSON source
 python3 contrib/gen-completions.py --check
 
+# every mutating command must stay unattended under --yes (container safety)
+bash contrib/check-yes-noninteractive.sh target/release/slacker
+
 mkdir -p $PKG/usr/local/sbin
 install -m0755 target/release/slacker $PKG/usr/local/sbin/slacker
 
