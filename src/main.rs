@@ -2729,12 +2729,10 @@ fn kept_detail(
     cand: &repo::AvailPkg,
     tag_prios: &[crate::config::TagPriority],
 ) -> String {
-    let tag = inst.build_tag();
-    let src = if tag.is_empty() { "official" } else { tag };
     format!(
         "{}  installed {} ({}) — {} ({}) not applied",
         inst.name,
-        src,
+        installed_source_label(inst),
         db.installed_priority(inst, tag_prios),
         cand.repo,
         db.repo_priority(&cand.repo),
@@ -3454,26 +3452,42 @@ fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<Outcome, St
     Ok(Outcome::Ok)
 }
 
+/// The source label for an INSTALLED build: its build tag, or `official` for a
+/// tagless (-current) build. Shared by `search` and the "kept (priority)"
+/// detail lines so both name a source the same way.
+fn installed_source_label(inst: &pkg::PkgId) -> &str {
+    let tag = inst.build_tag();
+    if tag.is_empty() {
+        "official"
+    } else {
+        tag
+    }
+}
+
 /// Pick the candidate a `search` hit should display. `search` returns the
 /// priority winner per name, but when the package is INSTALLED we want the
 /// candidate matching the installed source (same build tag), so the `[repo]`
 /// label and version name where it actually came from — not merely the
-/// highest-priority repo. Falls back to the winner when nothing is installed,
-/// or when the installed source is no longer offered (e.g. a local/`_SBo` build
-/// with no matching candidate).
+/// highest-priority repo.
+///
+/// `None` means there is no candidate that describes the installed state, and
+/// the caller distinguishes the two ways that happens:
+///   * nothing installed — the line describes what an `install` would fetch, so
+///     the caller shows the priority winner;
+///   * installed from a source that is not a configured repo (an `_SBo`,
+///     `_local` or otherwise foreign build tag) — the caller labels the line
+///     from the installed build tag itself. Falling back to the winner here
+///     would print another repo's name and version next to the word
+///     "installed", attributing the package to a repo it never came from.
 fn search_display<'a>(
-    winner: &'a repo::AvailPkg,
     installed: Option<&pkg::PkgId>,
     candidates: &[&'a repo::AvailPkg],
-) -> &'a repo::AvailPkg {
-    match installed {
-        Some(i) => candidates
-            .iter()
-            .copied()
-            .find(|c| c.id.build_tag() == i.build_tag())
-            .unwrap_or(winner),
-        None => winner,
-    }
+) -> Option<&'a repo::AvailPkg> {
+    let i = installed?;
+    candidates
+        .iter()
+        .copied()
+        .find(|c| c.id.build_tag() == i.build_tag())
 }
 
 fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
@@ -3500,15 +3514,28 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
         return Ok(Outcome::NothingFound);
     }
     for p in results {
-        // `p` is the priority-winner candidate that `search` returns. If this
-        // package is installed, show the candidate matching the INSTALLED source
-        // instead, so the [repo] label and version name where it actually came
-        // from rather than merely the highest-priority repo. The blacklist test
-        // stays on the winner `p`, so the frozen/blacklisted marking is
-        // unchanged.
+        // `p` is the priority-winner candidate that `search` returns. When the
+        // package is installed the line must describe the INSTALLED build: the
+        // candidate matching it when some repo ships that build, otherwise the
+        // installed id itself — an `_SBo`/local build that no configured repo
+        // can account for. The blacklist test stays on the winner `p`, so the
+        // frozen/blacklisted marking is unchanged.
         let inst = system::installed_by_name(&installed, &p.id.name);
         let cands = db.candidates(&p.id.name);
-        let shown = search_display(p, inst, &cands);
+        let shown = search_display(inst, &cands);
+
+        // Source label, name and version, taken from whichever of the three the
+        // line is really about.
+        let (label, name, version) = match (shown, inst) {
+            (Some(c), _) => (c.repo.clone(), c.id.name.as_str(), c.id.version.as_str()),
+            (None, Some(i)) => (
+                installed_source_label(i).to_string(),
+                i.name.as_str(),
+                i.version.as_str(),
+            ),
+            (None, None) => (p.repo.clone(), p.id.name.as_str(), p.id.version.as_str()),
+        };
+        let summary = shown.map_or(p.summary.as_str(), |c| c.summary.as_str());
 
         let mark = if inst.is_some() {
             ui::green(&format!("{:<11}", "installed"))
@@ -3525,7 +3552,7 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
         let mut others: Vec<&str> = Vec::new();
         for c in &cands {
             let r = c.repo.as_str();
-            if r != shown.repo && !others.contains(&r) {
+            if r != label && !others.contains(&r) {
                 others.push(r);
             }
         }
@@ -3536,11 +3563,11 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
         };
         println!(
             "{} {} {}{}  {}{}{}",
-            ui::cyan(&format!("[{}]", shown.repo)),
+            ui::cyan(&format!("[{label}]")),
             mark,
-            ui::white(&shown.id.name),
-            ui::dim(&format!("-{}", shown.id.version)),
-            shown.summary,
+            ui::white(name),
+            ui::dim(&format!("-{version}")),
+            summary,
             bl,
             also
         );
@@ -10100,19 +10127,31 @@ mod collect_tests {
 
         // installed from alienbob (1alien) -> show alienbob, NOT the winner.
         let inst_alien = pkg::PkgId::parse("flatpak-1.18.0-x86_64-1alien").unwrap();
-        assert_eq!(search_display(&conraid, Some(&inst_alien), &cands).repo.as_str(), "alienbob");
+        assert_eq!(
+            search_display(Some(&inst_alien), &cands).map(|c| c.repo.as_str()),
+            Some("alienbob")
+        );
 
         // installed from conraid (2cf) -> show conraid.
         let inst_cf = pkg::PkgId::parse("flatpak-1.18.0-x86_64-2cf").unwrap();
-        assert_eq!(search_display(&conraid, Some(&inst_cf), &cands).repo.as_str(), "conraid");
+        assert_eq!(
+            search_display(Some(&inst_cf), &cands).map(|c| c.repo.as_str()),
+            Some("conraid")
+        );
 
-        // not installed -> the priority winner.
-        assert_eq!(search_display(&conraid, None, &cands).repo.as_str(), "conraid");
+        // not installed -> nothing to match; the caller shows the winner.
+        assert_eq!(search_display(None, &cands).map(|c| c.repo.as_str()), None);
 
-        // installed from a source with no matching candidate (local/_SBo) ->
-        // fall back to the winner.
+        // installed from a source that is not a configured repo (_SBo) -> no
+        // candidate. The caller must label the line from the installed build
+        // tag, NOT misattribute the package to the priority winner.
         let inst_sbo = pkg::PkgId::parse("flatpak-1.18.0-x86_64-1_SBo").unwrap();
-        assert_eq!(search_display(&conraid, Some(&inst_sbo), &cands).repo.as_str(), "conraid");
+        assert_eq!(search_display(Some(&inst_sbo), &cands).map(|c| c.repo.as_str()), None);
+        assert_eq!(installed_source_label(&inst_sbo), "_SBo");
+
+        // a tagless (-current) installed build is official Slackware.
+        let inst_official = pkg::PkgId::parse("flatpak-1.18.0-x86_64-1").unwrap();
+        assert_eq!(installed_source_label(&inst_official), "official");
     }
 
     #[test]

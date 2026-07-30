@@ -1,3 +1,13 @@
+Fix bug: slacker search command
+- search: label an installed build by its own source, never by the winner
+  search_display fell back to the priority winner when no candidate
+  matched the installed build tag, so a package installed from a source
+  that is not a configured repo (_SBo, _local) was printed as if it came
+  from whichever repo happened to outrank it — and with that repo's
+  version, which diverges as soon as the versions differ. It now returns
+  None for that case and cmd_search labels the line from the installed
+  build tag, with the installed name and version. kept_detail shares the
+  new installed_source_label helper so both name a source identically.
 Update: wiki (for docker & podman)
 Add:  contrib/check-yes-noninteractive.sh
 Update: Templates folder for docker images.
