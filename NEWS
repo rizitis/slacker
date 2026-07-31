@@ -1,3 +1,9 @@
+Update: cmd:slacker status
+    - Tag prio: every installed package's source must be ranked or frozen!
+      anyway slacker will protect unranked tags and their installed packages
+      BUT slacker status will report that this is wrong and user must fix it.
+---
+
 Version Beta 0.11.3
 =====
 Fix bug: slacker search command

@@ -715,9 +715,11 @@ fn resolve_protected_deps(
     assume_yes: bool,
 ) -> Result<Vec<repo::AvailPkg>, String> {
     let inst_src = |p: &ProtectedDep| {
-        let tag = p.installed.build_tag();
-        let src = if tag.is_empty() { "official" } else { tag };
-        format!("{} ({})", src, db.installed_priority(&p.installed, tag_prios))
+        format!(
+            "{} ({})",
+            installed_source_label(&p.installed),
+            priority_display(db.installed_priority(&p.installed, tag_prios))
+        )
     };
     let off_src =
         |p: &ProtectedDep| format!("{} ({})", p.offered.repo, db.repo_priority(&p.offered.repo));
@@ -2720,23 +2722,57 @@ fn collect_installed_targets<'a>(
     Ok((out, protected, misses))
 }
 
+/// Render an installed package's source priority for display. An unknown build
+/// tag — one with no priority line in `repos` and shipped by no configured repo
+/// — resolves to `i32::MAX` so that nothing can auto-replace it. Printing that
+/// raw number tells the user nothing, so name the situation instead; the caller
+/// adds a hint line explaining how to resolve it.
+fn priority_display(prio: i32) -> String {
+    if prio == i32::MAX {
+        "no priority set".to_string()
+    } else {
+        prio.to_string()
+    }
+}
+
 /// One "kept (priority)" detail line, explaining why an installed package was
 /// not replaced — e.g. `webkit2gtk4.1  installed _SBo (100) — conraid (80) not
 /// applied`. Source priority alone decides; versions are never compared.
+///
+/// A package whose build tag has no priority at all is a different case: it is
+/// not outranking anything, it simply cannot be ranked, so it is kept as a
+/// fail-safe. That is a configuration gap the user can close, so the line grows
+/// a hint naming the two ways out — give the tag a priority, or remove the
+/// package and install it from a repo.
 fn kept_detail(
     db: &PkgDb,
     inst: &pkg::PkgId,
     cand: &repo::AvailPkg,
     tag_prios: &[crate::config::TagPriority],
 ) -> String {
-    format!(
+    let prio = db.installed_priority(inst, tag_prios);
+    let mut line = format!(
         "{}  installed {} ({}) — {} ({}) not applied",
         inst.name,
         installed_source_label(inst),
-        db.installed_priority(inst, tag_prios),
+        priority_display(prio),
         cand.repo,
         db.repo_priority(&cand.repo),
-    )
+    );
+    let tag = inst.build_tag();
+    if prio == i32::MAX && !tag.is_empty() {
+        line.push_str(&format!(
+            "\n      you installed {} from {}, but that tag has no priority in `repos`, \
+             so it cannot be ranked.\n      It is kept for safety. Either give the tag a \
+             priority (e.g. `100  {}  {}`) or `removepkg {}` and install it from a repo.",
+            inst.name,
+            tag,
+            tag.trim_start_matches('_'),
+            tag,
+            inst.name,
+        ));
+    }
+    line
 }
 
 // ---- blacklist helpers ---------------------------------------------------
@@ -5160,6 +5196,62 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         }
     }
 
+    // Build-tag priority coverage. An installed package whose tag has neither a
+    // priority line in `repos` nor any configured repo shipping that tag cannot
+    // be ranked, so the priority rule protects it (installed_priority is maximal)
+    // and nothing will ever replace it — a freeze the user never asked for and
+    // cannot see. Surface it here, grouped by tag, since the fix is one line per
+    // tag rather than one action per package.
+    //
+    // A package the user has explicitly frozen is skipped: keeping it is then a
+    // stated intention, not an unnoticed side effect of a missing priority, and
+    // reporting it would be nagging about something already decided.
+    let mut unranked_tags: Vec<String> = Vec::new();
+    let mut unranked_pkgs = 0usize;
+    {
+        let mut by_tag: HashMap<&str, Vec<&str>> = HashMap::new();
+        for i in &installed {
+            let tag = i.build_tag();
+            if tag.is_empty() || bl_installed(cfg, Some(&db), i) {
+                continue;
+            }
+            if db.installed_priority(i, &cfg.tag_priorities) == i32::MAX {
+                by_tag.entry(tag).or_default().push(i.name.as_str());
+            }
+        }
+        if by_tag.is_empty() {
+            srow(&ok, "Tag prio", &ui::dim("every installed package's source can be ranked"));
+        } else {
+            let mut tags: Vec<(&&str, &Vec<&str>)> = by_tag.iter().collect();
+            tags.sort_by_key(|(t, _)| **t);
+            unranked_pkgs = by_tag.values().map(Vec::len).sum();
+            unranked_tags = tags.iter().map(|(t, _)| (**t).to_string()).collect();
+            srow(
+                &warn,
+                "Tag prio",
+                &ui::yellow(&format!(
+                    "{unranked_pkgs} installed package(s) from {} unranked tag(s) — kept for safety, never upgraded",
+                    tags.len()
+                )),
+            );
+            for (tag, names) in tags {
+                // Long lists are noise; a handful names the culprit well enough.
+                let shown = if names.len() > 6 {
+                    format!("{}, +{} more", names[..6].join(", "), names.len() - 6)
+                } else {
+                    names.join(", ")
+                };
+                println!(
+                    "             {}",
+                    ui::dim(&format!(
+                        "{tag}: {shown} — add `100  {}  {tag}` to `repos`, or removepkg and install from a repo",
+                        tag.trim_start_matches('_')
+                    ))
+                );
+            }
+        }
+    }
+
     // Leftover `*.new` config files from past upgrades, waiting to be reconciled.
     let pending_new = newconfig::find_new_configs(&newconfig::default_roots()).len();
     if pending_new > 0 {
@@ -5424,6 +5516,12 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         notes.push(
             "the mirror did not respond — check your network or the active line in `mirrors`".into(),
         );
+    }
+    if !unranked_tags.is_empty() {
+        notes.push(format!(
+            "{unranked_pkgs} installed package(s) carry a build tag with no priority ({}) — they cannot be ranked, so they are kept and never upgraded; give each tag a priority in `repos`, or removepkg and install from a repo",
+            unranked_tags.join(", ")
+        ));
     }
     if security_problem {
         notes.push(
