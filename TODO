@@ -6,7 +6,4 @@
     |
     |-slacker/{code,docs,vendor,etc}
     |
-    |-containers/(everything for docker-podman)
-
-For bare-metal everything needed (developing-build-install) will be in /slacker and for docker everything needed will be in /containers
-
+    |- containers/ https://hub.docker.com/r/rizitis/slackware-slacker (everything slacker need for docker-podman image)
