@@ -1,9 +1,9 @@
 {
   "archive": {
     "name": "vendor.tar.gz",
-    "sha256": "c2813e68bb6b0d1ce1cb9afa867e091341fae992f524384c2252fc78bc2bad7b"
+    "sha256": "be6deed1602956e7638ec8a0c67f1b44e94e6c261812f13c38dad1fe89a956e2"
   },
-  "cargo_lock_sha256": "f7587febbb070d8c594ed94dfe759fa40fd92ef77eb529eea9e7f0cc2150c1d0",
+  "cargo_lock_sha256": "1d4fbb263ef2823b32d9f0dd941bd3005354732fd1e638d7f61f38cc7995401b",
   "counts": {
     "git": 0,
     "registry": 112,
@@ -77,10 +77,10 @@
       "version": "0.10.4"
     },
     {
-      "checksum": "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9",
+      "checksum": "5d262e149917187838d5b42777c8253bcb64500067342904e7d429499a6f277e",
       "name": "cc",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "version": "1.4.0"
+      "version": "1.4.2"
     },
     {
       "checksum": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801",
@@ -89,16 +89,16 @@
       "version": "1.0.4"
     },
     {
-      "checksum": "301b56658598e48f3648647ac6fc887be7e7108eddfa4e9b63fcf3ec58c0cadf",
+      "checksum": "473c7e07f409a8d772161724aa8db6a765a2532a70f9667eeb7b49d3d02fbdca",
       "name": "clap",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "version": "4.6.5"
+      "version": "4.6.6"
     },
     {
-      "checksum": "94a65403d1a1bd28f7dc68eb8506e8874808ee5eecb59298de588e2e1407a078",
+      "checksum": "7b48fea5a88e9ae728a2dcbedbfc0e730f7d60da42e1cb049a83c9fb8b789889",
       "name": "clap_builder",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "version": "4.6.5"
+      "version": "4.6.6"
     },
     {
       "checksum": "d012d2b9d65aca7f18f4d9878a045bc17899bba951561ba5ec3c2ba1eed9a061",
@@ -155,10 +155,10 @@
       "version": "0.1.9"
     },
     {
-      "checksum": "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582",
+      "checksum": "26b73573e6edcd2af0cdf47bd6cb58f0b3839491263c314eaad1ccf24430e1de",
       "name": "find-msvc-tools",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "version": "0.1.9"
+      "version": "0.1.10"
     },
     {
       "checksum": "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c",
@@ -635,16 +635,16 @@
       "version": "0.8.2"
     },
     {
-      "checksum": "b5a105cd7b140f6eeec8acff2ea38135d3cab283ada58540f629fe51e46696eb",
+      "checksum": "556764e583adb45a9f8d413c2a147fa7e8d821e48e12b14fd560b607998b75eb",
       "name": "zerocopy",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "version": "0.8.55"
+      "version": "0.8.56"
     },
     {
-      "checksum": "0fe976fb70c78cd64cccfe3a6fc142244e8a77b70959b30faf9d0ac37ee228eb",
+      "checksum": "f2ab42fc20575779bd240faa45f94a74256f755c0fa9e89f0ede20d91d0cdfc1",
       "name": "zerocopy-derive",
       "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "version": "0.8.55"
+      "version": "0.8.56"
     },
     {
       "checksum": "0ec05a11813ea801ff6d75110ad09cd0824ddba17dfe17128ea0d5f68e6c5272",
@@ -686,5 +686,5 @@
   "git_deps": [],
   "package": "slacker",
   "schema": "sbo-vendor/1",
-  "vendor_tree_sha256": "d7236f0627ac77356e29ca0d0c2d9396cdd49069aacb9db4518ac1300f41ddda"
+  "vendor_tree_sha256": "89e97d75c021475d20f9eb177fab1f802ce000f9112df561fcc0e9678e35601a"
 }

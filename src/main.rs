@@ -3585,11 +3585,21 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
         };
         // Surface the other repos that ship this name (search shows one winner
         // per name); `info <name>` gives the full per-repo candidate list.
-        let mut others: Vec<&str> = Vec::new();
+        // Each is named as `<repo> <name>-<version>`: another repo may carry
+        // something entirely different (e.g. testing shipping a whole other
+        // kernel series), and a bare repo name would hide that until `info` is
+        // run. The package name is repeated rather than joined to the repo with
+        // a dash, so `testing kernel-generic-7.1.7` cannot be misread as a repo
+        // called "testing-7.1.7". `candidates` is priority-ordered, so the first
+        // entry seen for a repo is the one that repo would resolve to — later
+        // builds of the same name in the same repo are not listed.
+        let mut seen_repos: Vec<&str> = Vec::new();
+        let mut others: Vec<String> = Vec::new();
         for c in &cands {
             let r = c.repo.as_str();
-            if r != label && !others.contains(&r) {
-                others.push(r);
+            if r != label && !seen_repos.contains(&r) {
+                seen_repos.push(r);
+                others.push(format!("{r} {}-{}", c.id.name, c.id.version));
             }
         }
         let also = if others.is_empty() {
