@@ -27,3 +27,4 @@ target
 
 # Plasma directory icons
 .directory
+vendor/slacker-*.tar.gz

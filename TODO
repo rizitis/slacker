@@ -1,9 +1,1 @@
-1. All files and scripts out of src/ and contrib/ need one by one a review.
-2. When I have time, its the time for all helper-folders to go out from repo. (kepp only one for future forkers)
-3. When 1 & 2 ^^ done, then reorganize repo tree:
-/git|
-    |-README.md (etc..)
-    |
-    |-slacker/{code,docs,vendor,etc}
-    |
-    |- containers/ https://hub.docker.com/r/rizitis/slackware-slacker (everything slacker need for docker-podman image)
+clean DOCs
