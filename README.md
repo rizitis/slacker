@@ -56,7 +56,7 @@ Everything you need to know about slacker: [Wiki](https://forge.slackware.nl/riz
 
 ---
 
-[![asciicast](https://asciinema.org/a/Kdwfc6cDG8vapY3W.svg)](https://asciinema.org/a/Kdwfc6cDG8vapY3W)
+[![asciicast](https://asciinema.org/a/1263150.svg)](https://asciinema.org/a/1263150)
 
 ---
 
