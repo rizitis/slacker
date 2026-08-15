@@ -3533,6 +3533,18 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
     if results.is_empty() {
         if db.is_empty() {
             println!("No package metadata yet — run `slacker update` first.");
+        } else if let Some(i) = system::installed_by_name(&installed, term) {
+            // Nothing in any repo, but it IS on the system: a local or SBo build.
+            // Say so — sending the user to `info` without a word about it reads
+            // as "this does not exist", which is false.
+            println!("No repo offers '{term}', but it is installed: {}", i.tag());
+            println!(
+                "{}",
+                ui::dim(&format!(
+                    "it came from outside the configured repos, so nothing can upgrade it — \
+                     `slacker info {term}`."
+                ))
+            );
         } else {
             let mut msg = format!("No package named '{term}'.");
             if let Some(s) = closest(term, db.available_names()) {
@@ -3725,7 +3737,36 @@ fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
 fn cmd_info(cfg: &Config, name: &str) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let candidates = db.candidates(name);
+    // Read the installed set BEFORE deciding there is nothing to report: a
+    // locally built package (an `_SBo` or own build) exists on the system while
+    // no configured repo offers it, and saying "no package named X" about
+    // something sitting in the package database is simply wrong.
+    let installed = system::installed_packages(&cfg.pkg_db_dir)?;
+    let inst = system::installed_by_name(&installed, name);
     if candidates.is_empty() {
+        if let Some(i) = inst {
+            println!("{} {}", ui::blue("Installed:"), ui::green(&i.tag()));
+            println!(
+                "{}",
+                ui::dim(&format!(
+                    "No repo offers '{name}', so nothing can upgrade it — it came from \
+                     outside the configured repos (a local or SBo build)."
+                ))
+            );
+            // The pkgtools record already holds the description, sizes and file
+            // list in readable form; point at it rather than reimplementing a
+            // parser for a file the system publishes. `pkg_db_dir` is used (not
+            // a hardcoded path) so the hint stays correct under a custom
+            // PKG_DB_DIR.
+            println!(
+                "{}",
+                ui::dim(&format!(
+                    "package details: `cat {}`",
+                    cfg.pkg_db_dir.join(i.tag()).display()
+                ))
+            );
+            return Ok(Outcome::Ok);
+        }
         if db.is_empty() {
             println!("No package metadata yet — run `slacker update` first.");
         } else {
@@ -3737,9 +3778,8 @@ fn cmd_info(cfg: &Config, name: &str) -> Result<Outcome, String> {
         }
         return Ok(Outcome::NothingFound);
     }
-    let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    match system::installed_by_name(&installed, name) {
-        Some(inst) => println!("{} {}", ui::blue("Installed:"), ui::green(&inst.tag())),
+    match inst {
+        Some(i) => println!("{} {}", ui::blue("Installed:"), ui::green(&i.tag())),
         None => println!("{} {}", ui::blue("Installed:"), ui::dim("(none)")),
     }
     println!("{}", ui::blue("Available candidates (highest priority first):"));
