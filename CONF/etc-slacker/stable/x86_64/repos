@@ -35,6 +35,7 @@
 #50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/15.0/x86_64
 #80         mate        https://slackware.uk/msb/15.0/1.28/x86_64
 #79         cbs         https://slackware.uk/csb/15.0/x86_64/
+#40         ponce       https://ponce.cc/slackware/slackware64-15.0/packages
 #10         multilib    https://slackware.nl/people/alien/multilib/15.0
 #
 # ----------------------------------------------------------------------------
