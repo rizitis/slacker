@@ -3326,8 +3326,16 @@ fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<Outcome, St
         .map(|r| changelog::check_repo_updates(r, &cfg.cache_dir))
         .collect();
 
+    // An unreachable repo is still offered: the failure may be transient, and
+    // attempting it surfaces the real error instead of silently skipping it.
+    // Its label must not claim an update is coming, though.
     let needs = |s: &changelog::UpdateStatus| {
-        matches!(s, changelog::UpdateStatus::Pending | changelog::UpdateStatus::Unknown)
+        matches!(
+            s,
+            changelog::UpdateStatus::Pending
+                | changelog::UpdateStatus::Unknown
+                | changelog::UpdateStatus::Unreachable
+        )
     };
     let wname = repos.iter().map(|r| r.name.len()).chain(std::iter::once(10)).max().unwrap();
 
@@ -3346,6 +3354,7 @@ fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<Outcome, St
             needing.push(*r);
             let txt = match s {
                 changelog::UpdateStatus::Unknown => ui::yellow("new (will update)"),
+                changelog::UpdateStatus::Unreachable => ui::red("unreachable (will retry)"),
                 _ => ui::yellow("updates available"),
             };
             (ui::cyan(&format!("{:>2}", needing.len())), txt)
@@ -3389,7 +3398,7 @@ fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<Outcome, St
         print!(
             "\n{} ",
             hilite_keys(&format!(
-                "{} repo(s) have updates. Update [a]ll / numbers (e.g. 1 2) / [n]one? [a]:",
+                "{} repo(s) to update. Update [a]ll / numbers (e.g. 1 2) / [n]one? [a]:",
                 needing.len()
             ))
         );
@@ -8455,6 +8464,13 @@ fn cmd_check_updates(cfg: &Config) -> Result<Outcome, String> {
             changelog::UpdateStatus::Unknown => {
                 any_unknown = true;
                 ui::dim("unknown (run update first)")
+            }
+            // Kept in the same bucket as Unknown so the exit code is unchanged;
+            // only the wording differs, because "run update first" is useless
+            // advice for a repo that cannot be reached at all.
+            changelog::UpdateStatus::Unreachable => {
+                any_unknown = true;
+                ui::red("unreachable (check its URL)")
             }
         };
         println!("  {}  {label}", ui::white(&format!("{:<width$}", r.name)));

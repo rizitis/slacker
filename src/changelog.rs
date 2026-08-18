@@ -22,7 +22,15 @@ pub fn cached_changelog(repo_: &Repo, cache_root: &Path) -> Option<String> {
 pub enum UpdateStatus {
     UpToDate,
     Pending,
+    /// Nothing cached to compare against — the repo has never been updated.
+    /// An update will fetch it for the first time.
     Unknown,
+    /// The repo's metadata could not be fetched (bad URL, 404, DNS, timeout).
+    /// Distinct from `Unknown`: there is nothing "new" waiting, the repo simply
+    /// cannot be read, and an update will fail rather than bring anything in.
+    /// Conflating the two makes `update` promise a fetch it already knows will
+    /// not happen.
+    Unreachable,
 }
 
 /// Check a single repo for pending updates, working for official and external
@@ -35,7 +43,9 @@ pub enum UpdateStatus {
 /// otherwise that stale, never-refreshed ChangeLog would report "pending"
 /// forever. The CHECKSUMS comparison looks only at the per-package md5 entries,
 /// so a regenerated header or transport noise never causes a false "pending".
-/// Returns Unknown if the repo has never been updated (nothing cached).
+/// Returns Unknown if the repo has never been updated (nothing cached), and
+/// Unreachable if its metadata could not be fetched — two different situations
+/// that callers must not present as the same thing.
 pub fn check_repo_updates(repo_: &Repo, cache_root: &Path) -> UpdateStatus {
     // Cheap path: compare ChangeLog, but only for the tracked (official) repo
     // whose ChangeLog `update` actually keeps current.
@@ -49,7 +59,7 @@ pub fn check_repo_updates(repo_: &Repo, cache_root: &Path) -> UpdateStatus {
                         UpdateStatus::Pending
                     }
                 }
-                Err(_) => UpdateStatus::Unknown,
+                Err(_) => UpdateStatus::Unreachable,
             };
         }
     }
@@ -72,6 +82,6 @@ pub fn check_repo_updates(repo_: &Repo, cache_root: &Path) -> UpdateStatus {
                 UpdateStatus::Pending
             }
         }
-        Err(_) => UpdateStatus::Unknown,
+        Err(_) => UpdateStatus::Unreachable,
     }
 }
