@@ -1,3 +1,5 @@
+Version Beta 0.11.5
+=====
 - Fix bug: cmd:slacker update, cmd:slacker check-updates
     - a repo whose metadata cannot be fetched (bad URL, 404, DNS) is now
       reported as unreachable instead of "new (will update)"; it is still
@@ -12,6 +14,7 @@
     No functional or API changes. Keeps the SQLite dependency on a
     maintained release line so future security fixes can be picked up
     without source changes.
+- Update repo lists
 ---
 
 Version Beta 0.11.4
