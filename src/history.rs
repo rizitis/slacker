@@ -102,8 +102,19 @@ pub fn collect(adm_dir: &Path) -> Timeline {
     let mut samples: Vec<(i64, i64)> = Vec::new();
     let mut current: Vec<(PkgId, i64)> = Vec::new();
 
-    // Currently installed.
+    // Currently installed. An interrupted `upgradepkg` can leave a renamed
+    // `<pkg>-upgraded-<T>` record behind in packages/ before it gets moved to
+    // removed_packages/. It is not a live package, and `PkgId::parse` does not
+    // reject it — it mis-splits it into a bogus id (name `<pkg>-upgraded`,
+    // version `<year>`, build `<day>,<time>`), which then shows up as a phantom
+    // "installed" event AND widens the name column for every other line. Skip
+    // it here exactly as `system::installed_packages` does, so both readers of
+    // this directory agree on what is installed. The removed_packages/ scan
+    // below must NOT do this: there the `-upgraded-` records are the point.
     for_each_entry(&adm_dir.join("packages"), |fname, mtime, _ctime| {
+        if crate::system::is_removed_record(fname) {
+            return;
+        }
         if let Some(pkg) = PkgId::parse(fname) {
             current.push((pkg.clone(), mtime));
             records.push(RawRecord { pkg, installed_at: mtime, departure: None });

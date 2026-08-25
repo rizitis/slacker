@@ -50,7 +50,7 @@ pub fn record_present(pkg_db_dir: &Path, record_name: &str) -> bool {
 /// True if `name` is an `upgradepkg` removed-package record
 /// (`<pkg>-upgraded-<timestamp>`, the timestamp beginning with a digit), rather
 /// than a live installed-package entry.
-fn is_removed_record(name: &str) -> bool {
+pub(crate) fn is_removed_record(name: &str) -> bool {
     match name.rsplit_once("-upgraded-") {
         Some((_, suffix)) => suffix.starts_with(|c: char| c.is_ascii_digit()),
         None => false,
@@ -59,6 +59,22 @@ fn is_removed_record(name: &str) -> bool {
 
 pub fn installed_by_name<'a>(installed: &'a [PkgId], name: &str) -> Option<&'a PkgId> {
     installed.iter().find(|p| p.name == name)
+}
+
+/// Like `installed_by_name`, but matching case-insensitively — the same rule
+/// `PkgDb::search` uses on repo names. Only for REPORTING paths that need to
+/// answer "is something by this name on the system?" (`search`'s not-in-any-repo
+/// fallback). Mutating paths keep using the exact `installed_by_name`: there the
+/// package id must match verbatim.
+///
+/// Without this, `search` applied two different rules in one command — repo
+/// names matched case-insensitively while the installed-package fallback did
+/// not — so an SBo/local build with capitals (`ORBit2`, `PyQt-builder`) was
+/// reported as installed for the exact spelling and "No package named" for the
+/// lowercase one. Those builds are precisely the ones this fallback exists for.
+pub fn installed_by_name_ci<'a>(installed: &'a [PkgId], name: &str) -> Option<&'a PkgId> {
+    let needle = name.to_lowercase();
+    installed.iter().find(|p| p.name.to_lowercase() == needle)
 }
 
 pub fn is_installed(installed: &[PkgId], name: &str) -> bool {

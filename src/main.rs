@@ -3542,16 +3542,24 @@ fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
     if results.is_empty() {
         if db.is_empty() {
             println!("No package metadata yet — run `slacker update` first.");
-        } else if let Some(i) = system::installed_by_name(&installed, term) {
+        } else if let Some(i) = system::installed_by_name_ci(&installed, term) {
             // Nothing in any repo, but it IS on the system: a local or SBo build.
             // Say so — sending the user to `info` without a word about it reads
             // as "this does not exist", which is false.
-            println!("No repo offers '{term}', but it is installed: {}", i.tag());
+            //
+            // Matched case-insensitively, like `PkgDb::search` above: matching
+            // exactly here would apply two different rules in one command, and
+            // the builds this branch exists for (SBo/local) are the ones with
+            // capitals in their names. The lines below name the package by its
+            // real id, not by what was typed, so the suggested `info` command
+            // works as printed.
+            println!("No repo offers '{}', but it is installed: {}", i.name, i.tag());
             println!(
                 "{}",
                 ui::dim(&format!(
                     "it came from outside the configured repos, so nothing can upgrade it — \
-                     `slacker info {term}`."
+                     `slacker info {}`.",
+                    i.name
                 ))
             );
         } else {

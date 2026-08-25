@@ -1,3 +1,24 @@
+- Fix bug: cmd:slacker history
+    - an interrupted upgradepkg can leave a renamed `<pkg>-upgraded-<T>`
+      record behind in the packages/ admin dir, before it gets moved to
+      removed_packages/. history read that directory without the filter
+      installed_packages already applies, and PkgId::parse does not reject
+      such a name -- it mis-splits it -- so the leftover showed up as a
+      phantom installed package, with a bogus version and source label.
+      history now skips these records, so search and history agree on what
+      is installed. Creating the leftover is pkgtools' business; slacker
+      just stops reporting it as a package.
+- Fix bug: cmd:slacker search
+    - the "not in any repo, but installed" fallback matched the installed
+      name case-sensitively, while repo names are matched case-insensitively.
+      So `slacker search orbit2` answered "No package named 'orbit2'" (exit
+      20) for a package that `slacker search ORBit2` reported as installed.
+      The builds this branch exists for -- SBo and local ones -- are exactly
+      the ones with capitals in their names. Both spellings now find it, and
+      the messages name the package by its real id, so the suggested
+      `slacker info <name>` works as printed.
+---
+
 Version Beta 0.11.5
 =====
 - Fix bug: cmd:slacker update, cmd:slacker check-updates
