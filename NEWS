@@ -1,3 +1,9 @@
+Version Beta 0.11.6
+=====
+- Update: cmd:slacker upgrade-dist
+    - Add mkinitrd in core packages as Patrick did for slackpkg, read ChangeLog:
+      Sat Aug 29 04:22:54 UTC 2026
+      Install mkinitrd early because the kernel might need the latest version.
 - Fix bug: cmd:slacker history
     - an interrupted upgradepkg can leave a renamed `<pkg>-upgraded-<T>`
       record behind in the packages/ admin dir, before it gets moved to

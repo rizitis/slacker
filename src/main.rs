@@ -6285,6 +6285,9 @@ fn cmd_download(
 /// rest. Doing the whole tree before these are in step is how a dist-upgrade
 /// bricks a system. Both `glibc-solibs` spellings are covered (some releases ship
 /// `aaa_glibc-solibs`).
+/// Add mkinitrd in core packages as Patrick suggest in ChangeLog:
+/// Sat Aug 29 04:22:54 UTC 2026
+/// Install mkinitrd early because the kernel might need the latest version.
 const DIST_CRITICAL: &[&str] = &[
     "aaa_glibc-solibs",
     "glibc-solibs",
@@ -6293,6 +6296,7 @@ const DIST_CRITICAL: &[&str] = &[
     "xz",
     "gzip",
     "findutils",
+    "mkinitrd",
 ];
 
 /// The GnuPG verification toolchain: gnupg(2) and the libraries it links.
