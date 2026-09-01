@@ -73,6 +73,8 @@ version** (e.g. `15.1`, `16.0`) - never `1.x.x`.
 
 ---
 
+![developing](./DOCS/files/slacker-fixes-vs-features.png)
+
 ## Current state: why `0.x.x_beta.x`?
 
 slacker is developed **exclusively against slackware-current**. It does *not*
