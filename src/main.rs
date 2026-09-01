@@ -8623,17 +8623,26 @@ fn render_history(
     let mut out = String::new();
     for e in events {
         let date = ui::dim(&clock.format(e.when));
-        let (sym, label, detail) = match &e.kind {
+        // `src_pkg` is the build whose source label the line carries. For an
+        // upgrade that is the REPLACEMENT, not `e.pkg`: the old build is what
+        // left, and labelling the line with it says a package moved to a repo
+        // it actually moved away from (an _SBo build replaced by an official
+        // one read as "[SBo]"). Every other kind describes a single build, so
+        // `e.pkg` is already the right one.
+        let (sym, label, detail, src_pkg) = match &e.kind {
             EventKind::Installed { reinstall } => {
                 let mut d = format!("{}-{}", e.pkg.version, e.pkg.build);
                 if *reinstall {
                     d.push_str(&ui::yellow(" (reinstall)"));
                 }
-                (ui::green("+"), "installed", d)
+                (ui::green("+"), "installed", d, &e.pkg)
             }
-            EventKind::Removed => {
-                (ui::red("\u{2212}"), "removed", format!("{}-{}", e.pkg.version, e.pkg.build))
-            }
+            EventKind::Removed => (
+                ui::red("\u{2212}"),
+                "removed",
+                format!("{}-{}", e.pkg.version, e.pkg.build),
+                &e.pkg,
+            ),
             EventKind::Upgraded { to } => match to {
                 // upgradepkg over the same id is a rebuild / reinstall in place,
                 // not a version change — show it as such, not "X -> X".
@@ -8641,6 +8650,7 @@ fn render_history(
                     ui::cyan("\u{21BB}"),
                     "reinstalled",
                     format!("{}-{}", e.pkg.version, e.pkg.build),
+                    p,
                 ),
                 Some(p) => (
                     ui::cyan("\u{2191}"),
@@ -8649,18 +8659,22 @@ fn render_history(
                         "{}-{} {} {}-{}",
                         e.pkg.version, e.pkg.build, ui::dim("\u{2192}"), p.version, p.build
                     ),
+                    p,
                 ),
+                // The successor could not be identified, so there is no new
+                // build to name: fall back to the old one rather than guess.
                 None => (
                     ui::cyan("\u{2191}"),
                     "upgraded",
                     format!("{}-{} {} ?", e.pkg.version, e.pkg.build, ui::dim("\u{2192}")),
+                    &e.pkg,
                 ),
             },
         };
         out.push_str(&format!(
             "{date}  {sym} {label:<11}  {name}  {detail}  {src}\n",
             name = ui::white(&format!("{:<wn$}", e.pkg.name)),
-            src = ui::dim(&format!("[{}]", source_of(cfg, db, &e.pkg))),
+            src = ui::dim(&format!("[{}]", source_of(cfg, db, src_pkg))),
         ));
     }
     out

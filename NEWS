@@ -1,3 +1,12 @@
+- Fix bug: cmd:slacker history
+    - an upgrade line took its source label from the OLD build, so a package
+      replaced by one from a different repo was credited to the repo it had
+      just left: `libjxl 0.12.0-1_SBo -> 0.12.0-1` read as [SBo] although it
+      landed in the official tree. The label now comes from the replacement.
+      Installs, removals and upgrades whose successor could not be identified
+      still describe the only build they have.
+---
+
 Version Beta 0.11.6
 =====
 - Update: cmd:slacker upgrade-dist

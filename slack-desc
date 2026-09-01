@@ -1,0 +1,19 @@
+# HOW TO EDIT THIS FILE:
+# The "handy ruler" below makes it easier to edit a package description.
+# Line up the first '|' above the ':' following the base package name, and
+# the '|' on the right side marks the last column you can put a character in.
+# You must make exactly 11 lines for the formatting to be correct.  It's also
+# customary to leave one space after the ':' except on otherwise blank lines.
+
+       |-----handy-ruler------------------------------------------------------|
+slacker: slacker (slackware package manager)
+slacker:
+slacker: A Slackware package manager in Rust with full slackpkg action parity
+slacker: plus slackpkg+ multi-repo priority resolution.
+slacker:
+slacker:
+slacker:
+slacker:
+slacker: https://forge.slackware.nl/rizitis/slacker
+slacker:
+slacker:
