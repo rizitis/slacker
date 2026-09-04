@@ -34,6 +34,7 @@
 #60         alienbob    https://slackware.nl/people/alien/sbrepos/15.0/x86
 #50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/15.0/x86
 #40         ponce       https://ponce.cc/slackware/slackware-15.0/packages
+#30         slackpack   https://ftp.sotirov-bg.net/pub/contrib/slackware/packages/slackware-15.0
 #
 # ----------------------------------------------------------------------------
 #  Flags reference
