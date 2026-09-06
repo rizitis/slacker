@@ -1,3 +1,33 @@
+- Update: repo-name commands
+    - writing a repo as '@name' where the command takes plain repo names
+      (`install-new @ponce`) now suggests the plain name instead of
+      reporting '@ponce' as an unknown repo. Applies to install-new,
+      clean-cache, vet-repo, trust-repo, distrust-repo, del-repo and
+      pri-repo.
+- Fix bug: cmd:slacker install, cmd:slacker download, cmd:slacker upgrade,
+  cmd:slacker reinstall
+    - mixing a package name with an @repo selector (`install fontforge
+      @conraid`) selected the package AND the entire repo, then offered
+      the lot behind a prompt that takes everything on [Enter]. It is now
+      refused with the correct syntax; @repo on its own still takes a
+      whole repo, and a `repo:name` pin may still sit next to it.
+- Fix bug: cmd:slacker install, cmd:slacker download, cmd:slacker upgrade,
+  cmd:slacker reinstall, cmd:slacker remove
+    - an argument that matched nothing was reported and then ignored, so
+      the command acted on the rest: `download fontforge ponce` (a dropped
+      `:`) fetched fontforge from conraid while the user was reading "no
+      match for 'ponce'", and a mistyped `remove` argument would take out
+      the packages that did match. Any miss now refuses the whole command,
+      as apt, dnf and pacman do; `-y` does not bypass it. install-new,
+      upgrade-all and upgrade-dist are unaffected: they expand @repo
+      internally and an empty repo must stay harmless.
+- Update: miss reporting
+    - an argument that names a repo or a build tag is no longer answered
+      with the closest package name ('ponce' -> 'poke'). It says what the
+      word actually is and gives both selector forms, `repo:<package>` and
+      `@repo`.
+---
+
 Version Beta 0.11.7
 =====
 - Update: Add new repo (slackpack)

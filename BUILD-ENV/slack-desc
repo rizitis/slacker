@@ -1,19 +1,19 @@
 # HOW TO EDIT THIS FILE:
-# The "handy ruler" below makes it easier to edit a package description.
-# Line up the first '|' above the ':' following the base package name, and
-# the '|' on the right side marks the last column you can put a character in.
-# You must make exactly 11 lines for the formatting to be correct.  It's also
-# customary to leave one space after the ':' except on otherwise blank lines.
+# The "handy ruler" below makes it easier to edit a package description. Line
+# up the first '|' above the ':' following the base package name, and the '|' on
+# the right side marks the last column you can put a character in. You must make
+# exactly 11 lines for the formatting to be correct. It's also customary to
+# leave one space after the ':'.
 
        |-----handy-ruler------------------------------------------------------|
-slacker: slacker (slackware package manager)
-slacker:
-slacker: A Slackware package manager in Rust with full slackpkg action parity
-slacker: plus slackpkg+ multi-repo priority resolution.
-slacker:
-slacker:
-slacker:
-slacker:
-slacker: https://forge.slackware.nl/rizitis/slacker
-slacker:
-slacker:
+slacker: slacker (A package manager)             +------------- -------------+
+slacker:                                         |   +-------------------+   |
+slacker: A Slackware package manager in          |   | +=======+         |   |
+slacker: Rust with full slackpkg action          |   | H +-----H-----+   |   |
+slacker: parity plus slackpkg+ multi-repo        |   | H | +===+     |   |   |
+slacker: priority resolution.                    |   | H | H~+++++~  |   |   |
+slacker:                                         |   | H | +===+     |   |   |
+slacker: Wiki:                                   |   | H +-----------+   |   |
+slacker: forge.slackware.nl/rizitis/slacker/wiki |   | +=======+         |   |
+slacker: HomePage:                               |   +---------H---------+   |
+slacker: forge.slackware.nl/rizitis/slacker      +-------------H-------------+

@@ -2485,6 +2485,90 @@ fn guard_shell_expansion(misses: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Refuse to act when any argument matched nothing.
+///
+/// The details were already printed by the caller's miss report (with typo and
+/// pin suggestions), so this only states that nothing was done and names the
+/// arguments at fault.
+///
+/// Acting on the rest is the worst outcome available: the user asked for N
+/// things, the tool understood N-1, and a partial result looks exactly like a
+/// complete one. `download fontforge ponce` (a forgotten `:`) fetched fontforge
+/// from *conraid* while the user was reading "no match for 'ponce'", and a
+/// mistyped `remove` argument would take out the packages that did match — with
+/// nothing to undo it. Re-running a corrected command costs seconds; a partial
+/// install, upgrade or removal costs much more.
+///
+/// This generalises the judgement already made in `guard_shell_expansion`,
+/// which refuses a whole command for the same reason in one narrow case.
+/// `-y` does NOT bypass it: "don't ask me" is not "act on what you did not
+/// understand".
+///
+/// It belongs at the command level, on user-supplied patterns only. Inside
+/// `collect` it would break the internal `@repo`-only callers (`install-new`,
+/// `dist_install_new`), which legitimately ignore misses: an empty repo — a
+/// `patches` tree on -current, say — yields a miss and must stay harmless.
+fn abort_on_misses(misses: &[String]) -> Result<(), String> {
+    if misses.is_empty() {
+        return Ok(());
+    }
+    let what = if misses.len() == 1 { "argument" } else { "arguments" };
+    Err(format!(
+        "nothing was done — {} {what} matched no package: {}\n  \
+         fix or drop {} and run the command again",
+        misses.len(),
+        misses.join(", "),
+        if misses.len() == 1 { "it" } else { "them" },
+    ))
+}
+
+/// When a bare argument matched no package but names a REPO or a build TAG, the
+/// user almost certainly meant a selector and lost its punctuation — a dropped
+/// `:` in `download fontforge ponce`, or a missing `@` in `upgrade conraid`.
+/// Suggesting the closest package name there is actively misleading (`ponce` ->
+/// `poke`), so name what the word really is and give both selector forms.
+///
+/// Returns `None` for anything else, leaving the ordinary typo help in place.
+/// A `repo:name` argument is not considered: it already carries its repo, and
+/// `fix_pin_repo` handles a mistyped one.
+fn selector_miss_hint(db: &PkgDb, miss: &str) -> Option<String> {
+    if miss.starts_with('@') || miss.contains(':') {
+        return None;
+    }
+    if db.is_repo(miss) {
+        return Some(format!(
+            "it is a repo, not a package; for one package from it use \
+             '{miss}:<package>', for all of it use '@{miss}'"
+        ));
+    }
+    if db.tag_in_use(miss) {
+        return Some(format!(
+            "it is a build tag, not a package; for the packages carrying it use \
+             '@{miss}'"
+        ));
+    }
+    None
+}
+
+/// Suffix for "unknown repo" errors when the name was written as `@repo`.
+///
+/// `@name` marks a repo in the commands that take PACKAGES (install, upgrade,
+/// remove, download), where a bare word would otherwise be a package name.
+/// Commands that take only repo names have nothing to tell apart, so they want
+/// the plain name — but the habit carries over. When the `@` is the only thing
+/// wrong, say so instead of reporting the whole token as an unknown repo.
+///
+/// Returns an empty string in every other case, so the caller's message is
+/// unchanged for a genuine typo.
+fn at_prefix_hint(cfg: &Config, name: &str) -> String {
+    match name.strip_prefix('@') {
+        Some(rest) if cfg.repo_by_name(rest).is_some() => {
+            format!(" — did you mean '{rest}'? (this command takes plain repo names, no '@')")
+        }
+        _ => String::new(),
+    }
+}
+
 /// Report package-name misses with guidance instead of a bare "no match":
 ///   * if the database is empty the real problem is missing metadata, so point
 ///     at `slacker update` (printed once);
@@ -2501,6 +2585,10 @@ fn report_pkg_misses(db: &PkgDb, misses: &[String]) {
         return;
     }
     for m in misses {
+        if let Some(hint) = selector_miss_hint(db, m) {
+            eprintln!("no match for '{m}' — {hint}");
+            continue;
+        }
         if let Some(fixed) = fix_pin_repo(db, m) {
             eprintln!("no match for '{m}' — did you mean '{fixed}'?");
             continue;
@@ -2525,6 +2613,10 @@ fn report_pkg_misses(db: &PkgDb, misses: &[String]) {
 ///   * otherwise suggest the closest installed name (typo help).
 fn report_installed_misses(db: &PkgDb, installed: &[pkg::PkgId], misses: &[String]) {
     for m in misses {
+        if let Some(hint) = selector_miss_hint(db, m) {
+            eprintln!("'{m}' is not installed — {hint}");
+            continue;
+        }
         if let Some(fixed) = fix_pin_repo(db, m) {
             eprintln!("'{m}' is not installed — did you mean '{fixed}'?");
             continue;
@@ -2568,6 +2660,54 @@ fn validate_selector(db: &PkgDb, pattern: &str) -> Result<(), String> {
     Err(msg)
 }
 
+/// Reject a pattern list that mixes a package selector with an `@repo` / `@tag`
+/// selector.
+///
+/// `@repo` means "every package in that repo", so `install fontforge @conraid`
+/// asks for fontforge AND all 1259 conraid packages. That is almost never what
+/// was meant — `conraid:fontforge` is — and the numbered prompt that follows
+/// defaults to "all" on a bare Enter, which makes the slip expensive. Each form
+/// on its own stays fully supported: `@repo` alone still takes a whole repo, and
+/// `repo:name` still takes one package from one repo.
+///
+/// A `repo:name` pin is NOT a bare selector: it already names its repo, cannot
+/// expand, and so may appear alongside `@repo`.
+fn reject_mixed_selectors(db: &PkgDb, patterns: &[String]) -> Result<(), String> {
+    let ats: Vec<&str> = patterns.iter().filter(|p| p.starts_with('@')).map(String::as_str).collect();
+    if ats.is_empty() {
+        return Ok(());
+    }
+    let bare: Vec<&str> = patterns
+        .iter()
+        .filter(|p| !p.starts_with('@') && !p.contains(':'))
+        .map(String::as_str)
+        .collect();
+    let Some(first) = bare.first() else {
+        return Ok(());
+    };
+
+    let mut msg = format!(
+        "cannot mix a package name with {}: '{}' selects that package AND every \
+         package in {}",
+        ats.join(" "),
+        patterns.join(" "),
+        if ats.len() == 1 { ats[0] } else { "those repos" },
+    );
+    // Point at the pin that was almost certainly meant, when the named repo
+    // really does ship the package.
+    let hint = ats.iter().find_map(|at| {
+        let repo_ = at.trim_start_matches('@');
+        db.is_repo(repo_)
+            .then(|| db.candidates(first).iter().any(|c| c.repo == repo_).then(|| format!("{repo_}:{first}")))
+            .flatten()
+    });
+    if let Some(pin) = hint {
+        msg.push_str(&format!("\n  for that package from that repo: {pin}"));
+    }
+    msg.push_str(&format!("\n  for the whole repo, use it on its own: {}", ats.join(" ")));
+    Err(msg)
+}
+
 /// Expand patterns into winning packages, reporting patterns that matched
 /// nothing.
 fn collect<'a>(
@@ -2577,6 +2717,7 @@ fn collect<'a>(
     for pat in patterns {
         validate_selector(db, pat)?;
     }
+    reject_mixed_selectors(db, patterns)?;
     // When more than one pattern yields the same package name, pick a single
     // winner by an explicit precedence (see `collect_prefers`): an explicit
     // `repo:name` pin beats a non-pinned candidate; otherwise the higher-priority
@@ -2659,6 +2800,7 @@ fn collect_installed_targets<'a>(
     for pat in patterns {
         validate_selector(db, pat)?;
     }
+    reject_mixed_selectors(db, patterns)?;
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     let mut protected = Vec::new(); // names kept because their source has priority
@@ -5637,6 +5779,9 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let (matched, misses) = collect(&db, patterns)?;
     report_pkg_misses(&db, &misses);
+    // A miss means the argument named no package in any repo; do not install a
+    // subset of what was asked for.
+    abort_on_misses(&misses)?;
     // install = only packages that are not already installed and not blacklisted
     let mut frozen = Vec::new();
     let mut already = Vec::new();
@@ -5721,6 +5866,9 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     let (cands, protected, misses) =
         collect_installed_targets(&db, &installed, &cfg.tag_priorities, patterns)?;
     report_installed_misses(&db, &installed, &misses);
+    // A miss means the argument named nothing installed; do not upgrade a
+    // subset of what was asked for.
+    abort_on_misses(&misses)?;
     let mut frozen = Vec::new();
     let todo: Vec<_> = cands
         .into_iter()
@@ -5799,6 +5947,9 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     let (cands, protected, misses) =
         collect_installed_targets(&db, &installed, &cfg.tag_priorities, patterns)?;
     report_installed_misses(&db, &installed, &misses);
+    // A miss means the argument named nothing installed; do not reinstall a
+    // subset of what was asked for.
+    abort_on_misses(&misses)?;
     let mut frozen = Vec::new();
     let todo: Vec<_> = cands
         .into_iter()
@@ -5917,6 +6068,11 @@ fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, S
     for m in &misses {
         eprintln!("{m}");
     }
+    // A miss means the argument named nothing installed. Removal is the one
+    // action with nothing to undo it, so a mistyped argument must not be
+    // allowed to take out the packages that did match. `miss_pats` holds the
+    // raw arguments; `misses` holds their already-printed explanations.
+    abort_on_misses(&miss_pats)?;
     if todo.is_empty() {
         if !frozen.is_empty() {
             println!("{}", ui::purple("  frozen (blacklisted — left unchanged):"));
@@ -6188,6 +6344,9 @@ fn cmd_download(
     let db = PkgDb::load(cfg)?;
     let (matched, misses) = collect(&db, patterns)?;
     report_pkg_misses(&db, &misses);
+    // A miss means the argument named nothing downloadable; do not fetch a
+    // different package than the one that was asked for.
+    abort_on_misses(&misses)?;
     if matched.is_empty() {
         println!("Nothing to download.");
         return Ok(Outcome::NothingFound);
@@ -7435,7 +7594,12 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
         for name in repos {
             match cfg.repos.iter().find(|r| &r.name == name) {
                 Some(r) => out.push(r),
-                None => return Err(format!("install-new: unknown repo '{name}'")),
+                None => {
+                    return Err(format!(
+                        "install-new: unknown repo '{name}'{}",
+                        at_prefix_hint(cfg, name)
+                    ))
+                }
             }
         }
         out
@@ -7815,7 +7979,10 @@ fn cmd_clean_cache(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     if !repos.is_empty() {
         for name in repos {
             if cfg.repo_by_name(name).is_none() {
-                return Err(format!("clean-cache: unknown repo '{name}'"));
+                return Err(format!(
+                    "clean-cache: unknown repo '{name}'{}",
+                    at_prefix_hint(cfg, name)
+                ));
             }
         }
     }
@@ -9512,10 +9679,15 @@ fn cmd_pri_repo(cli: &Cli, cfg: &Config, priority: &str, name: &str) -> Result<O
         None => {
             let names: Vec<&str> = cfg.repos.iter().map(|r| r.name.as_str()).collect();
             let mut msg = format!("no active repo named '{name}'");
-            match closest(name, names.iter().copied()) {
-                Some(s) => msg.push_str(&format!(" — did you mean '{s}'?")),
-                None if names.is_empty() => msg.push_str("\n  there are no active repos."),
-                None => msg.push_str(&format!("\n  active repos: {}", names.join(", "))),
+            let at = at_prefix_hint(cfg, name);
+            if at.is_empty() {
+                match closest(name, names.iter().copied()) {
+                    Some(s) => msg.push_str(&format!(" — did you mean '{s}'?")),
+                    None if names.is_empty() => msg.push_str("\n  there are no active repos."),
+                    None => msg.push_str(&format!("\n  active repos: {}", names.join(", "))),
+                }
+            } else {
+                msg.push_str(&at);
             }
             return Err(msg);
         }
@@ -9675,7 +9847,8 @@ fn cmd_del_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String> 
     if removed.is_empty() {
         let names: Vec<String> = cfg.repos.iter().map(|r| r.name.clone()).collect();
         return Err(format!(
-            "no repository named '{name}' in {} (configured: {})",
+            "no repository named '{name}'{} in {} (configured: {})",
+            at_prefix_hint(cfg, name),
             path.display(),
             names.join(", ")
         ));
@@ -9837,7 +10010,13 @@ fn cmd_del_tag(cli: &Cli, cfg: &Config, tag: &str) -> Result<Outcome, String> {
 fn cmd_vet_repo(cfg: &Config, name: &str) -> Result<Outcome, String> {
     let r = cfg
         .repo_by_name(name)
-        .ok_or_else(|| format!("no repo named '{name}' in {}", cfg.config_dir.join("repos").display()))?
+        .ok_or_else(|| {
+            format!(
+                "no repo named '{name}' in {}{}",
+                cfg.config_dir.join("repos").display(),
+                at_prefix_hint(cfg, name)
+            )
+        })?
         .clone();
     // Force a fresh verdict: drop any prior "trusted" mark so the checks run.
     repo::unmark_trusted(&cfg.state_dir, name);
@@ -9850,8 +10029,9 @@ fn cmd_trust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String
     // marker), but prefer a clear error when the repo truly doesn't exist.
     if cfg.repo_by_name(name).is_none() {
         return Err(format!(
-            "no repo named '{name}' in {}",
-            cfg.config_dir.join("repos").display()
+            "no repo named '{name}' in {}{}",
+            cfg.config_dir.join("repos").display(),
+            at_prefix_hint(cfg, name)
         ));
     }
     if !repo::is_quarantined(&cfg.state_dir, name) {
@@ -9881,7 +10061,13 @@ fn cmd_trust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String
 fn cmd_distrust_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String> {
     let r = cfg
         .repo_by_name(name)
-        .ok_or_else(|| format!("no repo named '{name}' in {}", cfg.config_dir.join("repos").display()))?
+        .ok_or_else(|| {
+            format!(
+                "no repo named '{name}' in {}{}",
+                cfg.config_dir.join("repos").display(),
+                at_prefix_hint(cfg, name)
+            )
+        })?
         .clone();
     if repo::is_quarantined(&cfg.state_dir, name) {
         println!("{}", ui::dim(&format!("repo '{name}' is already quarantined.")));
@@ -10547,6 +10733,73 @@ mod collect_tests {
         assert!(!collect_prefers(false, 100, false, 100)); // equal priority, non-pins
         assert!(!collect_prefers(true, 60, true, 100)); // two pins: first listed stays...
         assert!(!collect_prefers(true, 100, true, 60)); // ...whatever their priorities
+    }
+
+    #[test]
+    fn a_miss_that_names_a_repo_or_tag_says_so_instead_of_guessing_a_package() {
+        let d = fixture();
+        // A repo name typed as a package (a dropped ':' in `download fontforge
+        // ponce`). Suggesting the closest PACKAGE name here is misleading, so
+        // name what the word actually is and give both selector forms.
+        let h = selector_miss_hint(&d, "slackware").expect("repo must be recognised");
+        assert!(h.contains("is a repo"), "{h}");
+        assert!(h.contains("slackware:<package>"), "{h}");
+        assert!(h.contains("@slackware"), "{h}");
+
+        // An ordinary typo is left to the existing closest-name help.
+        assert!(selector_miss_hint(&d, "vlcc").is_none());
+        // Already-punctuated selectors are handled elsewhere.
+        assert!(selector_miss_hint(&d, "@slackware").is_none());
+        assert!(selector_miss_hint(&d, "slackware:vlc").is_none());
+    }
+
+    #[test]
+    fn any_miss_refuses_the_whole_command() {
+        // No miss: nothing to guard against.
+        assert!(abort_on_misses(&[]).is_ok());
+
+        // One miss names it and says nothing was done, so a partial result can
+        // never masquerade as a complete one.
+        let e = abort_on_misses(&pats(&["ponce"])).unwrap_err();
+        assert!(e.contains("nothing was done"), "{e}");
+        assert!(e.contains("ponce"), "{e}");
+        assert!(e.contains("1 argument matched no package"), "{e}");
+
+        // Several misses are all named, in the order given.
+        let e = abort_on_misses(&pats(&["ponce", "fontforg"])).unwrap_err();
+        assert!(e.contains("2 arguments matched no package"), "{e}");
+        assert!(e.contains("ponce, fontforg"), "{e}");
+
+        // The guard lives at the command level, NOT inside collect: an
+        // @repo-only expansion that matches nothing (an empty patches tree on
+        // -current) is a miss, and the internal callers that ignore misses must
+        // keep working. Prove collect still returns such a miss rather than
+        // failing.
+        let d = fixture();
+        let (got, miss) = collect(&d, &pats(&["nonexistent"])).unwrap();
+        assert!(got.is_empty());
+        assert_eq!(miss, vec!["nonexistent".to_string()]);
+    }
+
+    #[test]
+    fn bare_name_with_at_repo_is_refused_but_each_form_alone_still_works() {
+        let d = fixture();
+        // The hazard: `install vlc @slackware` reads as "vlc AND every package
+        // in slackware", and the prompt that follows takes everything on a bare
+        // Enter. Refuse it and name the pin that was meant.
+        let e = collect(&d, &pats(&["vlc", "@slackware"])).unwrap_err();
+        assert!(e.contains("cannot mix"), "{e}");
+        assert!(e.contains("slackware:vlc"), "{e}");
+        // order must not matter
+        assert!(collect(&d, &pats(&["@slackware", "vlc"])).is_err());
+        // Everything that was legal stays legal:
+        assert!(collect(&d, &pats(&["@slackware"])).is_ok()); // whole repo
+        assert!(collect(&d, &pats(&["@alienbob", "@slackware"])).is_ok()); // several repos
+        assert!(collect(&d, &pats(&["slackware:vlc"])).is_ok()); // one package, one repo
+        assert!(collect(&d, &pats(&["vlc", "aaa"])).is_ok()); // several names
+        // A `repo:name` pin already names its repo and cannot expand, so it is
+        // not a bare selector and may sit next to @repo.
+        assert!(collect(&d, &pats(&["alienbob:vlc", "@slackware"])).is_ok());
     }
 
     #[test]
