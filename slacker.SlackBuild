@@ -94,7 +94,7 @@ find $PKG | xargs file | grep -e "executable" -e "shared object" | grep ELF | cu
 mkdir -p $PKG/usr/doc/$PRGNAM-$VERSION/CONF
 install -m0644 $CWD/README.md $CWD/NEWS $PKG/usr/doc/$PRGNAM-$VERSION/
 for f in slacker.conf distro-upgrade.conf mirrors repos blacklist; do
-  install -m0644 slacker-cli/CONF/etc-slacker/"$DIR"/"$ARCH"/$f $PKG/usr/doc/$PRGNAM-$VERSION/CONF/$f
+  install -m0644 $CWD/slacker-cli/CONF/etc-slacker/"$DIR"/"$ARCH"/$f $PKG/usr/doc/$PRGNAM-$VERSION/CONF/$f
 done
 cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
 
@@ -103,7 +103,7 @@ cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
 mkdir -p $PKG/etc/slacker/templates
 echo "https://forge.slackware.nl/rizitis/slacker/wiki/Templates" > $PKG/etc/slacker/templates/Templates-howto.txt
 for f in slacker.conf distro-upgrade.conf mirrors repos blacklist; do
-  install -m0644 slacker-cli/CONF/etc-slacker/"$DIR"/"$ARCH"/$f $PKG/etc/slacker/$f.new
+  install -m0644 $CWD/slacker-cli/CONF/etc-slacker/"$DIR"/"$ARCH"/$f $PKG/etc/slacker/$f.new
 done
 chmod 644 $PKG/etc/slacker/*.new
 
