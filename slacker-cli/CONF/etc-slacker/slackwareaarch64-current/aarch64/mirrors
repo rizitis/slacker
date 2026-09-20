@@ -1,0 +1,98 @@
+# ============================================================================
+#  slacker — official slackwarearm mirror list         (slackwareaarch64-current)
+# ============================================================================
+#
+#  Quick start
+#  -----------
+#  Uncomment EXACTLY ONE mirror line in this file (delete its leading "# ").
+#  By default none is active on purpose — slacker refuses to run with zero
+#  active lines, and also refuses if you uncomment two.
+#
+#
+#  The few rules
+#  -------------
+#    * One active (uncommented) line — never two.
+#    * http / https / file only.  ftp is NOT supported (and plain http often
+#      resolves to a nearer mirror than ftp anyway).
+#    * The trailing slash is optional.
+#    * The official repo's priority and name are set in the 'repos' file; its
+#      line there uses the keyword  mirror  to read the URL from HERE.
+#
+#
+# ============================================================================
+#  LOCAL  —  a CD/DVD drive, mounted media, or an on-disk mirror
+# ============================================================================
+#  An absolute path needs THREE slashes (file://  +  /path), so:
+#        file:///path        and    file://localhost/path     are equivalent.
+#  A remote host  (file://otherhost/path)  is NOT supported — local only.
+#
+# file:///mnt/cdrom/
+# file:///var/cache/slackwarearm/slackwareaarch64-current/
+# file://localhost/var/cache/slackwarearm/slackwareaarch64-current/
+#
+# ============================================================================
+# OFFICIAL slackwarearm mirror
+# ============================================================================
+http://ftp.arm.slackware.com/slackwarearm/slackwareaarch64-current/
+#
+#
+# ============================================================================
+#  INDIVIDUAL MIRROR  (by country)
+# ============================================================================
+#  Hand-picked alternatives to the redirector above. This list is not
+#  guaranteed to be up to date — when in doubt, use the redirector or run
+#  `slacker find-mirror`. Countries are sorted alphabetically by code.
+#
+#  --- AUSTRALIA (AU) --------------------------------------------------------
+#
+#  --- BELARUS (BY) ----------------------------------------------------------
+#
+# ---  BOINC Team Belgium ----------------------------------------------------
+#
+#  --- BRAZIL (BR) -----------------------------------------------------------
+#
+#  --- BULGARIA (BG) ---------------------------------------------------------
+#
+#  --- CANADA (CA) -----------------------------------------------------------
+#
+#  --- CHINA (CN) ------------------------------------------------------------
+#
+#  --- COSTA RICA (CR) -------------------------------------------------------
+#
+#  --- CZECH REPUBLIC (CZ) ---------------------------------------------------
+#
+#  --- FRANCE (FR) -----------------------------------------------------------
+#
+#  --- GERMANY (DE) ----------------------------------------------------------
+#
+#  --- GREECE (GR) -----------------------------------------------------------
+#
+#  --- INDONESIA (ID) --------------------------------------------------------
+#
+#  --- JAPAN (JP) ------------------------------------------------------------
+#
+#  --- LITHUANIA (LT) --------------------------------------------------------
+#
+#  --- NETHERLANDS (NL) ------------------------------------------------------
+#
+#  --- POLAND (PL) -----------------------------------------------------------
+#
+#  --- RUSSIA (RU) -----------------------------------------------------------
+#
+#  --- SOUTH AFRICA (ZA) -----------------------------------------------------
+#
+#  --- SWEDEN (SE) -----------------------------------------------------------
+#
+#  --- SWITZERLAND (CH) ------------------------------------------------------
+#
+#  --- TAIWAN (TW) -----------------------------------------------------------
+#
+#  --- TURKEY (TR) -----------------------------------------------------------
+#
+#  --- UKRAINE (UA) ----------------------------------------------------------
+#
+#  --- UNITED KINGDOM (UK) ---------------------------------------------------
+#
+#  --- UNITED STATES (US) ----------------------------------------------------
+#
+# ============================================================================
