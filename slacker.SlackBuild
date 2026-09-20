@@ -44,9 +44,8 @@ else
   LIBDIRSUFFIX=""
 fi
 
-# Pick the right example configs for the running release (stable vs -current).
-DIR=stable
-grep -q '^VERSION_CODENAME=current$' /etc/os-release && DIR=current
+# Pick the right example configs for the running release ( Since aarch64 is only -current ).
+DIR=current
 
 set -e
 
