@@ -36,6 +36,9 @@ if [ "$ARCH" = "i686" ]; then
 elif [ "$ARCH" = "x86_64" ]; then
   SLKCFLAGS="-O2 -march=x86-64 -mtune=generic -fPIC"
   LIBDIRSUFFIX="64"
+elif [ "$ARCH" = "aarch64" ]; then
+  SLKCFLAGS="-O2 -march=armv8-a -mtune=generic -fPIC"
+  LIBDIRSUFFIX="64"
 else
   SLKCFLAGS="-O2"
   LIBDIRSUFFIX=""
@@ -91,7 +94,7 @@ find $PKG | xargs file | grep -e "executable" -e "shared object" | grep ELF | cu
 # docs
 mkdir -p $PKG/usr/doc/$PRGNAM-$VERSION/CONF
 install -m0644 $CWD/README.md $CWD/NEWS $PKG/usr/doc/$PRGNAM-$VERSION/
-install -m0644 CONF/etc-slacker/"$DIR"/"$ARCH"/* $PKG/usr/doc/$PRGNAM-$VERSION/CONF/
+install -m0644 slacker-cli/CONF/etc-slacker/"$DIR"/"$ARCH"/* $PKG/usr/doc/$PRGNAM-$VERSION/CONF/
 cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
 
 # templates/ is not shipped: slacker creates it itself on first
@@ -99,7 +102,7 @@ cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
 mkdir -p $PKG/etc/slacker/templates
 echo "https://forge.slackware.nl/rizitis/slacker/wiki/Templates" > $PKG/etc/slacker/templates/Templates-howto.txt
 for f in slacker.conf distro-upgrade.conf mirrors repos blacklist; do
-  install -m0644 CONF/etc-slacker/"$DIR"/"$ARCH"/$f $PKG/etc/slacker/$f.new
+  install -m0644 slacker-cli/CONF/etc-slacker/"$DIR"/"$ARCH"/$f $PKG/etc/slacker/$f.new
 done
 chmod 644 $PKG/etc/slacker/*.new
 
