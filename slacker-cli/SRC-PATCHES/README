@@ -1,4 +1,10 @@
 Everything it is here is for testing and only for rust.rs code.
-CONF files is not my job :)
+CONF/ files is not my job :)
 I just need them here so gcosbug can easy take a look, because here patches must
 work for main branch too... else we will developing 2 package managers with the same name :D
+
++--------+
+21/09/2026
+===
+Patched src/: config.rs.patch  main.patch
++--------+
