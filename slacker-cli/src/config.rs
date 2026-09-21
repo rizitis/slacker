@@ -1064,12 +1064,13 @@ fn parse_revert_enabled(raw: Option<&str>) -> bool {
 /// Parse a `CUMULATIVE_URL` value: a non-empty URL with any trailing slash
 /// trimmed, falling back to the default Slackware-UK cumulative archive for
 /// -current. The default's arch segment follows `arch`: `slackware64-current`
-/// on x86_64, `slackware-current` on the 32-bit tree. Pure, for unit testing.
+/// on x86_64, `slackwareaarch64-current` on Slackware ARM aarch64 (same archive,
+/// same layout), `slackware-current` on the 32-bit tree. Pure, for unit testing.
 fn parse_cumulative_url(raw: Option<&str>, arch: &str) -> String {
-    let default = if arch == "x86_64" {
-        "https://slackware.uk/cumulative/slackware64-current"
-    } else {
-        "https://slackware.uk/cumulative/slackware-current"
+    let default = match arch {
+        "x86_64" => "https://slackware.uk/cumulative/slackware64-current",
+        "aarch64" => "https://slackware.uk/cumulative/slackwareaarch64-current",
+        _ => "https://slackware.uk/cumulative/slackware-current",
     };
     raw.map(|s| s.trim().trim_end_matches('/'))
         .filter(|s| !s.is_empty())
@@ -1156,6 +1157,12 @@ mod tests {
         assert_eq!(
             parse_cumulative_url(None, "i586"),
             "https://slackware.uk/cumulative/slackware-current"
+        );
+        // Slackware ARM aarch64 has its own tree in the same archive (never the
+        // 32-bit x86 one the old fallback picked).
+        assert_eq!(
+            parse_cumulative_url(None, "aarch64"),
+            "https://slackware.uk/cumulative/slackwareaarch64-current"
         );
         assert_eq!(
             parse_cumulative_url(Some(""), "x86_64"),
