@@ -1,4 +1,6 @@
+Fix bug: `/sbin/{pkgtools}` are not in `$USER $PATH` so slacker status fails to find them and was wrong reported as `pkgtools are not installed`.
 Update: rc.local_shutdown added to protected files too.
+Update: prepare slacker code for aarch64 support.
 ---
 
 Version Beta 0.12.0

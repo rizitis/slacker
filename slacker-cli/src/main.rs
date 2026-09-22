@@ -1913,11 +1913,18 @@ fn report_batch_failures(
 /// True if `name` is a boot-critical kernel package — upgrading it means the
 /// bootloader and (if used) the initrd must be refreshed before the next reboot,
 /// or the machine may not boot.
+///
+/// Slackware ARM names its kernel `kernel_<platform>` (e.g. `kernel_armv8` on
+/// aarch64) — an underscore, not a dash, and no separate `-generic`/`-huge`
+/// flavour — so that prefix is matched too. No x86 package starts with
+/// `kernel_` (kernel-headers, kernel-source and kernel-firmware all use a dash),
+/// so this adds nothing on x86.
 fn is_kernel_pkg(name: &str) -> bool {
     name.starts_with("kernel-generic")
         || name.starts_with("kernel-huge")
         || name == "kernel-modules"
         || name.starts_with("kernel-modules-")
+        || name.starts_with("kernel_")
 }
 
 /// After a plan that upgraded/installed a kernel, remind the user to refresh the
@@ -1935,13 +1942,24 @@ fn kernel_reboot_reminder(plan: &[PlanItem]) {
             "Before rebooting: make sure the bootloader is updated; if you use an initrd or custom hooks, make sure everything is in place."
         )
     );
-    println!(
-        "  {}",
-        ui::dim(
-            "LILO: run `lilo`  |  ELILO/UEFI: `eliloconfig`  |  GRUB: `update-grub`  \
-             |  This message is a reminder; generally speaking, you should not need to act on it."
-        )
-    );
+    let x86 = plan
+        .iter()
+        .filter(|it| is_kernel_pkg(&it.pkg.id.name))
+        .any(|it| is_x86_arch(&it.pkg.id.arch));
+    println!("  {}", ui::dim(kernel_bootloader_hint(x86)));
+}
+
+/// The hint line under the kernel reminder. LILO, ELILO and GRUB are x86
+/// bootloaders; they do not exist on Slackware ARM, whose kernel package
+/// (kernel_armv8) runs os-initrd-mgr from its own install script, so there only
+/// the closing sentence is shown.
+fn kernel_bootloader_hint(x86: bool) -> &'static str {
+    if x86 {
+        "LILO: run `lilo`  |  ELILO/UEFI: `eliloconfig`  |  GRUB: `update-grub`  \
+         |  This message is a reminder; generally speaking, you should not need to act on it."
+    } else {
+        "This message is a reminder; generally speaking, you should not need to act on it."
+    }
 }
 
 /// Detect the Slackware release a repo URL targets, for the release-mismatch
@@ -2056,6 +2074,13 @@ fn arch_family(a: &str) -> &str {
         "i386" | "i486" | "i586" | "i686" | "x86" => "x86",
         other => other,
     }
+}
+
+/// True for x86_64 and every 32-bit x86 token: the architectures the official
+/// Slackware tree (and its mirror list) carries. Slackware ARM (aarch64, arm) is
+/// a separate port with its own trees and mirrors.
+fn is_x86_arch(a: &str) -> bool {
+    a == "x86_64" || arch_family(a) == "x86"
 }
 
 /// Is a package built for `pkg_arch` safe to install on a `sys_arch` system?
@@ -4330,6 +4355,17 @@ fn tool_on_path(name: &str) -> bool {
     }
 }
 
+/// Where Slackware's pkgtools package installs installpkg/upgradepkg/removepkg.
+const PKGTOOLS_DIR: &str = "/sbin";
+
+/// True if a pkgtools command is on `$PATH` or in `sbin`. Slackware's
+/// /etc/profile puts /sbin on the PATH of root only, so a plain user's
+/// `slacker status` (slacker-gui runs it that way) would otherwise report the
+/// pkgtools missing. slacker only runs them as root, where /sbin is on the PATH.
+fn pkgtool_present(name: &str, sbin: &Path) -> bool {
+    tool_on_path(name) || tool_in_dirs(name, &[sbin.to_path_buf()])
+}
+
 /// What auditing slacker's OWN files turned up. Counts are totals across the
 /// whole tree; the `sample_*` vectors keep up to `AUDIT_SAMPLE` offenders each
 /// so the report can name a few without flooding the screen.
@@ -4554,9 +4590,12 @@ fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
 
     // External tools slacker shells out to. The pkgtools are essential — without
     // them install/upgrade/remove cannot run at all; the rest each degrade one
-    // feature when absent. Looked up on $PATH, not executed.
-    let missing_pt: Vec<&str> =
-        ["installpkg", "upgradepkg", "removepkg"].into_iter().filter(|&t| !tool_on_path(t)).collect();
+    // feature when absent. Looked up on $PATH, not executed; the pkgtools also in
+    // /sbin, which is not on a plain user's PATH.
+    let missing_pt: Vec<&str> = ["installpkg", "upgradepkg", "removepkg"]
+        .into_iter()
+        .filter(|&t| !pkgtool_present(t, Path::new(PKGTOOLS_DIR)))
+        .collect();
     if missing_pt.is_empty() {
         srow(&ok, "Pkgtools", &ui::dim("installpkg, upgradepkg, removepkg present"));
     } else {
@@ -4659,9 +4698,15 @@ fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
 /// This is the single place that turns "what release/arch am I on" into a
 /// distribution path; anywhere slacker would otherwise hardcode
 /// `slackware64-current` should derive it here so a non-current system gets its
-/// own version substituted. (Slackware ARM uses slackwarearm/slackwareaarch64
-/// and lives on different mirrors; only the x86 trees are reachable on the
-/// osuosl reference, so a wrong ARM path simply fails open below.)
+/// own version substituted.
+///
+/// x86 only: Slackware ARM names its trees `slackwareaarch64-*` and lives on its
+/// own mirrors, which this does not model. A wrong path does NOT reliably fail
+/// open (on aarch64 it would name the real 32-bit x86 tree), so callers that
+/// reach an official reference tree check [`osuosl_tree_prefix`] first
+/// (find-mirror, the status freshness row). upgrade-dist, the other caller,
+/// never gets here on aarch64: Slackware ARM aarch64 exists only as -current,
+/// and the route gate refuses -current before this is read.
 pub(crate) fn slackware_dir(arch: &str) -> Option<String> {
     slackware_dir_parts(
         arch,
@@ -4693,6 +4738,19 @@ fn slackware_dir_parts(arch: &str, codename: Option<&str>, version_id: Option<&s
         v.to_string()
     };
     Some(format!("{prefix}-{release}"))
+}
+
+/// Directory prefix of the official tree for `arch` on the osuosl reference
+/// mirror (`slackware64` on x86_64, `slackware` on 32-bit x86), or None for an
+/// architecture osuosl does not carry: Slackware ARM (aarch64, arm) lives on its
+/// own mirrors. Callers skip the reference check on None instead of comparing
+/// against another architecture's tree.
+fn osuosl_tree_prefix(arch: &str) -> Option<&'static str> {
+    match arch {
+        "x86_64" => Some("slackware64"),
+        a if is_x86_arch(a) => Some("slackware"),
+        _ => None,
+    }
 }
 
 /// -current is marked by `VERSION_CODENAME=current` in /etc/os-release; that
@@ -4727,9 +4785,10 @@ fn osuosl_freshness_url(dir: &str, is_current: bool) -> String {
 }
 
 /// The (upstream, your-mirror) PACKAGES.TXT pair the freshness check compares,
-/// or None if the release/arch can't be determined or there is no official
-/// mirror. -current → the main-tree root on both sides; STABLE → the `patches/`
-/// tree on both sides (the frozen root never moves; patches/ is where the server
+/// or None if the release/arch can't be determined, osuosl carries no tree for
+/// this arch (Slackware ARM), or there is no official mirror. -current → the
+/// main-tree root on both sides; STABLE → the `patches/` tree on both sides
+/// (the frozen root never moves; patches/ is where the server
 /// publishes security updates, so that is the timestamp that signals freshness).
 /// On stable the "your" side prefers a configured `patches` subtree repo, falling
 /// back to deriving patches/ from the official mirror base.
@@ -4741,7 +4800,7 @@ fn freshness_urls(cfg: &Config) -> Option<(String, String)> {
     // os-release still says 15.0), and comparing across releases is meaningless.
     let mirror_release = dist::parse_release_from_url(&official.url)?;
     let is_current = matches!(mirror_release, dist::Release::Current);
-    let prefix = if cfg.arch == "x86_64" { "slackware64" } else { "slackware" };
+    let prefix = osuosl_tree_prefix(&cfg.arch)?;
     let dir = format!("{prefix}-{}", dist::release_suffix(&mirror_release));
     let upstream = osuosl_freshness_url(&dir, is_current);
 
@@ -4864,6 +4923,18 @@ fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, String> {
         .map(|c| c.arch.clone())
         .unwrap_or_else(|| config::system_arch(config_dir));
     let arch = detected.as_str();
+    // The official mirror list and the osuosl reference carry x86 trees only.
+    // On Slackware ARM, probing them would rank mirrors by another
+    // architecture's tree and propose lines for it, so stop with directions
+    // instead of a wrong answer.
+    if osuosl_tree_prefix(arch).is_none() {
+        return Err(format!(
+            "find-mirror only knows the official Slackware mirror list, which has no {arch} trees — \
+             for Slackware ARM pick a mirror yourself (project home: https://arm.slackware.com) \
+             and make it the single active line in {}",
+            config_dir.join("mirrors").display()
+        ));
+    }
     let dir = slackware_dir(arch).ok_or(
         "cannot determine your Slackware release/arch — check /etc/os-release and the `arch` line in slacker.conf",
     )?;
@@ -5044,6 +5115,15 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
                 &ui::dim("could not check (upstream or mirror unreachable)"),
             ),
         }
+    } else if osuosl_tree_prefix(&cfg.arch).is_none() && cfg.repos.iter().any(|r| r.official) {
+        // Slackware ARM: the reference mirror carries no tree for this arch, so
+        // there is nothing honest to compare against. Say so rather than stay
+        // silent, and never compare against another architecture's tree.
+        srow(
+            &info,
+            "Freshness",
+            &ui::dim(&format!("not checked (no upstream reference for {})", cfg.arch)),
+        );
     }
 
     srow(&ok, "Repos", &ui::dim(&format!("{} configured, priorities distinct", repos.len())));
@@ -10823,6 +10903,29 @@ mod collect_tests {
         assert!(!is_kernel_pkg("kernel-headers"));
         assert!(!is_kernel_pkg("kernel-source"));
         assert!(!is_kernel_pkg("bash"));
+        // Slackware ARM: kernel_<platform>, underscore, no flavour suffix.
+        assert!(is_kernel_pkg("kernel_armv8"));
+    }
+
+    #[test]
+    fn kernel_hint_names_x86_bootloaders_only_on_x86() {
+        assert!(kernel_bootloader_hint(true).contains("lilo"));
+        let arm = kernel_bootloader_hint(false);
+        assert!(!arm.contains("lilo") && !arm.contains("grub") && !arm.contains("eliloconfig"));
+        assert!(arm.contains("reminder"));
+    }
+
+    #[test]
+    fn osuosl_reference_only_for_x86() {
+        assert_eq!(osuosl_tree_prefix("x86_64"), Some("slackware64"));
+        assert_eq!(osuosl_tree_prefix("i586"), Some("slackware"));
+        assert_eq!(osuosl_tree_prefix("i686"), Some("slackware"));
+        // Slackware ARM: no tree on osuosl, so no reference (never the 32-bit
+        // x86 `slackware-*` tree, which is what the old fallback produced).
+        assert_eq!(osuosl_tree_prefix("aarch64"), None);
+        assert_eq!(osuosl_tree_prefix("arm"), None);
+        assert!(is_x86_arch("x86_64") && is_x86_arch("i486"));
+        assert!(!is_x86_arch("aarch64") && !is_x86_arch("noarch"));
     }
 
     #[test]
@@ -10854,6 +10957,36 @@ mod collect_tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pkgtools_found_in_sbin_off_path() {
+        // A plain user's PATH lacks /sbin; the pkgtools must still count as
+        // present when they sit in the sbin dir (a temp stand-in here, with a
+        // name that is on nobody's real PATH).
+        let sbin = std::env::temp_dir().join("slacker_pkgtool_sbin_test");
+        let _ = std::fs::remove_dir_all(&sbin);
+        std::fs::create_dir_all(&sbin).unwrap();
+        let exe = sbin.join("slacker-fake-installpkg");
+        std::fs::write(&exe, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(pkgtool_present("slacker-fake-installpkg", &sbin));
+        assert!(!pkgtool_present("slacker-fake-removepkg", &sbin));
+
+        // A symlinked sbin (a future merged /usr: /sbin -> usr/sbin) still works.
+        #[cfg(unix)]
+        {
+            let link = std::env::temp_dir().join("slacker_pkgtool_sbin_link");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&sbin, &link).unwrap();
+            assert!(pkgtool_present("slacker-fake-installpkg", &link));
+            let _ = std::fs::remove_file(&link);
+        }
+        let _ = std::fs::remove_dir_all(&sbin);
     }
 
     #[test]
