@@ -4355,6 +4355,17 @@ fn tool_on_path(name: &str) -> bool {
     }
 }
 
+/// Where Slackware's pkgtools package installs installpkg/upgradepkg/removepkg.
+const PKGTOOLS_DIR: &str = "/sbin";
+
+/// True if a pkgtools command is on `$PATH` or in `sbin`. Slackware's
+/// /etc/profile puts /sbin on the PATH of root only, so a plain user's
+/// `slacker status` (slacker-gui runs it that way) would otherwise report the
+/// pkgtools missing. slacker only runs them as root, where /sbin is on the PATH.
+fn pkgtool_present(name: &str, sbin: &Path) -> bool {
+    tool_on_path(name) || tool_in_dirs(name, &[sbin.to_path_buf()])
+}
+
 /// What auditing slacker's OWN files turned up. Counts are totals across the
 /// whole tree; the `sample_*` vectors keep up to `AUDIT_SAMPLE` offenders each
 /// so the report can name a few without flooding the screen.
@@ -4579,9 +4590,12 @@ fn cmd_status(config_dir: &std::path::Path) -> Result<Outcome, String> {
 
     // External tools slacker shells out to. The pkgtools are essential — without
     // them install/upgrade/remove cannot run at all; the rest each degrade one
-    // feature when absent. Looked up on $PATH, not executed.
-    let missing_pt: Vec<&str> =
-        ["installpkg", "upgradepkg", "removepkg"].into_iter().filter(|&t| !tool_on_path(t)).collect();
+    // feature when absent. Looked up on $PATH, not executed; the pkgtools also in
+    // /sbin, which is not on a plain user's PATH.
+    let missing_pt: Vec<&str> = ["installpkg", "upgradepkg", "removepkg"]
+        .into_iter()
+        .filter(|&t| !pkgtool_present(t, Path::new(PKGTOOLS_DIR)))
+        .collect();
     if missing_pt.is_empty() {
         srow(&ok, "Pkgtools", &ui::dim("installpkg, upgradepkg, removepkg present"));
     } else {
@@ -10943,6 +10957,36 @@ mod collect_tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pkgtools_found_in_sbin_off_path() {
+        // A plain user's PATH lacks /sbin; the pkgtools must still count as
+        // present when they sit in the sbin dir (a temp stand-in here, with a
+        // name that is on nobody's real PATH).
+        let sbin = std::env::temp_dir().join("slacker_pkgtool_sbin_test");
+        let _ = std::fs::remove_dir_all(&sbin);
+        std::fs::create_dir_all(&sbin).unwrap();
+        let exe = sbin.join("slacker-fake-installpkg");
+        std::fs::write(&exe, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(pkgtool_present("slacker-fake-installpkg", &sbin));
+        assert!(!pkgtool_present("slacker-fake-removepkg", &sbin));
+
+        // A symlinked sbin (a future merged /usr: /sbin -> usr/sbin) still works.
+        #[cfg(unix)]
+        {
+            let link = std::env::temp_dir().join("slacker_pkgtool_sbin_link");
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&sbin, &link).unwrap();
+            assert!(pkgtool_present("slacker-fake-installpkg", &link));
+            let _ = std::fs::remove_file(&link);
+        }
+        let _ = std::fs::remove_dir_all(&sbin);
     }
 
     #[test]
