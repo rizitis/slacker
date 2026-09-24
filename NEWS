@@ -1,3 +1,6 @@
+- Update: man page and wiki pages
+- Update: cmd: slacker show-changelog for repos: {alienbob,restricted,patches,extras,testing}
+- Update: cmd:slacker find-mirror suggest only mirros in sync
 - Update: rc.local_shutdown added to protected files too.
 - Update: prepare slacker code for aarch64 support.
 - Fix: cmd:slacker status

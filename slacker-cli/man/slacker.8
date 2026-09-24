@@ -91,6 +91,17 @@ repository to show its ChangeLog instead; if that repository's ChangeLog was
 not cached by
 .BR update ,
 it is fetched on demand.
+.IP
+Not every repository publishes a ChangeLog of its own. A distribution subtree
+.RB ( extra ", " patches ", " testing )
+shares the distribution's, and some publishers keep one ChangeLog above the
+per\-release, per\-architecture trees it covers (alienbob's
+.I sbrepos/current/x86_64
+is covered by
+.IR sbrepos/ChangeLog.txt ).
+In both cases slacker looks there, and prints the URL the text came from so it
+is clear what is being read. A repository that does publish its own is fetched
+from its own path, as before.
 .SS Querying
 .TP
 .BI search " NAME"
@@ -505,10 +516,15 @@ mirror for your location. Each https mirror's
 is fetched with one timed range request \(em which measures real HTTP latency and
 reads the mirror's own timestamp at the same time \(em so mirrors more than 48
 hours behind the upstream master are dropped as stale, and the reachable, fresh
-ones are ranked by speed. The 7 fastest are listed and the 3 fastest are proposed
-as lines to make active in your
+ones are ranked by speed. The 7 fastest are listed, each with how far behind
+upstream it is, and the 3 fastest that are
+.B in sync
+are proposed as lines to make active in your
 .I mirrors
-file; slacker never changes your mirror for you. Like
+file: a mirror that is behind is worth seeing but not worth switching to. When
+every listed mirror is behind, none is proposed and slacker says so. If the
+upstream reference itself is unreachable, freshness cannot be judged and the
+fastest are proposed unchecked. slacker never changes your mirror for you. Like
 .BR status ,
 this runs before any mirror is configured, so it can be used for the very first
 setup. It works on

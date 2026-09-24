@@ -468,6 +468,73 @@ impl Repo {
     pub fn join_download_url(&self, location: &str) -> String {
         join_base(self.download_base(), location)
     }
+
+    /// Where this repo's ChangeLog.txt can be, in the order to try.
+    ///
+    /// Nearly every repo publishes one at its own URL, and for those this is the
+    /// only candidate — a repo whose ChangeLog is served today keeps being
+    /// fetched in exactly one request, from exactly the same place. Two shapes
+    /// need more than that:
+    ///
+    /// * a `subtree` repo (the distribution's extra/, patches/, testing/) has no
+    ///   ChangeLog of its own by design. Its ChangeLog is the distribution's, at
+    ///   the parent URL that already serves its packages and GPG-KEY, so that is
+    ///   the only place looked at.
+    /// * some publishers keep ONE ChangeLog for a whole repository and address
+    ///   the individual trees by release and architecture below it: alienbob's
+    ///   `.../sbrepos/current/x86_64` is covered by `.../sbrepos/ChangeLog.txt`.
+    ///   So when the repo's own URL ends in bare COORDINATES (`current`, an arch
+    ///   token, a `15.0`), the base those coordinates hang off is offered as a
+    ///   second candidate, tried only if the first one is not there. At most two
+    ///   segments are dropped, and only coordinates: a URL ending in a
+    ///   repository name is never walked up from.
+    pub fn changelog_urls(&self) -> Vec<String> {
+        let changelog = crate::repo::CHANGELOG;
+        if self.subtree {
+            return vec![join_base(self.download_base(), changelog)];
+        }
+        let mut out = vec![self.join_url(changelog)];
+        let mut base = self.url.trim_end_matches('/');
+        let mut dropped = 0;
+        while dropped < 2 {
+            let Some((parent, seg)) = base.rsplit_once('/') else {
+                break;
+            };
+            // Never strip into the scheme, and never strip a name.
+            if parent.is_empty() || parent.ends_with(':') || !is_coordinate_segment(seg) {
+                break;
+            }
+            base = parent;
+            dropped += 1;
+        }
+        if dropped > 0 {
+            out.push(join_base(base, changelog));
+        }
+        out
+    }
+}
+
+/// True for a URL path segment that is a release/architecture COORDINATE rather
+/// than the name of a repository: `current`, a bare arch token, or a bare `X.Y`
+/// release number. Deliberately narrow — `slackware64-current`, `packages`,
+/// `gnome` and the like are names as far as this is concerned, so a repo
+/// addressed that way is left alone.
+fn is_coordinate_segment(seg: &str) -> bool {
+    if seg.eq_ignore_ascii_case("current") {
+        return true;
+    }
+    if KNOWN_ARCHES.contains(&seg) || seg == "i386" || seg == "i486" || seg == "x86" {
+        return true;
+    }
+    // A bare release number: two dot-separated groups of digits, e.g. 15.0.
+    let mut parts = seg.split('.');
+    let (Some(a), Some(b), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !a.is_empty()
+        && !b.is_empty()
+        && a.chars().all(|c| c.is_ascii_digit())
+        && b.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Join a relative repo location onto a base URL: trim a trailing slash off the
@@ -1064,12 +1131,13 @@ fn parse_revert_enabled(raw: Option<&str>) -> bool {
 /// Parse a `CUMULATIVE_URL` value: a non-empty URL with any trailing slash
 /// trimmed, falling back to the default Slackware-UK cumulative archive for
 /// -current. The default's arch segment follows `arch`: `slackware64-current`
-/// on x86_64, `slackware-current` on the 32-bit tree. Pure, for unit testing.
+/// on x86_64, `slackwareaarch64-current` on Slackware ARM aarch64 (same archive,
+/// same layout), `slackware-current` on the 32-bit tree. Pure, for unit testing.
 fn parse_cumulative_url(raw: Option<&str>, arch: &str) -> String {
-    let default = if arch == "x86_64" {
-        "https://slackware.uk/cumulative/slackware64-current"
-    } else {
-        "https://slackware.uk/cumulative/slackware-current"
+    let default = match arch {
+        "x86_64" => "https://slackware.uk/cumulative/slackware64-current",
+        "aarch64" => "https://slackware.uk/cumulative/slackwareaarch64-current",
+        _ => "https://slackware.uk/cumulative/slackware-current",
     };
     raw.map(|s| s.trim().trim_end_matches('/'))
         .filter(|s| !s.is_empty())
@@ -1156,6 +1224,12 @@ mod tests {
         assert_eq!(
             parse_cumulative_url(None, "i586"),
             "https://slackware.uk/cumulative/slackware-current"
+        );
+        // Slackware ARM aarch64 has its own tree in the same archive (never the
+        // 32-bit x86 one the old fallback picked).
+        assert_eq!(
+            parse_cumulative_url(None, "aarch64"),
+            "https://slackware.uk/cumulative/slackwareaarch64-current"
         );
         assert_eq!(
             parse_cumulative_url(Some(""), "x86_64"),
@@ -1300,6 +1374,91 @@ mod tests {
         // combines with verify=; an unknown flag is still rejected.
         assert!(parse_repos("80 x https://x/ immutable verify=md5\n", None).is_ok());
         assert!(parse_repos("80 x https://x/ bogus\n", None).is_err());
+    }
+
+    #[test]
+    fn changelog_urls_only_walk_up_past_coordinates() {
+        let (repos, _t) = parse_repos(
+            "100 slackware mirror official\n\
+             70 extras https://m/slackware64-current/extra subtree\n\
+             62 alienbob https://slackware.nl/people/alien/sbrepos/current/x86_64\n\
+             61 multilib https://slackware.nl/people/alien/multilib/current\n\
+             60 lngn https://slackware.lngn.net/pub/x86_64/slackware64-current\n\
+             59 gnome https://reddoglinux.ddns.net/mirror/slackware/gnome\n\
+             58 ponce https://ponce.cc/slackware/slackware64-current/packages\n\
+             57 stable15 https://example.org/repo/15.0/x86_64\n",
+            Some("https://m/slackware64-current/"),
+        )
+        .unwrap();
+        let urls = |name: &str| {
+            repos
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap()
+                .changelog_urls()
+        };
+
+        // A subtree has no ChangeLog of its own: the distribution's, at the parent.
+        assert_eq!(
+            urls("extras"),
+            vec!["https://m/slackware64-current/ChangeLog.txt"]
+        );
+
+        // Coordinates at the tail: the repo's own path first, then the base.
+        assert_eq!(
+            urls("alienbob"),
+            vec![
+                "https://slackware.nl/people/alien/sbrepos/current/x86_64/ChangeLog.txt",
+                "https://slackware.nl/people/alien/sbrepos/ChangeLog.txt",
+            ]
+        );
+        assert_eq!(
+            urls("multilib"),
+            vec![
+                "https://slackware.nl/people/alien/multilib/current/ChangeLog.txt",
+                "https://slackware.nl/people/alien/multilib/ChangeLog.txt",
+            ]
+        );
+        assert_eq!(
+            urls("stable15"),
+            vec![
+                "https://example.org/repo/15.0/x86_64/ChangeLog.txt",
+                "https://example.org/repo/ChangeLog.txt",
+            ]
+        );
+
+        // Names, not coordinates: nothing is walked up from, so a repo that
+        // publishes its own ChangeLog is fetched exactly as before.
+        for name in ["lngn", "gnome", "ponce", "slackware"] {
+            assert_eq!(
+                urls(name).len(),
+                1,
+                "{name} must have a single ChangeLog candidate"
+            );
+        }
+        assert_eq!(
+            urls("gnome"),
+            vec!["https://reddoglinux.ddns.net/mirror/slackware/gnome/ChangeLog.txt"]
+        );
+    }
+
+    #[test]
+    fn coordinate_segments_are_recognised_narrowly() {
+        for seg in ["current", "CURRENT", "x86_64", "i686", "i486", "aarch64", "arm", "15.0", "14.2"] {
+            assert!(is_coordinate_segment(seg), "{seg} is a coordinate");
+        }
+        for seg in [
+            "slackware64-current", // a tree name, not a bare coordinate
+            "packages",
+            "gnome",
+            "sbrepos",
+            "15",
+            "15.0.1",
+            "x86_64-extra",
+            "",
+        ] {
+            assert!(!is_coordinate_segment(seg), "{seg} is not a coordinate");
+        }
     }
 
     #[test]
