@@ -81,6 +81,74 @@ pub fn parse_locations(packages_txt: &str) -> HashMap<String, String> {
     map
 }
 
+/// What the body fetched from the archive's root `PACKAGES.TXT` turned out to
+/// be, so the caller can tell three different situations apart instead of
+/// reporting them all as one failure.
+///
+/// This matters because of how slackware.uk rotates the archive at a stable
+/// release: the whole -current tree is MOVED into that release's own archive
+/// and the fresh release package set is COPIED back in its place. So for weeks
+/// after a release the -current archive is a perfectly healthy tree that simply
+/// holds one version per package and can serve no older build, while the older
+/// builds (with their signatures) sit in the release archive. None of that is a
+/// fault, and it should not read like one.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ArchiveIndex {
+    /// A real package list, with at least one entry: name -> `PACKAGE LOCATION:`.
+    Packages(HashMap<String, String>),
+    /// A real PACKAGES.TXT that lists no packages at all.
+    Empty,
+    /// Not a PACKAGES.TXT: an error page, a directory index, a truncated file.
+    NotIndex,
+}
+
+/// Classify the body fetched from `<archive>/PACKAGES.TXT`. A genuine package
+/// list is recognised by its `PACKAGES.TXT;` header line, which every generated
+/// one carries, so an empty list is only ever reported for a file that really is
+/// a package list — anything else is `NotIndex` rather than a confident "the
+/// archive is empty".
+pub fn classify_index(packages_txt: &str) -> ArchiveIndex {
+    let locations = parse_locations(packages_txt);
+    if !locations.is_empty() {
+        return ArchiveIndex::Packages(locations);
+    }
+    let first = packages_txt
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if first.starts_with("PACKAGES.TXT") {
+        ArchiveIndex::Empty
+    } else {
+        ArchiveIndex::NotIndex
+    }
+}
+
+/// The same cumulative archive with its release segment swapped, e.g.
+/// `.../cumulative/slackware64-current` + `15.0` ->
+/// `.../cumulative/slackware64-15.0`. Used only to TELL the user where a build
+/// that has left -current can be found; slacker never fetches from another tree
+/// on its own.
+///
+/// None unless the last path segment really ends in `-current` and `release`
+/// looks like a release number (digits, dots, dashes), so a hand-written or
+/// unusual CUMULATIVE_URL produces no suggestion rather than a made-up one.
+pub fn archive_url_for_release(base_url: &str, release: &str) -> Option<String> {
+    let base = base_url.trim_end_matches('/');
+    let (parent, seg) = base.rsplit_once('/')?;
+    let prefix = seg.strip_suffix("-current")?;
+    if prefix.is_empty() || release.is_empty() {
+        return None;
+    }
+    if !release
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return None;
+    }
+    Some(format!("{parent}/{prefix}-{release}"))
+}
+
 /// Build the cumulative-archive download URL (the `.txz`) for a specific full
 /// package id, using the base-name -> location map and the archive base URL.
 ///
@@ -238,5 +306,69 @@ plasma-activities: ...
             url.as_deref(),
             Some("https://slackware.uk/cumulative/slackware-current/slackware/xap/vlc-3.0.20-i586-1.txz")
         );
+    }
+
+    #[test]
+    fn classifies_index_empty_and_garbage() {
+        let real = "PACKAGES.TXT;  Sat Sep 19 13:50:00 UTC 2026\n\n\
+                    PACKAGE NAME:  emacs-31.1-x86_64-2.txz\n\
+                    PACKAGE LOCATION:  ./slackware64/e\n";
+        match classify_index(real) {
+            ArchiveIndex::Packages(m) => {
+                assert_eq!(m.get("emacs").map(String::as_str), Some("./slackware64/e"))
+            }
+            other => panic!("expected a package list, got {other:?}"),
+        }
+
+        // A freshly generated list with no packages in the tree yet: a real
+        // PACKAGES.TXT, so it must NOT be reported as a broken archive.
+        let empty = "PACKAGES.TXT;  Sat Sep 19 13:50:00 UTC 2026\n\n\
+                     This file provides details on the Slackware packages found in the \
+                     ./slackware64/ directory.\n";
+        assert_eq!(classify_index(empty), ArchiveIndex::Empty);
+
+        // An error page or directory index is NOT an empty archive.
+        assert_eq!(
+            classify_index("<html><head><title>404 Not Found</title></head></html>"),
+            ArchiveIndex::NotIndex
+        );
+        assert_eq!(classify_index(""), ArchiveIndex::NotIndex);
+    }
+
+    #[test]
+    fn swaps_release_segment_of_archive_url() {
+        assert_eq!(
+            archive_url_for_release("https://slackware.uk/cumulative/slackware64-current", "16.0")
+                .as_deref(),
+            Some("https://slackware.uk/cumulative/slackware64-16.0")
+        );
+        // Trailing slash, and the 32-bit / ARM trees keep their own prefix.
+        assert_eq!(
+            archive_url_for_release("https://slackware.uk/cumulative/slackware-current/", "16.0")
+                .as_deref(),
+            Some("https://slackware.uk/cumulative/slackware-16.0")
+        );
+        assert_eq!(
+            archive_url_for_release(
+                "https://slackware.uk/cumulative/slackwareaarch64-current",
+                "16.0"
+            )
+            .as_deref(),
+            Some("https://slackware.uk/cumulative/slackwareaarch64-16.0")
+        );
+        // No suggestion rather than a made-up one.
+        assert_eq!(
+            archive_url_for_release("https://slackware.uk/cumulative/slackware64-15.0", "16.0"),
+            None
+        ); // not a -current tree
+        assert_eq!(archive_url_for_release("slackware64-current", "16.0"), None); // no parent path
+        assert_eq!(
+            archive_url_for_release("https://x/y/slackware64-current", ""),
+            None
+        );
+        assert_eq!(
+            archive_url_for_release("https://x/y/slackware64-current", "../../etc"),
+            None
+        ); // a VERSION_ID that is not a release number
     }
 }

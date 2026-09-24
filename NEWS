@@ -1,6 +1,44 @@
-Fix bug: `/sbin/{pkgtools}` are not in `$USER $PATH` so slacker status fails to find them and was wrong reported as `pkgtools are not installed`.
-Update: rc.local_shutdown added to protected files too.
-Update: prepare slacker code for aarch64 support.
+- Update: rc.local_shutdown added to protected files too.
+- Update: prepare slacker code for aarch64 support.
+- Fix: cmd:slacker status
+    - the Pkgtools row no longer reports installpkg/upgradepkg/removepkg as
+      MISSING when `status` runs as a plain user. Slackware's /etc/profile puts
+      /sbin on root's PATH only, so a user (or slacker-gui, which runs `status`
+      unprivileged) saw a false error. The check now looks on $PATH and in
+      /sbin. Nothing changed in how the pkgtools are executed: they still run
+      as root, where /sbin is on the PATH.
+- Update: cmd:slacker revert-pkg
+    - the cumulative archive is now read BEFORE you are asked to choose a
+      version, so an archive that cannot serve the rollback is reported up
+      front instead of after the selection.
+    - three situations that used to end in the same confusing message are now
+      told apart: an archive that answers with a package list that has no
+      packages yet, an address that does not return a package list at all
+      (a typo in CUMULATIVE_URL, an error page), and an archive that cannot be
+      reached. A package that is not in the list at all is also reported
+      before the prompt.
+    - when the package is listed but that particular build is no longer in the
+      tree, slacker prints the exact URL where the release archive keeps it and
+      the CUMULATIVE_URL to set if you want it. It never switches archive by
+      itself: which repository to trust stays the admin's decision.
+    - why this matters: from 16.0 on, slackware.uk moves the whole cumulative
+      -current tree into the archive of the release when that release is made,
+      and copies the fresh release package set back in its place. Signatures
+      travel with the packages, so verification is unaffected, but for a while
+      after each release the -current archive holds one version per package and
+      has nothing older to offer. That is now a clear message, not an error.
+- Fix: shared code on non-x86 architectures (no change on x86)
+    - `status` no longer compares your mirror against the x86 tree on the
+      upstream reference mirror when the system is not x86. That reference
+      carries no Slackware ARM trees, so the freshness verdict was meaningless
+      there; it is now reported as not checked.
+    - `find-mirror` stops with an explanation instead of probing the official
+      mirror list, which lists x86 trees only, and proposing lines for the
+      wrong architecture.
+    - the kernel reminder now also recognises Slackware ARM's `kernel_armv8`,
+      and the LILO/ELILO/GRUB line is printed only for an x86 kernel package.
+    - the default CUMULATIVE_URL on aarch64 points at the aarch64 cumulative
+      tree instead of the 32-bit x86 one.
 ---
 
 Version Beta 0.12.0
