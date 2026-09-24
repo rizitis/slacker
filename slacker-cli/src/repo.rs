@@ -141,20 +141,35 @@ pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Res
 /// never clobbers the ChangeLog that `update` maintains as the check-updates
 /// baseline; for other repos it refreshes their cached copy as an offline
 /// fallback.
+///
+/// Returns the text together with the URL it came from: a repo can keep its
+/// ChangeLog somewhere other than its own path (see `Repo::changelog_urls`),
+/// and the caller says so rather than leaving the user guessing what they are
+/// reading. The candidates are tried in order and the FIRST URL's error is the
+/// one reported, since that is the place the ChangeLog was expected.
 pub fn fetch_changelog_text(
     repo: &Repo,
     cache_root: &Path,
     cache: bool,
-) -> Result<String, String> {
-    let url = repo.join_url(CHANGELOG);
-    let bytes = download::get_bytes(&url).map_err(|e| format!("fetch {url}: {e}"))?;
-    if cache {
-        let dir = repo.cache_subdir(cache_root);
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let _ = std::fs::write(dir.join(CHANGELOG), &bytes);
+) -> Result<(String, String), String> {
+    let mut first_err = None;
+    for url in repo.changelog_urls() {
+        let bytes = match download::get_bytes(&url) {
+            Ok(b) => b,
+            Err(e) => {
+                first_err.get_or_insert(format!("fetch {url}: {e}"));
+                continue;
+            }
+        };
+        if cache {
+            let dir = repo.cache_subdir(cache_root);
+            if std::fs::create_dir_all(&dir).is_ok() {
+                let _ = std::fs::write(dir.join(CHANGELOG), &bytes);
+            }
         }
+        return Ok((String::from_utf8_lossy(&bytes).into_owned(), url));
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Err(first_err.unwrap_or_else(|| format!("no ChangeLog URL for repo '{}'", repo.name)))
 }
 
 /// Ensure the decompressed MANIFEST exists for a repo, downloading it on

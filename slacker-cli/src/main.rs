@@ -5026,12 +5026,35 @@ fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, String> {
     }
 
     // Suggestion — printed only, never written: slacker does not switch mirrors
-    // for you. Offer the fastest few; each line is the one the `mirrors` file
-    // expects (the release root for this arch).
+    // for you. Each line is the one the `mirrors` file expects (the release
+    // root for this arch).
+    //
+    // Only mirrors that are actually IN SYNC are offered. find-mirror promises
+    // an up-to-date mirror, and `status` sends people here precisely because
+    // theirs is behind, so proposing one that is itself behind defeats the
+    // command — being under the 48h staleness cut makes a mirror worth listing
+    // (with its lag, above), not worth switching to. Without an upstream
+    // reference nothing can be judged, so there the fastest are offered as
+    // before, unchecked.
     println!();
-    let propose = FIND_MIRROR_PROPOSE.min(ranked.len());
+    let proposable = mirrors::proposable(&ranked, upstream);
+    if proposable.is_empty() {
+        println!(
+            "{}",
+            ui::yellow("None of these mirrors is in sync with upstream right now.")
+        );
+        println!(
+            "  {}",
+            ui::dim(
+                "Keep the mirror you have and probe again later — the list above shows how far \
+                 behind each one is."
+            )
+        );
+        return Ok(Outcome::Ok);
+    }
+    let propose = FIND_MIRROR_PROPOSE.min(proposable.len());
     if propose == 1 {
-        let best = &ranked[0];
+        let best = proposable[0];
         println!(
             "{}",
             ui::green(&format!("Fastest: {} ({}ms)", best.base_url, best.latency_ms))
@@ -5045,7 +5068,7 @@ fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, String> {
             ))
         );
     }
-    for m in ranked.iter().take(propose) {
+    for m in proposable.iter().take(propose) {
         println!(
             "    {}",
             ui::white(&format!("{}/{}/", m.base_url.trim_end_matches('/'), dir))
@@ -9073,7 +9096,15 @@ fn cmd_show_changelog(cfg: &Config, repo_name: Option<&str>) -> Result<Outcome, 
     // Non-official repos refresh their cached copy as an offline fallback. If the
     // fetch fails (offline), fall back to a cached copy when one exists.
     let text = match repo::fetch_changelog_text(r, &cfg.cache_dir, !r.official) {
-        Ok(t) => t,
+        Ok((t, url)) => {
+            // A subtree shares the distribution's ChangeLog, and some
+            // publishers keep one ChangeLog above the per-release trees. When
+            // the text did not come from the repo's own path, say where it did.
+            if url != r.join_url(repo::CHANGELOG) {
+                println!("{}", ui::dim(&format!("(from {url})")));
+            }
+            t
+        }
         Err(e) => match changelog::cached_changelog(r, &cfg.cache_dir) {
             Some(t) => {
                 println!("{}", ui::dim(&format!("(could not refresh, showing cached copy: {e})")));

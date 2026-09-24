@@ -122,6 +122,19 @@ pub fn probe_all(mirrors: &[(String, String)], subpath: &str) -> Vec<MirrorResul
 /// when an upstream reference is available), sort by latency, and take the
 /// fastest `top_n`. With no upstream reference (osuosl unreachable) the freshness
 /// filter is skipped and ranking is by latency alone.
+/// Of a ranked list, the mirrors worth PROPOSING as a replacement, in the same
+/// order. With an upstream reference that means the ones actually in sync with
+/// it: a mirror that is behind is still worth showing with its lag, but
+/// switching to it would not do what find-mirror is for. With no reference
+/// (upstream unreachable) nothing can be judged, so all of them qualify and the
+/// caller says they are unchecked.
+pub fn proposable(ranked: &[MirrorResult], upstream_epoch: Option<i64>) -> Vec<&MirrorResult> {
+    match upstream_epoch {
+        Some(up) => ranked.iter().filter(|m| up - m.pkg_epoch <= 0).collect(),
+        None => ranked.iter().collect(),
+    }
+}
+
 pub fn rank(mut results: Vec<MirrorResult>, upstream_epoch: Option<i64>, top_n: usize) -> Vec<MirrorResult> {
     if let Some(up) = upstream_epoch {
         results.retain(|m| !crate::mirror_is_stale(up, m.pkg_epoch));
@@ -210,6 +223,31 @@ us\t\t <rsync://rsync.example.us/slackware/>
         assert_eq!(ranked.len(), 2); // stale one dropped
         assert_eq!(ranked[0].latency_ms, 50); // fastest fresh first
         assert_eq!(ranked[1].latency_ms, 300);
+    }
+
+    #[test]
+    fn only_in_sync_mirrors_are_proposable() {
+        let up = 2_000_000i64;
+        // in sync, 27h behind (under the 48h cut, so it is ranked and shown),
+        // and one ahead of the reference, which counts as in sync.
+        let ranked = rank(
+            vec![mk(300, up), mk(50, up - 100_000), mk(10, up + 60)],
+            Some(up),
+            7,
+        );
+        assert_eq!(ranked.len(), 3);
+
+        let p = proposable(&ranked, Some(up));
+        assert_eq!(p.len(), 2, "a mirror that is behind is never proposed");
+        assert!(p.iter().all(|m| up - m.pkg_epoch <= 0));
+        assert_eq!(p[0].latency_ms, 10); // order is preserved
+
+        // Upstream unreachable: nothing can be judged, so all qualify.
+        assert_eq!(proposable(&ranked, None).len(), 3);
+
+        // Every ranked mirror behind upstream -> nothing to propose at all.
+        let behind = rank(vec![mk(10, up - 100_000)], Some(up), 7);
+        assert!(proposable(&behind, Some(up)).is_empty());
     }
 
     #[test]
