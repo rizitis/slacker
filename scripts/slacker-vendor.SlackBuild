@@ -207,6 +207,6 @@ cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
 #sleep 1
 sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
-rm -rf /tmp/slacker_*
+rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new
 
 #gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE

@@ -1,3 +1,5 @@
+Version Beta 0.12.1
+=====
 - Update: man page and wiki pages
 - Update: cmd: slacker show-changelog for repos: {alienbob,restricted,patches,extras,testing}
 - Update: cmd:slacker find-mirror suggest only mirros in sync
