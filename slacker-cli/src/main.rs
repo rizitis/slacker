@@ -6257,6 +6257,21 @@ fn revert_fetch_and_gpg_verify(
     }
 }
 
+/// `(release, archive URL)` of the release archive that holds what has left
+/// -current, named from `/etc/os-release` and the configured archive URL, or
+/// None when either cannot be determined (an unusual CUMULATIVE_URL, no
+/// VERSION_ID). slackware.uk moves the whole -current tree into the release's
+/// own archive when a release is made, so this is where a build from the
+/// previous development cycle now lives.
+///
+/// It is only ever PRINTED. Switching to another archive is the admin's
+/// decision, taken in slacker.conf, never slacker's at download time.
+fn release_archive_url(cfg: &Config) -> Option<(String, String)> {
+    let release = system::version_id()?;
+    let url = revert::archive_url_for_release(&cfg.cumulative_url, &release)?;
+    Some((release, url))
+}
+
 /// Roll an official package back to a previous -current version (rollback). See
 /// the `RevertPkg` command doc for the user-facing description. Guards: the
 /// feature switch, a -current-only check (fail-closed), and a -current archive
@@ -6325,14 +6340,21 @@ fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String
     // archive can serve nothing older" is a normal state for a while after a
     // release. Learning that after someone has picked a version is the wrong
     // order, and the three failure shapes read very differently to a user.
+    let release_archive = release_archive_url(cfg);
     let pkgs_url = format!("{}/PACKAGES.TXT", cfg.cumulative_url.trim_end_matches('/'));
     println!("  {}", ui::dim(&format!("fetching {pkgs_url}")));
     let bytes = download::get_bytes(&pkgs_url).map_err(|e| {
-        format!(
+        let mut msg = format!(
             "fetch cumulative PACKAGES.TXT: {e}\n\
              (check CUMULATIVE_URL in slacker.conf: {})",
             cfg.cumulative_url
-        )
+        );
+        if let Some((rel, base)) = &release_archive {
+            msg.push_str(&format!(
+                "\n(packages from before the {rel} release are kept at {base})"
+            ));
+        }
+        msg
     })?;
     let locations = match revert::classify_index(&String::from_utf8_lossy(&bytes)) {
         revert::ArchiveIndex::Packages(m) => m,
@@ -6348,6 +6370,15 @@ fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String
                      and the previous cycle's packages move to the release archive)"
                 )
             );
+            if let Some((rel, base)) = &release_archive {
+                println!(
+                    "  {}",
+                    ui::dim(&format!(
+                        "packages from before the {rel} release are kept at {base} — \
+                         point CUMULATIVE_URL there to reach them"
+                    ))
+                );
+            }
             return Ok(Outcome::NothingFound);
         }
         revert::ArchiveIndex::NotIndex => {
@@ -6449,12 +6480,10 @@ fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String
     // Where this build would be if it has already left -current: same relative
     // path, in the archive of the release named by /etc/os-release. Only shown
     // if the download fails; slacker does not switch archives by itself.
-    let moved_hint = system::version_id()
-        .and_then(|rel| {
-            revert::archive_url_for_release(&cfg.cumulative_url, &rel).map(|base| (rel, base))
-        })
+    let moved_hint = release_archive
+        .as_ref()
         .and_then(|(rel, base)| {
-            revert::cumulative_url_for(&base, &locations, target).map(|moved| {
+            revert::cumulative_url_for(base, &locations, target).map(|moved| {
                 format!(
                     "  this build may have left -current at the {rel} release; the archive keeps \
                      moved packages here:\n    {moved}\n  \
