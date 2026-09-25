@@ -101,6 +101,17 @@ runs the slacker binary, reads what slacker prints, and lays it out.
 <video src="/attachments/4b3ab746-b83f-4794-8765-2269bd03086f" controls></video>
 ---
 
+## slacker-src
+
+Does a slacker-src exists? Can slacker build packages from source code?
+
+NO, it doesn't need to. The reasons:
+1. if we're talking about SBo there are already excellent tools for that, so there's no reason for anything new.
+2. if we're talking about the official slackbuilds of the distribution, it's still not needed.
+They would be needed or  to be more precise, it would make sense if the dependencies were officially part and prerequisite of every slackbuild. The philosophy of the distribution is different from that, so there's no need for a slacker-src nor would it have anything to offer...
+
+---
+
 ## Contributing
 
 If you run **slackware-current** (always up to date), you can build slacker from source or install the binary provided in every release, use it, and
