@@ -4,6 +4,17 @@
 # NOTE: verify.py crates is online here, in future verify must be skipped
 # or do it before builds, for now its ok, I m happy.
 
+read -rp "NET = ON/OFF (choose): " NET
+NET=$(echo "$NET" | tr '[:lower:]' '[:upper:]')
+
+while [[ "$NET" != "ON" && "$NET" != "OFF" ]]; do
+    echo "Choose only ON or OFF (NOTE: OFF skips crates verification). "
+    read -rp "NET = ON/OFF (choose): " NET
+    NET=$(echo "$NET" | tr '[:lower:]' '[:upper:]')
+done
+
+echo "NET = $NET"
+
 CWD="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$CWD")"
 VENDORS_DIR="$ROOT/vendors"
@@ -67,8 +78,15 @@ mkdir -p .cargo
 cat slacker-cli-vendor-"$VERSION"/cargo-config.toml > .cargo/config.toml
 cat slacker-cli-vendor-"$VERSION"/vendor.json > vendor.json
 cp Cargo.lock slacker-cli-vendor-"$VERSION"/
-python "$VERIFY" slacker-cli-vendor-"$VERSION"/ slacker-cli-vendor-"$VERSION"/slacker-cli-vendor-"$VERSION".tar.gz
-mv slacker-cli-vendor-"$VERSION" vendor
+
+if [[ "$NET" == "ON" ]]; then
+    echo "Network is enabled"
+    python "$VERIFY" slacker-cli-vendor-"$VERSION"/ slacker-cli-vendor-"$VERSION"/slacker-cli-vendor-"$VERSION".tar.gz
+    mv slacker-cli-vendor-"$VERSION" vendor
+else
+    echo "Network is disabled"
+    mv slacker-cli-vendor-"$VERSION" vendor
+fi
 
 chown -R root:root .
 find . -type f \( -perm -4000 -o -perm -2000 \) -exec chmod -s {} +
@@ -167,8 +185,17 @@ mkdir -p .cargo
 cat slacker-gui-vendor-"$VERSION2"/cargo-config.toml > .cargo/config.toml
 cat slacker-gui-vendor-"$VERSION2"/vendor.json > vendor.json
 cp Cargo.lock slacker-gui-vendor-"$VERSION2"/
-python "$VERIFY" slacker-gui-vendor-"$VERSION2"/ slacker-gui-vendor-"$VERSION2"/slacker-gui-vendor-"$VERSION2".tar.gz
-mv slacker-gui-vendor-"$VERSION2" vendor
+
+if [[ "$NET" == "ON" ]]; then
+    echo "Network is enabled"
+    python "$VERIFY" slacker-gui-vendor-"$VERSION2"/ slacker-gui-vendor-"$VERSION2"/slacker-gui-vendor-"$VERSION2".tar.gz
+    mv slacker-gui-vendor-"$VERSION2" vendor
+else
+    echo "Network is disabled"
+    mv slacker-gui-vendor-"$VERSION2" vendor
+fi
+
+
 
 chown -R root:root .
 find . -type f \( -perm -4000 -o -perm -2000 \) -exec chmod -s {} +
@@ -207,6 +234,7 @@ cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
 #sleep 1
 sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
-rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new
+
+rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new /tmp/stockdb_test_*.txt
 
 #gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
