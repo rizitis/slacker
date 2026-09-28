@@ -1,3 +1,10 @@
+- Fix: slacker-gui
+    - the "nothing has been printed" notice no longer appears during kernel
+      upgrades, when dracut is simply quiet while it builds the initrd. It now
+      waits much longer unless the last line really reads like a question, and
+      when it does appear it says so calmly instead of looking like an error.
+---
+
 Version Beta 0.12.1
 =====
 - Update: man page and wiki pages

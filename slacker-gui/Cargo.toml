@@ -1,6 +1,6 @@
 [package]
 name = "slacker-gui"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 rust-version = "1.83"
 description = "GTK4/libadwaita front-end for the slacker package manager"
