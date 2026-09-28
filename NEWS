@@ -1,3 +1,6 @@
+Version Beta-2 0.12.1
+=====
+- NOTE: slacker-cli (v0.12.1) has no changes, this version has fixes for slacker-gui only(vBeta_2).
 - Update: slacker-gui
     - font sizes follow the desktop. The stylesheet pinned a dozen sizes in
       absolute points, so those parts of the window ignored the font size set in
