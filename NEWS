@@ -1,3 +1,15 @@
+- Update: slacker-gui
+    - font sizes follow the desktop. The stylesheet pinned a dozen sizes in
+      absolute points, so those parts of the window ignored the font size set in
+      the desktop while the rest followed it; they are ratios now, and
+      everything scales together. Reported by @danix (issue #9).
+    - zoom: Ctrl with the wheel, or Ctrl with +, - and 0, scales the whole
+      window between 70% and 250% of the desktop's font size. The choice is
+      remembered in ~/.config/slacker-gui/zoom.
+    - blocks of slacker's own output are no longer clipped when the font is
+      large. They were drawn in a TextView, which is scrollable and therefore
+      has a minimum height of zero, so inside a preferences group it collapsed;
+      a label measures the text it holds.
 - Fix: slacker-gui
     - the "nothing has been printed" notice no longer appears during kernel
       upgrades, when dracut is simply quiet while it builds the initrd. It now

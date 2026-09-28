@@ -1,18 +1,24 @@
 /* slacker-gui — libadwaita dark, with a restrained Slackware red accent. */
 
+/* Font sizes are RATIOS of the desktop's font (1em), never absolute points:
+   a window that pins 9pt stays 9pt however large the user set their font, and
+   that is what made parts of this window unreadable on some screens while the
+   rest scaled. Ctrl and the wheel (see zoom.rs) then scales the whole window
+   from here, because every size below follows the inherited one. */
+
 @define-color accent_bg_color #b8262b;
 @define-color accent_fg_color #ffffff;
 @define-color accent_color #ff8a84;
 @define-color slk_purple #c47fd5;
 
 /* ---- sidebar ---- */
-.brand { font-weight: 800; font-size: 13pt; letter-spacing: 0.02em; }
-.brand-mark { color: @accent_color; font-size: 11pt; }
+.brand { font-weight: 800; font-size: 1.3em; letter-spacing: 0.02em; }
+.brand-mark { color: @accent_color; font-size: 1.1em; }
 .navigation-sidebar row { min-height: 40px; }
 .nav-row { padding: 0 4px; }
 .sidebar-footer {
   padding: 10px 16px;
-  font-size: 8.5pt;
+  font-size: 0.85em;
   font-family: monospace;
   opacity: 0.45;
 }
@@ -40,8 +46,8 @@
 .hero.good .hero-icon { color: @success_color; }
 .hero.attention .hero-icon { color: @accent_color; }
 .hero.bad .hero-icon { color: @error_color; }
-.hero-caption { font-size: 8.5pt; font-weight: 800; letter-spacing: 0.12em; opacity: 0.6; }
-.hero-title { font-size: 19pt; font-weight: 800; }
+.hero-caption { font-size: 0.85em; font-weight: 800; letter-spacing: 0.12em; opacity: 0.6; }
+.hero-title { font-size: 1.9em; font-weight: 800; }
 .hero-note { color: @warning_color; }
 .step-chip {
   padding: 5px 12px;
@@ -58,8 +64,8 @@
   border-radius: 14px;
   background-color: alpha(currentColor, 0.05);
 }
-.stat-value { font-size: 18pt; font-weight: 800; font-feature-settings: "tnum"; }
-.stat-label { font-size: 9pt; opacity: 0.6; }
+.stat-value { font-size: 1.8em; font-weight: 800; font-feature-settings: "tnum"; }
+.stat-label { font-size: 0.9em; opacity: 0.6; }
 
 /* ---- rows ---- */
 .icon-tile {
@@ -79,7 +85,7 @@
 .tag {
   padding: 3px 10px;
   border-radius: 999px;
-  font-size: 8.5pt;
+  font-size: 0.85em;
   font-weight: 700;
   background-color: alpha(currentColor, 0.10);
 }
@@ -103,7 +109,7 @@ button.pill-button { border-radius: 999px; padding-left: 16px; padding-right: 16
 entry.search-hero {
   min-height: 48px;
   border-radius: 14px;
-  font-size: 12pt;
+  font-size: 1.2em;
   padding-left: 14px;
 }
 .caption.error { color: @error_color; }
@@ -113,17 +119,22 @@ entry.search-hero {
   border-radius: 14px;
   background-color: alpha(black, 0.30);
   box-shadow: inset 0 0 0 1px alpha(currentColor, 0.06);
+  padding: 14px 16px;
+}
+.terminal-text {
+  font-family: monospace;
+  font-size: 0.95em;
 }
 textview.terminal, textview.terminal > text {
   background-color: transparent;
-  font-size: 9.5pt;
+  font-size: 0.95em;
 }
 .command-line {
   margin-top: 6px;
   padding: 10px 14px;
   border-radius: 10px;
   font-family: monospace;
-  font-size: 9.5pt;
+  font-size: 0.95em;
   background-color: alpha(black, 0.28);
 }
 .tx-body { padding: 4px 16px 0 16px; }
@@ -161,4 +172,4 @@ button.pill-button.destructive-action:hover {
 .menu-note { margin: 4px 10px 8px 10px; }
 
 /* rows whose title is a URL or path */
-.mono-title .title { font-family: monospace; font-size: 9.5pt; }
+.mono-title .title { font-family: monospace; font-size: 0.95em; }

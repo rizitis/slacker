@@ -13,6 +13,7 @@ use crate::output::terminal_view;
 use crate::pages::{self, Page};
 use crate::resolve;
 use crate::runner::Runner;
+use crate::zoom;
 
 pub fn build(app: &adw::Application) {
     let resolved = resolve::slacker_binary();
@@ -222,6 +223,24 @@ pub fn build(app: &adw::Application) {
         let about = gio::SimpleAction::new("about", None);
         about.connect_activate(move |_, _| show_about(&win));
         window.add_action(&about);
+    }
+
+    // Ctrl with the wheel, or with +, - and 0, scales this window. Both report
+    // the new size in a toast, so the change is legible even on a page with
+    // little text on it, and so the way back to the desktop's own size is
+    // visible once someone has zoomed.
+    {
+        let announce = {
+            let ctx = ctx.clone();
+            move |percent: i32| {
+                ctx.toast(&match percent {
+                    100 => "Font size: the desktop's own".to_string(),
+                    p => format!("Font size: {p}% of the desktop's"),
+                });
+            }
+        };
+        zoom::install_actions(app, announce.clone());
+        zoom::attach(&window, announce);
     }
 
     // Ctrl+F: go to Search.
