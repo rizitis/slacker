@@ -149,25 +149,28 @@ pub fn status_page(icon_name: &str, title: &str, description: &str) -> adw::Stat
         .build()
 }
 
-/// Output shown as-is, when there is nothing structured to show.
+/// A block of slacker's own output, shown as it was printed.
+///
+/// A label rather than a TextView: a TextView is scrollable, so its minimum
+/// height is zero, and inside a preferences group (which gives a child its
+/// minimum) it collapsed to a sliver that clipped the text as soon as the
+/// desktop font grew. A label measures the text it holds, so the card is
+/// always as tall as what is in it, at any font size. The long command log
+/// keeps its TextView (see output.rs): that one is inside a scroller, which is
+/// what a TextView is for.
 pub fn raw_text(text: &str) -> gtk::Widget {
-    let buffer = gtk::TextBuffer::new(None);
-    buffer.set_text(text.trim_end());
-    let view = gtk::TextView::builder()
-        .buffer(&buffer)
-        .editable(false)
-        .cursor_visible(false)
-        .monospace(true)
-        .wrap_mode(gtk::WrapMode::WordChar)
-        .left_margin(16)
-        .right_margin(16)
-        .top_margin(14)
-        .bottom_margin(14)
+    let label = gtk::Label::builder()
+        .label(text.trim_end())
+        .xalign(0.0)
+        .yalign(0.0)
+        .selectable(true)
+        .wrap(true)
+        .wrap_mode(gtk::pango::WrapMode::WordChar)
         .build();
-    view.add_css_class("terminal");
+    label.add_css_class("terminal-text");
     let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
     frame.add_css_class("terminal-card");
-    frame.append(&view);
+    frame.append(&label);
     frame.upcast()
 }
 

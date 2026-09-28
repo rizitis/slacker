@@ -1,0 +1,8 @@
+ca-certificates
+perl
+curl
+cyrus-sasl
+git
+wget
+wget2
+protobuf

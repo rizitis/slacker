@@ -1,0 +1,10 @@
+include sbo_base
+gcc
+binutils
+glibc
+kernel-headers
+make
+pkgconf
+patch
+diffutils
+which

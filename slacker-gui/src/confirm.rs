@@ -23,7 +23,40 @@ const CONTEXT_LINES: usize = 400;
 
 /// How long output must stop on an unrecognised unfinished line before the
 /// window offers to stop answering.
-const QUIET: std::time::Duration = std::time::Duration::from_secs(3);
+///
+/// Two waits, because going quiet means two very different things. A line that
+/// READS like a question and then stops is worth mentioning quickly. Anything
+/// else — a counter, the row of dots dracut prints while it builds an initrd,
+/// a hook that thinks for a while — is just work in progress, and minutes of
+/// silence there are normal. One short wait for everything was the reason this
+/// notice kept appearing during kernel upgrades, when nothing was wrong.
+const QUIET_QUESTION: std::time::Duration = std::time::Duration::from_secs(6);
+const QUIET_OTHER: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Does this unfinished line read like something waiting for an answer?
+///
+/// A prompt ends where the cursor should be: after a question mark, a colon,
+/// an arrow, or an option list such as `[y/N]`. Progress output ends in dots,
+/// a percentage, a slash. `Building module(s)` deliberately does NOT count:
+/// only a bracket holding y/n-style options does, not any bracket.
+fn looks_like_question(line: &str) -> bool {
+    let t = line.trim_end();
+    let Some(last) = t.chars().last() else {
+        return false;
+    };
+    match last {
+        '?' | ':' | '>' => true,
+        ']' | ')' => {
+            let open = if last == ']' { '[' } else { '(' };
+            let Some(i) = t.rfind(open) else { return false };
+            let inner = &t[i + open.len_utf8()..t.len() - last.len_utf8()];
+            let yes_no_ish = |c: char| matches!(c.to_ascii_lowercase(), 'y' | 'n' | 'a' | 'q');
+            inner.contains('/') && inner.chars().all(|c| c.is_ascii_alphabetic() || c == '/')
+                || (inner.chars().count() == 1 && inner.chars().all(yes_no_ish))
+        }
+        _ => false,
+    }
+}
 
 /// Shows `dialog` and runs `then` if the user picked `response`.
 ///
@@ -133,6 +166,8 @@ impl Asker {
         while let Some(c) = self.area.first_child() {
             self.area.remove(&c);
         }
+        // Back to the accent panel a real question wears.
+        self.area.remove_css_class("notice");
         self.area.set_visible(false);
     }
 
@@ -305,14 +340,20 @@ impl Asker {
         });
     }
 
-    /// Output stopped on a line that is not one of the known questions.
+    /// Output stopped on a line that is not one of the known questions. This is
+    /// a note, not an alarm: work that goes quiet (building an initrd, a slow
+    /// hook) looks exactly like this from outside, so it says what it sees and
+    /// leaves the judgement, and the action, to the person watching.
     fn unrecognised(&self, line: &str) {
         self.clear();
+        self.area.add_css_class("notice");
         let l = gtk::Label::builder()
             .label(format!(
-                "slacker has printed nothing for a few seconds, and its last line is not a question this \
-                 window knows:\n\u{201c}{}\u{201d}\nIf it is waiting for an answer, stop answering: every \
-                 question it asks from now on gets slacker\u{2019}s own default, which never installs, upgrades or removes a package and never writes a setting.",
+                "Nothing has been printed for a while. The last line is:\n\u{201c}{}\u{201d}\n\
+                 That is usually fine, some steps are quiet for a long time while they work. \
+                 If it looks stuck on a question this window cannot answer, you can stop \
+                 answering: from then on every question takes slacker\u{2019}s own default, \
+                 which never installs, upgrades or removes a package and never changes a setting.",
                 line.trim()
             ))
             .xalign(0.0)
@@ -450,7 +491,12 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
                             // a question from a newer slacker. Offer a way out
                             // only if nothing follows it for a while.
                             let (a, g, line) = (asker.clone(), generation.clone(), text.to_string());
-                            glib::timeout_add_local_once(QUIET, move || {
+                            let wait = if looks_like_question(text) {
+                                QUIET_QUESTION
+                            } else {
+                                QUIET_OTHER
+                            };
+                            glib::timeout_add_local_once(wait, move || {
                                 if g.get() == now && a.input.is_open() && a.showing.borrow().is_none() {
                                     a.unrecognised(&line);
                                 }
@@ -513,5 +559,31 @@ mod tests {
     fn option_labels_read_as_buttons() {
         assert_eq!(capitalise("skip-all"), "Skip-all");
         assert_eq!(capitalise(""), "");
+    }
+
+    #[test]
+    fn a_prompt_is_told_apart_from_work_in_progress() {
+        // Waiting for an answer: the short wait applies.
+        for line in [
+            "Proceed with the upgrade? [Y/n] ",
+            "Enter a number to revert to (or [n] to cancel): ",
+            "Keep, Overwrite, Skip? (k/o/s)",
+            "slacker> ",
+        ] {
+            assert!(looks_like_question(line), "should read as a question: {line:?}");
+        }
+
+        // Work in progress: quiet here is normal, so the long wait applies.
+        // The dracut line is the one that kept raising a false alarm during
+        // kernel upgrades, both while the dots accumulate and before they do.
+        for line in [
+            "Building module(s)............",
+            "Building module(s)",
+            "  downloading kernel-generic-6.12.8-x86_64-1.txz  57%",
+            "dracut[I]: *** Creating image file '/boot/initrd.img.tmp' ***",
+            "",
+        ] {
+            assert!(!looks_like_question(line), "should read as progress: {line:?}");
+        }
     }
 }

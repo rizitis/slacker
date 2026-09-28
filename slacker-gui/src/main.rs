@@ -16,6 +16,7 @@ mod resolve;
 mod runner;
 mod widgets;
 mod window;
+mod zoom;
 
 #[cfg(test)]
 mod install_tests;
@@ -54,6 +55,10 @@ fn main() -> glib::ExitCode {
         gtk::Window::set_default_icon_name(APP_ID);
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::PreferDark);
         load_style();
+        if let Some(display) = gdk::Display::default() {
+            // After load_style: the zoom sheet sits above the application one.
+            zoom::init(&display);
+        }
     });
     // GApplication already makes the app unique per session: a second
     // `slacker-gui` (desktop entry, terminal, another workspace) finds the

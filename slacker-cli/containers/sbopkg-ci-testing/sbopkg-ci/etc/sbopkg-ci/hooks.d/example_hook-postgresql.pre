@@ -1,0 +1,9 @@
+#!/bin/bash
+# Example pre-hook: /etc/sbopkg/hooks.d/postgresql.pre
+# (with AUTO_USERS=yes this usually isn't needed - the README lines are
+# picked up automatically - but hooks give you full explicit control)
+getent group postgres >/dev/null  || groupadd -g 209 postgres
+getent passwd postgres >/dev/null || useradd -u 209 -g 209 -d /var/lib/pgsql -s /bin/sh postgres
+mkdir -p /var/lib/pgsql
+chown postgres:postgres /var/lib/pgsql
+chmod 700 /var/lib/pgsql
