@@ -1,3 +1,15 @@
+
+- Update: slacker-cli
+    - after perl changes version, slacker lists the installed packages
+      still living in the old perl tree, so you know what needs rebuilding.
+- Update: slacker-gui
+    - the transaction window gives the command output the room it needs while
+      a question is on screen; a question's options are laid out side by side.
+    - headings and captions now follow the desktop font size (and the window
+      zoom) like the rest of the window, instead of staying at the fixed point
+      sizes libadwaita gives them.
+---
+
 Version Beta-2 0.12.1
 =====
 - NOTE: slacker-cli (v0.12.1) has no changes, this version has fixes for slacker-gui only(vBeta_2).

@@ -1962,6 +1962,129 @@ fn kernel_bootloader_hint(x86: bool) -> &'static str {
     }
 }
 
+/// The version out of a `version-arch-build` triple, the shape `PlanItem::from`
+/// holds. Split from the RIGHT: a Slackware version never contains a dash, but
+/// reading from the left would still break on the day one does.
+fn version_of_triple(triple: &str) -> Option<&str> {
+    let mut parts = triple.rsplitn(3, '-');
+    let _build = parts.next()?;
+    let _arch = parts.next()?;
+    parts.next().filter(|v| !v.is_empty())
+}
+
+/// `(old, new)` when a plan moves `perl` to a DIFFERENT version.
+///
+/// Perl looks for modules in directories named after its own version
+/// (`/usr/lib64/perl5/site_perl/5.40.2/…`), so a version change leaves
+/// everything built against the old one off the path. A rebuild of the same
+/// version (a build bump) moves no directory and needs no rebuilds, so it is
+/// not reported: a reminder that fires when nothing is wrong teaches people to
+/// ignore reminders.
+fn perl_upgrade_versions(plan: &[PlanItem]) -> Option<(String, String)> {
+    let it = plan.iter().find(|it| it.pkg.id.name == "perl")?;
+    let old = version_of_triple(it.from.as_deref()?)?;
+    let new = it.pkg.id.version.as_str();
+    (old != new).then(|| (old.to_string(), new.to_string()))
+}
+
+/// True for a line of a package's file list that names a file inside perl's
+/// directory for `version`: the core, vendor and site trees all carry the
+/// version as a path component under `perl5/`.
+fn is_perl_version_file(line: &str, version: &str) -> bool {
+    line.contains("perl5/") && line.contains(&format!("/{version}/"))
+}
+
+/// Installed packages that still own files under perl's OLD version directory
+/// — that is, exactly the ones this perl will no longer find. Returns at most
+/// `limit` names plus the total, so the caller can say "and N more".
+///
+/// The file lists in /var/log/packages are the only source needed: no network,
+/// no repo metadata, and it works for packages built by hand as well as for
+/// anything installed from a repo.
+fn packages_with_perl_version_files(
+    pkg_db_dir: &std::path::Path,
+    version: &str,
+    limit: usize,
+) -> (Vec<String>, usize) {
+    use std::io::BufRead;
+    let mut names: Vec<String> = Vec::new();
+    let mut total = 0usize;
+    let Ok(rd) = std::fs::read_dir(pkg_db_dir) else {
+        return (names, total);
+    };
+    for ent in rd.flatten() {
+        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let Ok(file) = std::fs::File::open(ent.path()) else {
+            continue;
+        };
+        let hit = std::io::BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .any(|l| is_perl_version_file(&l, version));
+        if hit {
+            total += 1;
+            if names.len() < limit {
+                names.push(ent.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    names.sort();
+    (names, total)
+}
+
+/// How many affected packages the reminder names before summarising the rest.
+const PERL_REBUILD_SHOW: usize = 15;
+
+/// After a plan that moved perl to a new version, say which installed packages
+/// were left behind in the old version's directory.
+///
+/// Slackware upgrades its own perl modules in the same run, so what remains is
+/// almost always what the admin built: SlackBuilds, CPAN, anything local. No-op
+/// when perl did not change version.
+fn perl_rebuild_reminder(pkg_db_dir: &std::path::Path, plan: &[PlanItem]) {
+    let Some((old, new)) = perl_upgrade_versions(plan) else {
+        return;
+    };
+    println!();
+    println!(
+        "{}",
+        ui::yellow(&format!("/// !!!! --- Perl {old} was upgraded to {new}. ---- !!!! ///"))
+    );
+    println!(
+        "  {}",
+        ui::white(
+            "Perl only looks for modules in directories named after its own version, so anything \
+             built against the old one is no longer on its path."
+        )
+    );
+    let (names, total) = packages_with_perl_version_files(pkg_db_dir, &old, PERL_REBUILD_SHOW);
+    if total == 0 {
+        println!(
+            "  {}",
+            ui::dim("Nothing installed still has files under the old version, so there is nothing to rebuild.")
+        );
+        return;
+    }
+    println!(
+        "  {}",
+        ui::dim(&format!(
+            "{total} installed package(s) still have files under perl {old}:"
+        ))
+    );
+    for n in &names {
+        println!("    {}", ui::white(n));
+    }
+    if total > names.len() {
+        println!("    {}", ui::dim(&format!("... and {} more", total - names.len())));
+    }
+    println!(
+        "  {}",
+        ui::dim("Rebuild and reinstall the ones you use (their SlackBuild, sbopkg, cpan); slacker does not build packages.")
+    );
+}
+
 /// Detect the Slackware release a repo URL targets, for the release-mismatch
 /// guard. First the precise `slackware{arch}-<suffix>` segment (official tree /
 /// conraid); failing that, a bare `current` segment or a clean `X.Y` version
@@ -2176,6 +2299,7 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
             InstallAction::Reinstall => system::reinstall(&it.dest)?,
         }
         kernel_reboot_reminder(plan);
+        perl_rebuild_reminder(&cfg.pkg_db_dir, plan);
         return Ok(());
     }
 
@@ -2216,6 +2340,7 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
 
     report_batch_failures(plan.len(), installed, &dl_failed, &install_failed);
     kernel_reboot_reminder(plan);
+    perl_rebuild_reminder(&cfg.pkg_db_dir, plan);
     Ok(())
 }
 
@@ -11034,6 +11159,94 @@ mod collect_tests {
         assert!(!is_kernel_pkg("bash"));
         // Slackware ARM: kernel_<platform>, underscore, no flavour suffix.
         assert!(is_kernel_pkg("kernel_armv8"));
+    }
+
+    #[test]
+    fn perl_files_are_recognised_by_their_version_directory() {
+        assert!(is_perl_version_file(
+            "usr/lib64/perl5/site_perl/5.40.2/x86_64-linux-thread-multi/DBI.pm",
+            "5.40.2"
+        ));
+        assert!(is_perl_version_file("usr/lib64/perl5/5.40.2/CORE/perl.h", "5.40.2"));
+        assert!(is_perl_version_file(
+            "usr/lib/perl5/vendor_perl/5.40.2/Try/Tiny.pm",
+            "5.40.2"
+        ));
+        // The new version's files are not what we are looking for.
+        assert!(!is_perl_version_file(
+            "usr/lib64/perl5/site_perl/5.42.0/x86_64-linux-thread-multi/DBI.pm",
+            "5.40.2"
+        ));
+        // A version-shaped directory outside perl is not perl's.
+        assert!(!is_perl_version_file("usr/share/foo/5.40.2/data", "5.40.2"));
+        assert!(!is_perl_version_file("usr/bin/perl", "5.40.2"));
+    }
+
+    #[test]
+    fn the_version_comes_out_of_a_version_arch_build_triple() {
+        assert_eq!(version_of_triple("5.40.2-x86_64-1"), Some("5.40.2"));
+        assert_eq!(version_of_triple("1.2.3-x86_64-2_SBo"), Some("1.2.3"));
+        // A dash inside the version survives, because the split is from the right.
+        assert_eq!(version_of_triple("2.4-r1-x86_64-1"), Some("2.4-r1"));
+        assert_eq!(version_of_triple("nonsense"), None);
+        assert_eq!(version_of_triple("-x86_64-1"), None);
+    }
+
+    #[test]
+    fn only_a_change_of_perl_version_is_reported() {
+        let item = |nv: &str, from: Option<&str>| PlanItem {
+            pkg: av(nv, "slackware"),
+            action: InstallAction::Upgrade,
+            dep_for: None,
+            from: from.map(str::to_string),
+        };
+        // A new version: both sides are reported, old first.
+        let plan = vec![item("perl-5.42.0-x86_64-1", Some("5.40.2-x86_64-1"))];
+        assert_eq!(perl_upgrade_versions(&plan), Some(("5.40.2".into(), "5.42.0".into())));
+        // A rebuild of the same version moves no directory: nothing to say.
+        let plan = vec![item("perl-5.42.0-x86_64-2", Some("5.42.0-x86_64-1"))];
+        assert_eq!(perl_upgrade_versions(&plan), None);
+        // A first install has nothing to have been built against.
+        let plan = vec![item("perl-5.42.0-x86_64-1", None)];
+        assert_eq!(perl_upgrade_versions(&plan), None);
+        // Another package's version change is not perl's.
+        let plan = vec![item("python3-3.13.1-x86_64-1", Some("3.12.7-x86_64-1"))];
+        assert_eq!(perl_upgrade_versions(&plan), None);
+    }
+
+    #[test]
+    fn only_packages_left_in_the_old_perl_tree_are_named() {
+        // A unique directory per process: package records are also written by
+        // root during a build, and a fixed /tmp path would collide.
+        let dir = std::env::temp_dir().join(format!("slacker_perl_db_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = |name: &str, files: &str| {
+            std::fs::write(dir.join(name), format!("PACKAGE NAME: {name}\nFILE LIST:\n{files}"))
+                .unwrap()
+        };
+        record("perl-DBI-1.645-x86_64-1_SBo", "usr/lib64/perl5/site_perl/5.40.2/DBI.pm\n");
+        record("perl-Try-Tiny-0.32-x86_64-1_SBo", "usr/lib64/perl5/site_perl/5.40.2/Try/Tiny.pm\n");
+        record("perl-5.42.0-x86_64-1", "usr/lib64/perl5/5.42.0/CORE/perl.h\n");
+        record("bash-5.2.37-x86_64-1", "bin/bash\n");
+
+        let (names, total) = packages_with_perl_version_files(&dir, "5.40.2", 15);
+        assert_eq!(total, 2, "{names:?}");
+        assert_eq!(
+            names,
+            vec![
+                "perl-DBI-1.645-x86_64-1_SBo".to_string(),
+                "perl-Try-Tiny-0.32-x86_64-1_SBo".to_string()
+            ]
+        );
+
+        // The cap reports the total and returns only as many names as asked.
+        let (few, total) = packages_with_perl_version_files(&dir, "5.40.2", 1);
+        assert_eq!((few.len(), total), (1, 2));
+
+        // A version nothing owns finds nothing at all.
+        assert_eq!(packages_with_perl_version_files(&dir, "5.36.0", 15).1, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

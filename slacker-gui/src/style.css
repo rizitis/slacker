@@ -11,6 +11,27 @@
 @define-color accent_color #ff8a84;
 @define-color slk_purple #c47fd5;
 
+/* ---- typography ---- */
+
+/* libadwaita pins its own typography classes to absolute point sizes: .heading
+   is 11pt, .title-1 20pt, .caption 9pt, and so on, a scale anchored to the
+   font GNOME ships rather than to the one the user set. Everything else here
+   is a ratio of the desktop's font, so the moment someone picks a larger font
+   (or zooms with Ctrl) the pinned ones stay where they are and the hierarchy
+   turns upside down: "What to do" ends up smaller than the paragraph it
+   introduces, and smaller than the rows under it.
+
+   These are that same scale written as ratios of the desktop font, so a title
+   keeps its place above its text at any size. The numbers are libadwaita's own
+   points over a 10pt base, which is what the rest of this file was written
+   against, so at a normal desktop font nothing moves. */
+.large-title { font-size: 2.4em; }
+.title-1 { font-size: 2em; }
+.title-2, .title-3 { font-size: 1.5em; }
+.title-4 { font-size: 1.3em; }
+.heading, .body, listview > header { font-size: 1.1em; }
+.caption, .caption-heading { font-size: 0.9em; }
+
 /* ---- sidebar ---- */
 .brand { font-weight: 800; font-size: 1.3em; letter-spacing: 0.02em; }
 .brand-mark { color: @accent_color; font-size: 1.1em; }
@@ -151,6 +172,15 @@ textview.terminal, textview.terminal > text {
   background-color: alpha(@accent_bg_color, 0.12);
   box-shadow: inset 0 0 0 1px alpha(@accent_bg_color, 0.35);
 }
+
+/* One answer to a question, as a card. The word sits on top and slacker's own
+   explanation under it, both aligned left, so a row of them reads as a row of
+   answers rather than as a toolbar. */
+.option-card {
+  padding: 10px 14px;
+  border-radius: 10px;
+}
+.option-card label.dim-label { font-size: 0.9em; }
 
 /* "Nothing has been printed for a while" is an observation, not a question and
    not a fault: a neutral surface, so it does not read like an alarm. */

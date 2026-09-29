@@ -33,6 +33,26 @@ const CONTEXT_LINES: usize = 400;
 const QUIET_QUESTION: std::time::Duration = std::time::Duration::from_secs(6);
 const QUIET_OTHER: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// What the command output asks for, and the least it will come down to.
+///
+/// These are not a split of the dialog: the output asks for OUTPUT_WANTED and
+/// keeps every pixel left over after the question, so a tall window simply
+/// gives it more. It comes down towards OUTPUT_LEAST only on a window too
+/// short for both — and the question is the one that must stay whole there,
+/// because it carries the answer being asked for, while the output still
+/// scrolls.
+const OUTPUT_WANTED: i32 = 260;
+const OUTPUT_LEAST: i32 = 120;
+
+/// Options of a choice per row. Two keeps each card wide enough for its
+/// explanation to stay on one line at the sizes a dialog is normally opened at.
+const OPTION_COLUMNS: usize = 2;
+
+/// The room the "nothing has been printed for a while" paragraph is given, and
+/// where it starts to scroll instead of growing.
+const NOTICE_TEXT_MIN: i32 = 100;
+const NOTICE_TEXT_MAX: i32 = 200;
+
 /// Does this unfinished line read like something waiting for an answer?
 ///
 /// A prompt ends where the cursor should be: after a question mark, a colon,
@@ -218,32 +238,67 @@ impl Asker {
         });
     }
 
+    /// The options are laid out as cards, two to a row, instead of one tall
+    /// column.
+    ///
+    /// A conflict question has four options; stacked, they push the command
+    /// output — the part being read in order to decide — down to a slit. Two
+    /// to a row they take half the height, and that half goes back to the
+    /// output. Each card carries its own explanation, which wraps to as many
+    /// lines as the width it is given needs.
     fn choice(&self, heading: Option<&str>, options: &[prompt::Opt]) {
         if let Some(h) = heading {
             self.heading(h);
         }
-        let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
-        list.add_css_class("boxed-list");
+        let columns = options.len().min(OPTION_COLUMNS).max(1);
+        let rows = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let mut row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let mut first_default = None;
-        for o in options {
-            let row = adw::ActionRow::builder()
-                .use_markup(false)
-                .title(capitalise(&o.label))
-                .subtitle(&o.detail)
-                .activatable(true)
-                .build();
+        for (i, o) in options.iter().enumerate() {
+            if i % columns == 0 {
+                row = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Horizontal)
+                    .spacing(8)
+                    .homogeneous(true)
+                    .build();
+                rows.append(&row);
+            }
+            let title = gtk::Label::builder().label(capitalise(&o.label)).xalign(0.0).build();
+            title.add_css_class("heading");
+            let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            top.append(&title);
             if o.default {
                 let tag = gtk::Label::new(Some("default"));
                 tag.add_css_class("tag");
                 tag.set_valign(gtk::Align::Center);
-                row.add_suffix(&tag);
-                first_default.get_or_insert(row.clone());
+                top.append(&tag);
+            }
+            let detail = gtk::Label::builder()
+                .label(&o.detail)
+                .xalign(0.0)
+                .wrap(true)
+                .wrap_mode(gtk::pango::WrapMode::WordChar)
+                .build();
+            detail.add_css_class("dim-label");
+            let inner = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            inner.append(&top);
+            inner.append(&detail);
+            let card = gtk::Button::builder().child(&inner).build();
+            card.add_css_class("card");
+            card.add_css_class("option-card");
+            if o.default {
+                first_default.get_or_insert(card.clone());
             }
             let (a, key) = (self.clone(), o.key.clone());
-            row.connect_activated(move |_| a.answer(&key));
-            list.append(&row);
+            card.connect_clicked(move |_| a.answer(&key));
+            row.append(&card);
         }
-        self.area.append(&list);
+        // A last row that is not full is padded, so its cards keep the width
+        // the rows above gave theirs instead of stretching to fill it.
+        for _ in options.len()..options.len().next_multiple_of(columns) {
+            row.append(&gtk::Box::new(gtk::Orientation::Horizontal, 0));
+        }
+        self.area.append(&rows);
         if let Some(r) = first_default {
             glib::idle_add_local_once(move || {
                 r.grab_focus();
@@ -360,6 +415,17 @@ impl Asker {
             .wrap(true)
             .build();
         l.add_css_class("dim-label");
+        // A paragraph that wraps is the one thing here whose height is not
+        // known until it is drawn, and the button under it must stay reachable
+        // whatever that height turns out to be. In its own scroller the text
+        // gives way instead of pushing the button out of the panel.
+        let text = gtk::ScrolledWindow::builder()
+            .child(&l)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .min_content_height(NOTICE_TEXT_MIN)
+            .max_content_height(NOTICE_TEXT_MAX)
+            .build();
         let stop = gtk::Button::with_label("Stop Answering");
         stop.add_css_class("pill");
         stop.set_halign(gtk::Align::End);
@@ -368,7 +434,7 @@ impl Asker {
             a.clear();
             a.input.close();
         });
-        self.area.append(&l);
+        self.area.append(&text);
         self.area.append(&stop);
         self.area.set_visible(true);
     }
@@ -414,10 +480,24 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
     bottom.add_css_class("tx-bottom");
     bottom.append(&close);
 
+    // The output and the question share the dialog, and a question with several
+    // options is tall. Left to themselves the two fight over the same pixels
+    // and the output loses, which is the half being read in order to answer.
+    // So the two are given different claims on the height instead of a fixed
+    // split: the question asks for exactly what it needs and is never made
+    // smaller, the output asks for OUTPUT_WANTED and takes everything left
+    // over on top of that, and only where even that will not fit does it come
+    // down towards OUTPUT_LEAST. Nothing to drag and nothing to configure: the
+    // same three numbers lay the dialog out at any window size or font size.
+    let output = terminal_view(&buffer);
+    output.set_min_content_height(OUTPUT_LEAST);
+    output.set_max_content_height(OUTPUT_WANTED);
+    output.set_propagate_natural_height(true);
+
     let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
     body.add_css_class("tx-body");
     body.append(&status_row);
-    body.append(&terminal_view(&buffer));
+    body.append(&output);
     body.append(&area);
 
     let header = adw::HeaderBar::builder()
@@ -431,8 +511,8 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
 
     let dialog = adw::Dialog::builder()
         .title(&action.title)
-        .content_width(980)
-        .content_height(700)
+        .content_width(1040)
+        .content_height(820)
         .can_close(false)
         .child(&view)
         .build();

@@ -25,7 +25,7 @@ VERIFY="$CWD/slacker-vendor-verify.py"
 PRGNAM=slacker
 VERSION=$(awk -F'"' '/^version/ {print $2; exit}' "$CLI_SRC"/Cargo.toml)
 VERSION2=$(awk -F'"' '/^version/ {print $2; exit}' "$GUI_SRC"/Cargo.toml)
-BUILD=${BUILD:-2}
+BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
 
