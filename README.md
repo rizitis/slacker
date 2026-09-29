@@ -127,9 +127,14 @@ report what you find:
 - NOTE: That this project it cannot succeed if it remains the work of one person, no matter how well-made it is.
   So do it, try slacker, and if you like it get involved, take project and make it better...
 
-> **Note:** GitHub repository is a **read-only mirror**. Development happens
-> upstream at <https://forge.slackware.nl/rizitis/slacker>. You may open **issues** there, download releases,
+> **Note:** GitHub repository is a **read-only mirror**. Development happens  
+>
+> upstream at <https://forge.slackware.nl/rizitis/slacker>.  
+
+> You may open **issues** there, download releases,
 > but send any **patches upstream**.
+>
+> **aarch64** binaries are signed by @n4t3r , was kind enough to test and build them. (only on <https://forge.slackware.nl/rizitis/slacker>) 
 
 ---
 
