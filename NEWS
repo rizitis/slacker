@@ -2,7 +2,7 @@ Version Beta 0.12.2
 =====
 - Notes:
     - From now on the development for `x86_64` and `i686` will happen to "developing" branch
-      main branch will be there only for `Cutting a Release` and always will be sync with latest pre-release for current.
+      main branch will be there only for `Cutting a Release`.
       `aarch64` has its own independent branch for developing and releases thanks to @n4t3r.
     - A new source tarball (slacker-version.tar.gz) will be added on release page for packagers.
       This tarball will include only what a packager need for build and package slacker from main branch.
