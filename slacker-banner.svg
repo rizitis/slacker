@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="slacker - slackpkg plus slackpkg+ in one, written in Rust">
+  <rect x="0" y="0" width="1200" height="320" rx="18" fill="#0d1117"/>
+  <rect x="1.5" y="1.5" width="1197" height="317" rx="16.5" fill="none" stroke="#30363d" stroke-width="3"/>
+
+  <!-- priority-stack motif: repos stacked by priority (grey - green - blue), one frozen (black) -->
+  <g>
+    <rect x="80"  y="96"  width="300" height="30" rx="6" fill="#161b22" stroke="#6e7781" stroke-width="2"/>
+    <rect x="80"  y="136" width="240" height="30" rx="6" fill="#161b22" stroke="#2ea043" stroke-width="2"/>
+    <rect x="80"  y="176" width="180" height="30" rx="6" fill="#161b22" stroke="#1f6feb" stroke-width="2"/>
+    <rect x="80"  y="216" width="120" height="30" rx="6" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+    <text x="92" y="116" font-family="monospace" font-size="14" fill="#8b949e">100  slackware</text>
+    <text x="92" y="156" font-family="monospace" font-size="14" fill="#2ea043">90   extras</text>
+    <text x="92" y="196" font-family="monospace" font-size="14" fill="#1f6feb">80   conraid</text>
+    <text x="92" y="236" font-family="monospace" font-size="14" fill="#6e7781">60   alienbob</text>
+  </g>
+
+  <!-- wordmark -->
+  <text x="470" y="150" font-family="'DejaVu Sans', Verdana, sans-serif" font-size="92" font-weight="700" fill="#e6edf3">slack<tspan fill="#1f6feb">er</tspan></text>
+  <text x="474" y="196" font-family="'DejaVu Sans', Verdana, sans-serif" font-size="26" fill="#8b949e">slackpkg <tspan fill="#2ea043">+</tspan> slackpkg+ in one &#183; written in Rust</text>
+
+  <!-- palette / status dots -->
+  <g>
+    <circle cx="478" cy="236" r="9" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+    <circle cx="506" cy="236" r="9" fill="#1f6feb"/>
+    <circle cx="534" cy="236" r="9" fill="#2ea043"/>
+    <circle cx="562" cy="236" r="9" fill="#6e7781"/>
+    <text x="586" y="241" font-family="monospace" font-size="15" fill="#6e7781">beta &#183; WIP &#183; Slackware64-current</text>
+  </g>
+</svg>

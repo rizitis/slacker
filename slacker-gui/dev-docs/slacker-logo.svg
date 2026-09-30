@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="490" height="300" viewBox="0 0 490 300" role="img" aria-label="slacker logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161b22"/>
+      <stop offset="1" stop-color="#0a0d12"/>
+    </linearGradient>
+    <radialGradient id="thread" gradientUnits="userSpaceOnUse" cx="96" cy="128" r="104">
+      <stop offset="0" stop-color="#ffb058"/>
+      <stop offset="0.34" stop-color="#f2862b"/>
+      <stop offset="0.62" stop-color="#9c6a39"/>
+      <stop offset="0.85" stop-color="#6b7480"/>
+      <stop offset="1" stop-color="#586472"/>
+    </radialGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffca7c"/>
+      <stop offset="1" stop-color="#ef7d18"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="0" stdDeviation="2" flood-color="#ff8a1e" flood-opacity="0.45"/>
+    </filter>
+    <filter id="panelShadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="5" stdDeviation="9" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="softText" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="1.4" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <rect x="7" y="7" width="476" height="286" rx="16" fill="url(#bg)" stroke="#2a313b" stroke-width="1.5" filter="url(#panelShadow)"/>
+  <rect x="9.5" y="9.5" width="471" height="281" rx="14" fill="none" stroke="#ffffff" stroke-opacity="0.05" stroke-width="1"/>
+
+  <g fill="none" stroke="#2c333d" stroke-width="1.1" opacity="0.75">
+    <rect x="34" y="24" width="124" height="210" rx="5"/>
+    <rect x="48" y="42" width="96"  height="174" rx="4"/>
+    <rect x="62" y="60" width="68"  height="138" rx="4"/>
+    <rect x="76" y="78" width="40"  height="102" rx="3"/>
+  </g>
+
+  <path d="M95,289 V232 H40 V30 H150 V222 H58 V48 H132 V205 H74 V64 H116 V188 H88 V82 H104 V128"
+        fill="none" stroke="url(#thread)" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+
+  <g filter="url(#glow)">
+    <path d="M95,121 L70,109 Q63,128 70,147 L95,135 Q88,128 95,121 Z" fill="#ffb45c"/>
+    <path d="M95,121 L120,109 Q127,128 120,147 L95,135 Q102,128 95,121 Z" fill="#ffb45c"/>
+    <rect x="93.4" y="104" width="3.2" height="48" rx="1.6" fill="#ffc070"/>
+    <circle cx="95" cy="128" r="3.1" fill="#ffd089"/>
+  </g>
+
+  <g filter="url(#softText)">
+    <text x="210" y="126" font-family="'DejaVu Sans Mono','Menlo','Consolas',monospace"
+          font-size="56" font-weight="700" letter-spacing="1" fill="url(#word)">slacker</text>
+  </g>
+  <text x="212" y="158" font-family="'DejaVu Sans Mono','Menlo','Consolas',monospace"
+        font-size="16" font-style="italic" fill="#99a3b1">one thread, no dead ends</text>
+  <text x="212" y="182" font-family="'DejaVu Sans Mono','Menlo','Consolas',monospace"
+        font-size="16" fill="#6a727e">binary packages &#183; v0.9.1</text>
+</svg>

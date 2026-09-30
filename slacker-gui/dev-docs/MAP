@@ -1,0 +1,68 @@
+Ο χάρτης του slacker-gui έχει τρία επίπεδα:
+1. τι εκτελείται
+2. τι διαβάζει την έξοδο του slacker
+3. τι δείχνει ο χρήστης.
+
+src/ - ο κορμός και οι μηχανισμοί
+Ό,τι δεν είναι ούτε σελίδα ούτε parser.
+
+main.rs: εκκίνηση, app id, έλεγχος για root, φόρτωμα CSS.
+window.rs: το παράθυρο, το sidebar, ο κατάλογος των σελίδων, το μενού, το Command Output.
+runner.rs: εκτέλεση του slacker, ουρά, ροή εξόδου, exit codes.
+commands.rs: ποια γραμμή εντολής τρέχει η κάθε ενέργεια και αν θέλει root. Το μοναδικό σημείο που ξέρει ονόματα εντολών και flags.
+confirm.rs: τα dialogs επιβεβαίωσης, τα preview και το transaction με τη ζωντανή έξοδο.
+edit.rs: τα dialogs που ζητούν στοιχεία από τον χρήστη (freeze, pin, priority).
+ctx.rs: ό,τι μοιράζονται οι σελίδες (runner, παράθυρο, toasts, ειδοποιήσεις αλλαγών).
+widgets.rs: τα κοινά κομμάτια UI (rows, tags, badges, status pages).
+output.rs: καθάρισμα ANSI και οι monospace προβολές.
+resolve.rs: εύρεση του binary του slacker.
+style.css, style-vars.css: εμφάνιση.
+install_tests.rs: έλεγχοι για τα αρχεία του data/.
+
+---
+
+src/pages/ - μία σελίδα του sidebar ανά αρχείο
+
+overview.rs (Doctor),
+search.rs,
+updates.rs,
+changelog.rs,
+packages.rs (Installed),
+repositories.rs,
+mirrors.rs,
+rules.rs (Frozen & Pins),
+history.rs,
+και το mod.rs που τις δηλώνει και ορίζει τη δομή Page.
+Κάθε σελίδα φτιάχνει widgets, καλεί τον runner και δείχνει αποτελέσματα. Δεν ερμηνεύει κείμενο.
+
+---
+
+src/parse/ - ένα αρχείο ανά εντολή του slacker
+status.rs,
+search.rs,
+repos.rs,
+updates.rs,
+history.rs,
+rules.rs,
+mirrors.rs,
+και το mod.rs.
+Μετατρέπουν το κείμενο του slacker σε δομές, με tests πάνω στα fixtures. Δεν έχουν καθόλου UI.
+
+---
+
+fixtures/ - πραγματική έξοδος του slacker, το συμβόλαιο των parsers. Τα tests τη διαβάζουν από εδώ.
+
+---
+
+data/ - ό,τι εγκαθίσταται δίπλα στο binary: το polkit policy, το .desktop, το doinst.sh, και το icons/ (τα PNG του hicolor και τα SVG πηγής).
+
+---
+
+Ο κανόνας για να μη χαθείς:
+μια σελίδα καλεί parser, ποτέ το αντίστροφο, και ο parser δεν ξέρει τίποτα από GTK.
+Μια καινούρια εντολή του slacker φέρνει συνήθως μια γραμμή στο commands.rs, ένα αρχείο στο src/parse/ με τα fixtures του, και ένα στο src/pages/.
+
+Δύο παγίδες με τα ονόματα:
+
+Υπάρχουν δύο mirrors.rs και δύο updates.rs, ένα σε κάθε φάκελο. Το pages δείχνει, το parse διαβάζει.
+Υπάρχουν τρία mod.rs: του pages, του parse, και κανένα στο src/, όπου τη δουλειά την κάνει το main.rs.
