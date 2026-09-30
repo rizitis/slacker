@@ -1,5 +1,0 @@
-include base
-include sbo_base
-tcl
-tk
-expect

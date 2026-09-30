@@ -1,4 +1,0 @@
-include base
-rust
-gcc-g++
-cmake

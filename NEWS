@@ -1,4 +1,16 @@
-
+Version Beta 0.12.2
+=====
+- Notes:
+    - From now on the development for `x86_64` and `i686` will happen to "developing" branch
+      main branch will be there only for `Cutting a Release`.
+      `aarch64` has its own independent branch for developing and releases thanks to @n4t3r.
+    - A new source tarball (slacker-version.tar.gz) will be added on release page for packagers.
+      This tarball will include only what a packager need for build and package slacker from main branch.
+      This tarball will created from `scripts/make-source.sh` script (added).
+    - @conraid offered to package slacker for slackware64-current. (thank you!)
+      We recommend that you activate his repository so that every time a new version is released,
+      it will be automatically downloaded in the updates.
+      This is also the best way to satisfy @danix #10's fair request without messing with the code just for slackware64-current :)
 - Update: slacker-cli
     - after perl changes version, slacker lists the installed packages
       still living in the old perl tree, so you know what needs rebuilding.

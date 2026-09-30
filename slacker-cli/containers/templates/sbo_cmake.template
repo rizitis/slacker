@@ -1,4 +1,0 @@
-# SBo cmake-template.SlackBuild: cmake + make (sets CMAKE_CXX_FLAGS)
-include sbo_base
-include cmake
-include cxx
