@@ -41,6 +41,33 @@ else
   LIBDIRSUFFIX=""
 fi
 
+# yes needed.
+echo "=============================================================="
+cat /etc/slackware-version
+echo "---------------------"
+cat /etc/os-release
+echo "=============================================================="
+
+while true; do
+    read -p "Θέλεις να συνεχίσεις; [Y/n]: " answer
+
+    case "$answer" in
+        ""|y|Y|yes|Yes|YES)
+            echo "Συνεχίζουμε..."
+            break
+            ;;
+
+        n|N|no|No|NO)
+            echo "Τερματισμός."
+            exit 1
+            ;;
+
+        *)
+            echo "Παρακαλώ απάντησε y/yes ή n/no."
+            ;;
+    esac
+done
+
 # Pick the right example configs for the running release (stable vs -current).
 DIR=stable
 grep -q '^VERSION_CODENAME=current$' /etc/os-release && DIR=current

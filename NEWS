@@ -14,6 +14,10 @@ Version Beta 0.12.2
 - Update: slacker-cli
     - after perl changes version, slacker lists the installed packages
       still living in the old perl tree, so you know what needs rebuilding.
+    - slacker now detects a running graphical session from the system itself
+      rather than from its own environment, so the "log out and use a console"
+      advice is correct when it runs under pkexec (slacker-gui), su or sudo,
+      which drop DISPLAY and WAYLAND_DISPLAY.
 - Update: slacker-gui
     - the transaction window gives the command output the room it needs while
       a question is on screen; a question's options are laid out side by side.

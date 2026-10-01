@@ -1388,9 +1388,72 @@ fn major_token(version: &str) -> Option<&str> {
         .map(|_| first)
 }
 
-/// Whether the process appears to run inside a graphical session.
+/// The kernel's table of unix sockets, and the flag it sets on the ones a
+/// process is listening on (SO_ACCEPTCON).
+const PROC_NET_UNIX: &str = "/proc/net/unix";
+const SO_ACCEPTCON: u32 = 0x1_0000;
+
+/// Whether a display server is running on this machine.
+///
+/// NOT "does this process have DISPLAY set". That is whatever the caller
+/// happened to hand us, and the ways slacker is normally started to change the
+/// system take it away: pkexec, which slacker-gui uses, resets the environment
+/// to a minimal safe set on purpose and drops DISPLAY and XAUTHORITY; `su -`
+/// drops everything; sudo keeps DISPLAY but not WAYLAND_DISPLAY. Asked that
+/// way, slacker told people upgrading from the GUI, in a window in front of
+/// them, that they were on a console.
+///
+/// So ask the kernel instead. A display server is a process listening on a
+/// well-known socket: X11 on `/tmp/.X11-unix/X<n>`, Wayland on
+/// `<runtime dir>/wayland-<n>`. Those come from the protocols themselves, not
+/// from a list of compositor names, so nothing here goes stale when a new
+/// compositor appears. `/proc/net/unix` names every bound socket and flags the
+/// ones something is listening on, which also tells a live server apart from
+/// the socket file a crashed one leaves behind. Reading a file changes nothing
+/// and cannot block, unlike connecting to the socket to see who answers.
+///
+/// The environment is still asked first: it is right whenever slacker does
+/// inherit the session, and it can only make this answer MORE cautious, never
+/// less.
 fn in_graphical_session() -> bool {
-    std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
+    if std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return true;
+    }
+    std::fs::read_to_string(PROC_NET_UNIX)
+        .map(|table| any_display_server_listening(&table))
+        .unwrap_or(false)
+}
+
+/// Looks through a `/proc/net/unix` table for a display server's socket. Kept
+/// apart from reading the file so it can be tested against captured tables.
+fn any_display_server_listening(table: &str) -> bool {
+    table.lines().any(|line| {
+        // Num RefCount Protocol Flags Type St Inode Path
+        let f: Vec<&str> = line.split_whitespace().collect();
+        let (Some(flags), Some(path)) = (f.get(3), f.get(7)) else {
+            return false;
+        };
+        let listening =
+            u32::from_str_radix(flags, 16).is_ok_and(|flags| flags & SO_ACCEPTCON != 0);
+        listening && is_display_socket(path)
+    })
+}
+
+/// True for the socket an X server or a Wayland compositor listens on. A
+/// leading `@` is ignored: an X server listens on both the filesystem socket
+/// and the abstract one, and either proves it is there. The runtime directory
+/// is not pinned to /run/user, because a system without elogind may put it
+/// elsewhere; the socket's own name is what identifies it.
+fn is_display_socket(path: &str) -> bool {
+    let path = path.strip_prefix('@').unwrap_or(path);
+    let numbered = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if let Some(display) = path.strip_prefix("/tmp/.X11-unix/X") {
+        return numbered(display);
+    }
+    path.rsplit('/')
+        .next()
+        .and_then(|name| name.strip_prefix("wayland-"))
+        .is_some_and(numbered)
 }
 
 /// After an upgrade plan is shown, advise doing the upgrade from a console when
@@ -11956,6 +12019,78 @@ mod foundational_tests {
         // Non-numeric (date/hash-style) versions have no major token.
         assert_eq!(major_token("20240101"), Some("20240101"));
         assert_eq!(major_token("git"), None);
+    }
+
+    /// Captured from a real /proc/net/unix, one socket per line:
+    /// Num RefCount Protocol Flags Type St Inode Path
+    #[test]
+    fn a_running_display_server_is_seen_in_the_kernel_socket_table() {
+        const HEAD: &str = "Num       RefCount Protocol Flags    Type St Inode Path\n";
+
+        // An X server: it listens on the filesystem socket and on the
+        // abstract one with the same name.
+        let x11 = format!(
+            "{HEAD}\
+             0000000059ef6a19: 00000002 00000000 00010000 0001 01   478 /tmp/.X11-unix/X0\n\
+             000000007144de2c: 00000002 00000000 00010000 0001 01   477 @/tmp/.X11-unix/X0\n"
+        );
+        assert!(any_display_server_listening(&x11));
+
+        let wayland = format!(
+            "{HEAD}\
+             0000000012ab34cd: 00000002 00000000 00010000 0001 01  9120 /run/user/1000/wayland-0\n"
+        );
+        assert!(any_display_server_listening(&wayland));
+
+        // A console: plenty of sockets, none of them a display server's. The
+        // cursor-shared file and the lock sit right next to a real one and
+        // must not be taken for it.
+        let console = format!(
+            "{HEAD}\
+             0000000000aa11bb: 00000003 00000000 00010000 0001 01   120 /run/dbus/system_bus_socket\n\
+             0000000000aa22bb: 00000002 00000000 00010000 0001 01   121 /run/user/1000/pipewire-0\n\
+             0000000000aa33bb: 00000002 00000000 00010000 0001 01   122 /run/user/1000/wayland-cursor-shared-Ab12Cd\n\
+             0000000000aa44bb: 00000002 00000000 00010000 0001 01   123 /run/user/1000/wayland-0.lock\n"
+        );
+        assert!(!any_display_server_listening(&console));
+
+        // What a crashed server leaves behind: the path is still bound, but
+        // nothing is listening on it (no SO_ACCEPTCON in the flags).
+        let stale = format!(
+            "{HEAD}\
+             0000000000cc11dd: 00000002 00000000 00000000 0001 01   130 /tmp/.X11-unix/X0\n"
+        );
+        assert!(!any_display_server_listening(&stale));
+
+        // The header alone, an empty file, and a short line are all "no".
+        assert!(!any_display_server_listening(HEAD));
+        assert!(!any_display_server_listening(""));
+        assert!(!any_display_server_listening("garbage\n"));
+    }
+
+    #[test]
+    fn display_sockets_are_told_apart_from_every_other_socket() {
+        for path in [
+            "/tmp/.X11-unix/X0",
+            "/tmp/.X11-unix/X11",
+            "@/tmp/.X11-unix/X0",
+            "/run/user/1000/wayland-0",
+            // A runtime directory somewhere else (no elogind) still counts.
+            "/tmp/runtime-alice/wayland-1",
+        ] {
+            assert!(is_display_socket(path), "should be a display socket: {path}");
+        }
+        for path in [
+            "/run/user/1000/wayland-0.lock",
+            "/run/user/1000/wayland-cursor-shared-Ab12Cd",
+            "/run/user/1000/pipewire-0",
+            "/run/user/1000/bus",
+            "/tmp/.X11-unix/Xorg",
+            "/run/dbus/system_bus_socket",
+            "",
+        ] {
+            assert!(!is_display_socket(path), "should not be a display socket: {path}");
+        }
     }
 
     #[test]
