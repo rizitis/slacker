@@ -87,6 +87,13 @@ slacker upgrade-all
 | [Status and Roadmap](https://forge.slackware.nl/rizitis/slacker/wiki/Status-and-Roadmap) | what works today, what is planned |
 | [The Emblem](https://forge.slackware.nl/rizitis/slacker/wiki/The-Emblem) | the labyrinth logo and where it comes from |
 
+> Thu Oct  1 20:38:10 EEST 2026
+> 
+> slacker is now available in [@conraid's](https://slackers.it/repository/slackware64-current/) repo.   
+> We suggest everyone use the version from his repo for Slackware64-current.
+> 
+> This way, whenever a new version of slacker is released, it can be easily found with slacker update
+
 ---
 
 ## slacker-gui -- GTK4/libadwaita front-end for slacker

@@ -49,21 +49,21 @@ cat /etc/os-release
 echo "=============================================================="
 
 while true; do
-    read -p "Θέλεις να συνεχίσεις; [Y/n]: " answer
+    read -p "Keep going?; [Y/n]: " answer
 
     case "$answer" in
         ""|y|Y|yes|Yes|YES)
-            echo "Συνεχίζουμε..."
+            echo "Continuing..."
             break
             ;;
 
         n|N|no|No|NO)
-            echo "Τερματισμός."
+            echo "STOP."
             exit 1
             ;;
 
         *)
-            echo "Παρακαλώ απάντησε y/yes ή n/no."
+            echo "Answer: y/yes or n/no."
             ;;
     esac
 done
@@ -195,9 +195,16 @@ cat $CWD/doinst.sh > $PKG/install/doinst.sh
 
 cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+
 sleep 1
-sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+if command -v sbopkglint >/dev/null 2>&1; then
+    sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+else
+    echo "skip cheks: sbopkglint not found."
+fi
+
 rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new /tmp/stockdb_test_*.txt
+
 
 #sleep 1
 #gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
