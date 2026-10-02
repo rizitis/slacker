@@ -1,3 +1,31 @@
+Version Beta 0.12.2
+=====
+- Notes:
+    - From now on the development for `x86_64` and `i686` will happen to "developing" branch
+      main branch will be there only for `Cutting a Release`.
+      `aarch64` has its own independent branch for developing and releases thanks to @n4t3r.
+    - A new source tarball (slacker-version.tar.gz) will be added on release page for packagers.
+      This tarball will include only what a packager need for build and package slacker from main branch.
+      This tarball will created from `scripts/make-source.sh` script (added).
+    - @conraid offered to package slacker for slackware64-current. (thank you!)
+      We recommend that you activate his repository so that every time a new version is released,
+      it will be automatically downloaded in the updates.
+      This is also the best way to satisfy @danix #10's fair request without messing with the code just for slackware64-current :)
+- Update: slacker-cli
+    - after perl changes version, slacker lists the installed packages
+      still living in the old perl tree, so you know what needs rebuilding.
+    - slacker now detects a running graphical session from the system itself
+      rather than from its own environment, so the "log out and use a console"
+      advice is correct when it runs under pkexec (slacker-gui), su or sudo,
+      which drop DISPLAY and WAYLAND_DISPLAY.
+- Update: slacker-gui
+    - the transaction window gives the command output the room it needs while
+      a question is on screen; a question's options are laid out side by side.
+    - headings and captions now follow the desktop font size (and the window
+      zoom) like the rest of the window, instead of staying at the fixed point
+      sizes libadwaita gives them.
+---
+
 Version Beta-2 0.12.1
 =====
 - NOTE: slacker-cli (v0.12.1) has no changes, this version has fixes for slacker-gui only(vBeta_2).
