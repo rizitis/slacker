@@ -672,7 +672,7 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "slacker"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "clap",
  "md-5",
