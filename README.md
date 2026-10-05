@@ -151,7 +151,7 @@ report what you find:
 * [Eric Hameleers](https://forge.slackware.nl/forgeadmin) - For hosting and maintain `https://forge.slackware.nl`(slacker`s home), slacker use his repos and packages.
 * [Darren Austin](https://slackware.uk/cumulative/) - For hosting slackware.uk, slacker use `https://slackware.uk/cumulative/` repo.
 * [Nathaniel Russell](https://forge.slackware.nl/n4t3r) - For `https://reddoglinux.ddns.net/` slacker use his repos and packages.
-* [Jay Lanagan](https://slackware.lngn.net/) - slacker use his repo and packages for current repo `https://slackware.lngn.net/pub/x86_64/slackware64-current/`
+* [Jay Lanagan](https://slackware.lngn.net/) - slacker use his repo and packages for current repo `https://slackware.lngn.net/` for aarch64 + x86_64
 * [Corrado Franco](https://forge.slackware.nl/conraid) - For requests and all the bug reports. slacker use his repo and packages for current.
 * [Willy Sudiarto Raharjo ](https://github.com/willysr) - slacker use his packages for MATE and Cinnamon hosted in `https://slackware.uk` for stable.
 * [Georgi Sotirov](https://sotirov-bg.net/slackpack/about.cgi?q=site) - slacker use his slackpack repos and packages for stable.
