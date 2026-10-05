@@ -11,7 +11,7 @@ ROOT="$(dirname "$CWD")"
 CLI_SRC="$ROOT/slacker-cli"
 GUI_SRC="$ROOT/slacker-gui"
 
-FILES="README.md NEWS LICENSE TODO slack-desc doinst.sh slacker.SlackBuild slacker-banner.svg"
+FILES="README.md NEWS LICENSE TODO slack-desc doinst.sh slacker.SlackBuild slacker-banner.svg slacker.nfo"
 DONT="containers target vendor"
 
 PRGNAM=slacker
