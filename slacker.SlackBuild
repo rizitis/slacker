@@ -8,7 +8,7 @@ cd $(dirname $0) ; CWD=$(pwd)
 set -e
 
 PRGNAM=slacker
-VERSION=${VERSION:-0.12.2}
+VERSION=${VERSION:-0.12.3}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
@@ -49,21 +49,21 @@ cat /etc/os-release
 echo "=============================================================="
 
 while true; do
-    read -p "Θέλεις να συνεχίσεις; [Y/n]: " answer
+    read -p "Keep going?; [Y/n]: " answer
 
     case "$answer" in
         ""|y|Y|yes|Yes|YES)
-            echo "Συνεχίζουμε..."
+            echo "Continuing..."
             break
             ;;
 
         n|N|no|No|NO)
-            echo "Τερματισμός."
+            echo "STOP."
             exit 1
             ;;
 
         *)
-            echo "Παρακαλώ απάντησε y/yes ή n/no."
+            echo "Answer: y/yes or n/no."
             ;;
     esac
 done
@@ -83,10 +83,33 @@ cd $TMP
 cp -R $CWD/slacker-cli/* .
 rm -rf target || true
 chown -R root:root .
-find . -type f \( -perm -4000 -o -perm -2000 \) -exec chmod -s {} +
-find . ! -type l -type d ! -perm 755 -exec chmod -f 755 {} +
-find . ! -type l -type f -perm /111 ! -perm 755 -exec chmod -f 755 {} +
-find . ! -type l -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} +
+# Normalize permissions in the freshly extracted source tree:
+#   directories        -> 755
+#   executable files   -> 755
+#   other files        -> 644
+#
+# Only -type d and -type f are matched, so symlinks are never followed
+# or modified (chmod follows symlinks, which could change files outside
+# the tree), and device nodes, FIFOs and sockets are left alone.
+#
+# Directories use "\;" instead of "+" so each one is fixed immediately,
+# before find descends into it. As a regular user, a directory without
+# read/search permission would otherwise be skipped; as root this makes
+# no difference. Only directories that need fixing are chmod'ed, so the
+# extra cost is negligible.
+#
+# "00755" (extra leading zero) is required for directories: GNU chmod
+# preserves setgid on directories with a plain "755"; "00755" clears
+# setgid and the sticky bit as well.
+#
+# Numeric modes on regular files clear setuid/setgid, and "-perm 755"
+# and "-perm 644" are exact matches including special bits, so any
+# setuid/setgid file is caught and cleaned.
+#
+# Works the same as root or as a regular user, in a single pass.
+find . \( -type d          ! -perm 755 -exec chmod 00755 {} \; \) -o \
+       \( -type f   -perm /111 ! -perm 755 -exec chmod -f 755 {} + \) -o \
+       \( -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} + \)
 
 # online + debug is what we need for developing.
 # NOTE: SLKCFLAGS only affect any C built by build scripts; the Rust code itself
@@ -170,7 +193,7 @@ install -m0644 contrib/slacker.fish \
 
 # Now we build slacker-gui on top of slacker
 pushd $CWD/slacker-gui || exit 1
-cargo build --release
+cargo auditable build --release
 cargo test --release
 
 install -Dm755 target/release/slacker-gui $PKG/usr/bin/slacker-gui
@@ -195,9 +218,16 @@ cat $CWD/doinst.sh > $PKG/install/doinst.sh
 
 cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+
 sleep 1
-sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+if command -v sbopkglint >/dev/null 2>&1; then
+    sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+else
+    echo "skip cheks: sbopkglint not found."
+fi
+
 rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new /tmp/stockdb_test_*.txt
+
 
 #sleep 1
 #gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
