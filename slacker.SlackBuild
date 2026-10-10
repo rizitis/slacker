@@ -193,7 +193,11 @@ install -m0644 contrib/slacker.fish \
 
 # Now we build slacker-gui on top of slacker
 pushd $CWD/slacker-gui || exit 1
-cargo auditable build --release
+if command -v cargo-auditable >/dev/null 2>&1; then
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --release
+else
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build --release
+fi
 cargo test --release
 
 install -Dm755 target/release/slacker-gui $PKG/usr/bin/slacker-gui
