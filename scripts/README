@@ -1,0 +1,11 @@
+1. To create vendor-source tarballs
+bash make_vendor
+
+2. To build
+sudo bash slacker-vendor.SlackBuild
+
+NOTES:
+      To verify crates with appstream you need ON for net.
+      If auditable used on cargo build then you run audit binaries (if you have installed audit) like this:
+       cargo audit bin /tmp/package-slacker/usr/bin/slacker
+       cargo audit bin /tmp/package-slacker/usr/bin/slacker-gui

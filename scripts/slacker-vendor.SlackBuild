@@ -99,8 +99,8 @@ rm -rf target || true
 
 # build offline
 # extract pre-vendored sources and configure cargo to use them
-tar xvf "$VENDORS_DIR"/slacker-cli-"$VERSION".tar.gz
-tar xvf slacker-cli-vendor-"$VERSION"/slacker-cli-vendor-"$VERSION".tar.gz
+tar xvf "$VENDORS_DIR"/slacker-cli-"$VERSION".tar.gz --no-same-owner
+tar xvf slacker-cli-vendor-"$VERSION"/slacker-cli-vendor-"$VERSION".tar.gz --no-same-owner
 mkdir -p .cargo
 cat slacker-cli-vendor-"$VERSION"/cargo-config.toml > .cargo/config.toml
 cat slacker-cli-vendor-"$VERSION"/vendor.json > vendor.json
@@ -115,11 +115,33 @@ else
     mv slacker-cli-vendor-"$VERSION" vendor
 fi
 
-chown -R root:root .
-find . -type f \( -perm -4000 -o -perm -2000 \) -exec chmod -s {} +
-find . ! -type l -type d ! -perm 755 -exec chmod -f 755 {} +
-find . ! -type l -type f -perm /111 ! -perm 755 -exec chmod -f 755 {} +
-find . ! -type l -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} +
+# Normalize permissions in the freshly extracted source tree:
+#   directories        -> 755
+#   executable files   -> 755
+#   other files        -> 644
+#
+# Only -type d and -type f are matched, so symlinks are never followed
+# or modified (chmod follows symlinks, which could change files outside
+# the tree), and device nodes, FIFOs and sockets are left alone.
+#
+# Directories use "\;" instead of "+" so each one is fixed immediately,
+# before find descends into it. As a regular user, a directory without
+# read/search permission would otherwise be skipped; as root this makes
+# no difference. Only directories that need fixing are chmod'ed, so the
+# extra cost is negligible.
+#
+# "00755" (extra leading zero) is required for directories: GNU chmod
+# preserves setgid on directories with a plain "755"; "00755" clears
+# setgid and the sticky bit as well.
+#
+# Numeric modes on regular files clear setuid/setgid, and "-perm 755"
+# and "-perm 644" are exact matches including special bits, so any
+# setuid/setgid file is caught and cleaned.
+#
+# Works the same as root or as a regular user, in a single pass.
+find . \( -type d          ! -perm 755 -exec chmod 00755 {} \; \) -o \
+       \( -type f   -perm /111 ! -perm 755 -exec chmod -f 755 {} + \) -o \
+       \( -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} + \)
 
 # online + debug is what we need for developing.
 # NOTE: SLKCFLAGS only affect any C built by build scripts; the Rust code itself
@@ -206,8 +228,8 @@ rm -rf *
 cp -R "$GUI_SRC"/* .
 rm -rf target || true
 
-tar xvf "$VENDORS_DIR"/slacker-gui-"$VERSION2".tar.gz
-tar xvf slacker-gui-vendor-"$VERSION2"/slacker-gui-vendor-"$VERSION2".tar.gz
+tar xvf "$VENDORS_DIR"/slacker-gui-"$VERSION2".tar.gz --no-same-owner
+tar xvf slacker-gui-vendor-"$VERSION2"/slacker-gui-vendor-"$VERSION2".tar.gz --no-same-owner
 mkdir -p .cargo
 cat slacker-gui-vendor-"$VERSION2"/cargo-config.toml > .cargo/config.toml
 cat slacker-gui-vendor-"$VERSION2"/vendor.json > vendor.json
@@ -222,13 +244,9 @@ else
     mv slacker-gui-vendor-"$VERSION2" vendor
 fi
 
-
-
-chown -R root:root .
-find . -type f \( -perm -4000 -o -perm -2000 \) -exec chmod -s {} +
-find . ! -type l -type d ! -perm 755 -exec chmod -f 755 {} +
-find . ! -type l -type f -perm /111 ! -perm 755 -exec chmod -f 755 {} +
-find . ! -type l -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} +
+find . \( -type d          ! -perm 755 -exec chmod 00755 {} \; \) -o \
+       \( -type f   -perm /111 ! -perm 755 -exec chmod -f 755 {} + \) -o \
+       \( -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} + \)
 
 if command -v cargo-auditable >/dev/null 2>&1; then
   CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --offline --release

@@ -1,6 +1,6 @@
 [package]
 name = "slacker-gui"
-version = "3.0.0"
+version = "4.0.0"
 edition = "2021"
 rust-version = "1.83"
 description = "GTK4/libadwaita front-end for the slacker package manager"
@@ -8,8 +8,8 @@ license = "Apache-2.0"
 authors = ["rizitis"]
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.10", features = ["v4_4"] }
-adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_4"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 
 [profile.release]
 opt-level = 2

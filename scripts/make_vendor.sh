@@ -46,6 +46,7 @@ crate_version() {
 
 # Remove any previously generated archives from the vendors directory.
 clean_vendors_dir() {
+    mkdir -p "$VENDORS_DIR"
     pushd "$VENDORS_DIR" >/dev/null || exit 1
     ls -la
     rm -rf -- * || true
