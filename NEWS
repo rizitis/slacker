@@ -1,3 +1,10 @@
+- Update: slacker-cli
+   - install-new no longer lists every frozen package, twice. It prints one line
+  with the count; `frozen` still lists them.
+   - The other commands are unchanged:
+  they name a frozen package because you asked for that package by name.
+---
+
 Version Beta 0.12.3
 =====
 - Update: slacker-cli

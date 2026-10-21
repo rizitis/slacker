@@ -1095,6 +1095,29 @@ fn note_frozen_excluded(frozen: &[String]) {
     println!("{}", ui::dim("    run `unfrozen <name>` to include"));
 }
 
+/// install-new counts the frozen packages instead of naming them.
+///
+/// Every other install path names them, and should: there the user typed a
+/// name, so "you asked for this one and it is frozen" is the answer to the
+/// question they asked. install-new asks nothing. It offers whatever the repos
+/// hold that is not installed, and on a system with a long blacklist the frozen
+/// names outnumber the packages actually on offer and used to be printed twice
+/// in the same run, burying the only part anybody reads. One dim line keeps the
+/// trail for somebody wondering why a package is never offered.
+fn note_frozen_count(frozen: &[String]) {
+    if frozen.is_empty() {
+        return;
+    }
+    println!(
+        "  {}",
+        ui::dim(&format!(
+            "{} frozen {} skipped (run `frozen` to list them)",
+            frozen.len(),
+            if frozen.len() == 1 { "package" } else { "packages" }
+        ))
+    );
+}
+
 /// Heads-up at match time: installed packages that matched the pattern but were
 /// left out because a pin points them at a repo that does not (yet) provide
 /// them — so they don't just vanish from the list without explanation.
@@ -8053,15 +8076,13 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
         })
         .collect();
     if todo.is_empty() {
-        if !frozen.is_empty() {
-            show_plan(&[], &frozen, &[]);
-        }
         println!("No new packages to install.");
+        note_frozen_count(&frozen);
         return Ok(Outcome::NothingFound);
     }
     // Let the user deselect before resolving deps (same select-before-resolve
     // step the other install paths use; skipped under --yes/--dry-run/single).
-    note_frozen_excluded(&frozen);
+    note_frozen_count(&frozen);
     let todo = select_packages(todo, "install", &installed, cli.yes, cli.dry_run);
     if todo.is_empty() {
         println!("Nothing selected.");
@@ -8072,7 +8093,8 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     // Resolve dependencies up front so any extra packages pulled in are shown
     // before we ask to proceed (dry-run keeps installed versions, no prompts).
     let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
-    show_plan(&plan, &frozen, &[]);
+    // No frozen list here: it was already counted above, once per run.
+    show_plan(&plan, &[], &[]);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
     show_plan_alternatives(cfg, &db, &plan, resolve);
