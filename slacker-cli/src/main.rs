@@ -806,6 +806,30 @@ fn ask_protected_dep(p: &ProtectedDep, inst_src: &str, off_src: &str) -> KeepCho
 /// Expand a set of root packages into a full, ordered install plan by reading
 /// each package's `.dep` file and pulling in dependencies from the *same* repo.
 /// Dependencies are placed before the packages that need them.
+/// Quarantine a repo whose dependency graph blew past the depth cap, and tell the
+/// user what happened and how to undo it. On a dry run nothing is written, only a
+/// warning. Best-effort: a failed write just means the warning stands for this run.
+fn quarantine_deep_repo(cfg: &Config, repo_name: &str, reason: &str, dry_run: bool) {
+    if dry_run {
+        eprintln!("{}", ui::yellow(&format!(
+            "repo '{repo_name}' declares an abnormally deep dependency chain — would quarantine it (dry-run)."
+        )));
+        eprintln!("  {}", ui::dim(reason));
+        return;
+    }
+    if let Some(r) = cfg.repo_by_name(repo_name) {
+        let _ = repo::quarantine(r, &cfg.cache_dir, &cfg.state_dir, repo::QuarantineKind::Hard, reason);
+    }
+    eprintln!("{}", ui::red(&format!(
+        "repo '{repo_name}' declares an abnormally deep dependency chain — quarantined."
+    )));
+    eprintln!("  {}", ui::yellow(reason));
+    eprintln!("  {}", ui::red("While quarantined it provides NO packages."));
+    eprintln!("  {}", ui::dim(&format!(
+        "Investigate it, then `slacker trust-repo {repo_name}` to lift, or `del-repo {repo_name}` to remove."
+    )));
+}
+
 fn expand_with_deps(
     cfg: &Config,
     db: &PkgDb,
@@ -813,6 +837,7 @@ fn expand_with_deps(
     roots: Vec<(repo::AvailPkg, InstallAction)>,
     resolve: bool,
     assume_yes: bool,
+    dry_run: bool,
 ) -> Result<Vec<PlanItem>, String> {
     if cfg.resolve_stock && !cfg.stock_db_path().exists() {
         eprintln!(
@@ -832,11 +857,29 @@ fn expand_with_deps(
     // root entry, so we must not prompt about it as a "conflict".
     let root_names: HashSet<String> =
         roots.iter().map(|(p, _)| p.id.name.clone()).collect();
+    let mut quarantined_now: HashSet<String> = HashSet::new();
     for (pkg, action) in roots {
-        add_with_deps(
+        let repo_name = pkg.repo.clone();
+        // a repo quarantined earlier in this run provides nothing more.
+        if quarantined_now.contains(&repo_name) {
+            continue;
+        }
+        let protected_before = protected.len();
+        match add_with_deps(
             cfg, db, installed, pkg, action, None, resolve, assume_yes, &root_names,
             &mut plan, &mut planned, &mut visiting, &mut skip_all, &mut protected,
-        )?;
+        ) {
+            Ok(()) => {}
+            // An abnormally deep chain means a hostile or broken repo, not a reason
+            // to abort the whole run: quarantine that repo and carry on with the rest.
+            Err(e) if e.starts_with(DEEP_CHAIN_ERR) => {
+                visiting.clear(); // the aborted descent left its path behind
+                protected.truncate(protected_before);
+                quarantine_deep_repo(cfg, &repo_name, &e, dry_run);
+                quarantined_now.insert(repo_name);
+            }
+            Err(e) => return Err(e),
+        }
     }
     // Dependencies kept by the priority rule: show them and let the user replace
     // any with the version offered by the repo that pulled them in. Anything the
@@ -855,6 +898,7 @@ fn expand_with_deps(
 }
 
 const MAX_DEP_DEPTH: usize = 512;
+const DEEP_CHAIN_ERR: &str = "dependency chain too deep";
 
 #[allow(clippy::too_many_arguments)]
 fn add_with_deps(
@@ -883,7 +927,7 @@ fn add_with_deps(
     // cap the chain depth so a hostile repo can't recurse us into a stack overflow
     if visiting.len() > MAX_DEP_DEPTH {
         visiting.remove(&name);
-        return Err(format!("dependency chain too deep (>{MAX_DEP_DEPTH}) at '{name}' — refusing"));
+        return Err(format!("{DEEP_CHAIN_ERR} (>{MAX_DEP_DEPTH}) at '{name}' — refusing"));
     }
 
     if resolve {
@@ -6154,7 +6198,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     // `already` is shown via the same blue "kept" line as priority skips — both
     // mean "installed, leaving it alone".
     show_plan(&plan, &frozen, &already);
@@ -6238,7 +6282,7 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Upgrade)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     show_plan(&plan, &frozen, &protected);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
@@ -6302,7 +6346,7 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Reinstall)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     show_plan(&plan, &frozen, &protected);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
@@ -7970,7 +8014,7 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     // Resolve dependencies up front, so the complete plan — including any new
     // packages pulled in as dependencies — is shown *before* we ask to proceed.
     // In a dry-run we keep installed versions for conflicts (no prompts).
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
 
     print_plan(&plan);
     report_pinned_in_plan(cfg, &plan);
@@ -8099,7 +8143,7 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
     // Resolve dependencies up front so any extra packages pulled in are shown
     // before we ask to proceed (dry-run keeps installed versions, no prompts).
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     // No frozen list here: it was already counted above, once per run.
     show_plan(&plan, &[], &[]);
     report_pinned_in_plan(cfg, &plan);
@@ -9574,7 +9618,7 @@ fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, 
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     print_plan(&plan);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();

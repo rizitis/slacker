@@ -23,6 +23,9 @@ Version Beta 0.12.5
     It's NOT RCE: Rust on stack overflow does a controlled abort with guard page, not memory corruption, so NO attacker code is executed. But in a root tool that is the only way to keep the system up to date, being able to reliably drop a repo is a real problem.
 
     After the fix, at link 512 it stops cleanly with a dependency chain too deep message, without touching anything.
+
+    - After Cap dependency recursion depth also quarantine repos that exceed it
+
 ---
 
 Version Beta 0.12.4
