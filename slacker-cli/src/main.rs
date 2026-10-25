@@ -854,6 +854,8 @@ fn expand_with_deps(
     Ok(plan)
 }
 
+const MAX_DEP_DEPTH: usize = 512;
+
 #[allow(clippy::too_many_arguments)]
 fn add_with_deps(
     cfg: &Config,
@@ -877,6 +879,11 @@ fn add_with_deps(
     }
     if !visiting.insert(name.clone()) {
         return Ok(()); // already on the stack: dependency cycle, stop recursing
+    }
+    // cap the chain depth so a hostile repo can't recurse us into a stack overflow
+    if visiting.len() > MAX_DEP_DEPTH {
+        visiting.remove(&name);
+        return Err(format!("dependency chain too deep (>{MAX_DEP_DEPTH}) at '{name}' — refusing"));
     }
 
     if resolve {

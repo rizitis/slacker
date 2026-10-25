@@ -1,3 +1,9 @@
+Version Beta 0.12.5
+=====
+- Update: slacker-cli
+  - Limit dependency recursion depth to prevent stack overflow from a crafted repo
+---
+
 Version Beta 0.12.4
 =====
 - Update: slacker-cli
