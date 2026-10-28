@@ -52,6 +52,7 @@ const HELP_STYLES: clap::builder::Styles = clap::builder::Styles::styled()
     name = "slacker",
     version,
     about = "slackpkg + slackpkg+ in one, minimal Rust tool",
+    after_help = "Run `slacker <command> --help` for the full description and examples.",
     styles = HELP_STYLES
 )]
 struct Cli {
@@ -85,8 +86,10 @@ enum Cmd {
     FileSearch { filename: String },
     /// Show details and per-repo candidates for a package.
     Info { name: String },
-    /// List configured repositories with priority, verify policy and how many
-    /// installed packages came from each.
+    /// List configured repositories and their priorities.
+    ///
+    /// Shows each repo's priority, verify policy, and how many installed
+    /// packages came from it.
     ListRepos,
     /// Health-check the whole setup and report what to do next — the setup doctor.
     ///
@@ -112,8 +115,9 @@ enum Cmd {
     /// key) and downgrades to it with `upgradepkg --reinstall`. Official packages
     /// only (the archive does not carry third-party repos), and only on -current.
     RevertPkg { name: String },
-    /// Download package files without installing. Saved to the cache by
-    /// default, or to a directory given with -o/--output.
+    /// Download package files without installing them.
+    ///
+    /// Saved to the cache by default, or to a directory given with -o/--output.
     Download {
         patterns: Vec<String>,
         /// Directory to save into (default: the slacker package cache).
@@ -122,10 +126,12 @@ enum Cmd {
     },
     /// Upgrade every installed package that has a newer revision.
     UpgradeAll,
-    /// Distribution upgrade: migrate a Slackware 15.0 system to -current (or to
-    /// the next stable). UNLIKE every other command it deliberately ignores
-    /// source priority and the blacklist and takes the target distribution's
-    /// version of every package.
+    /// Distribution upgrade: 15.0 to -current or next stable.
+    ///
+    /// Migrate a Slackware 15.0 system to -current (or to the next stable).
+    /// UNLIKE every other command it deliberately ignores source priority and
+    /// the blacklist and takes the target distribution's version of every
+    /// package.
     ///
     /// TARGET is where you are going, not where you are: `current` for the
     /// rolling release, or a newer stable version like `15.1`. The running
@@ -145,33 +151,40 @@ enum Cmd {
         /// Where to upgrade TO: `current` or a newer stable version (e.g. `15.1`).
         target: String,
     },
-    /// Install every package the selected repos provide that isn't already
-    /// installed — the "fill what's missing" counterpart to `install @repo`:
-    /// catches packages new to the distribution and ones you removed, correct
-    /// across any number of updates. Honours source/tag priority and the blacklist
-    /// (frozen packages are skipped); a newer build/version of an installed package
-    /// is an upgrade (use `upgrade-all`), not new. Default: official repo(s) only;
-    /// name repos to use those instead.
+    /// Install the repos' packages that aren't installed yet.
+    ///
+    /// The "fill what's missing" counterpart to `install @repo`: catches
+    /// packages new to the distribution and ones you removed, correct across any
+    /// number of updates. Honours source/tag priority and the blacklist (frozen
+    /// packages are skipped); a newer build/version of an installed package is an
+    /// upgrade (use `upgrade-all`), not new. Default: official repo(s) only; name
+    /// repos to use those instead.
     InstallNew { repos: Vec<String> },
-    /// Remove installed packages no longer in the official baseline — the
-    /// official repo plus any `immutable` repo. slackpkg-style: a package the
-    /// distribution dropped is removed even if a third-party repo still ships
-    /// the name. Kept by the blacklist, an `IGNORE_TAGS` build tag, or an
-    /// immutable repo.
+    /// Remove installed packages no longer in the official baseline.
+    ///
+    /// The baseline is the official repo plus any `immutable` repo.
+    /// slackpkg-style: a package the distribution dropped is removed even if a
+    /// third-party repo still ships the name. Kept by the blacklist, an
+    /// `IGNORE_TAGS` build tag, or an immutable repo.
     CleanSystem,
-    /// Delete downloaded package files from the cache. Repo metadata and GPG
-    /// keys are never touched. Optionally limit to named repos.
+    /// Delete downloaded package files from the cache.
+    ///
+    /// Repo metadata and GPG keys are never touched. Optionally limit to named
+    /// repos.
     CleanCache { repos: Vec<String> },
     /// Handle leftover *.new configuration files.
     NewConfig,
     /// Check every configured repo for pending updates (exit 100 if any).
     CheckUpdates,
-    /// Print a repo's cached ChangeLog. With no argument, the official (tracked)
-    /// repo; name a repo to fetch and show that one instead.
+    /// Print a repo's cached ChangeLog.
+    ///
+    /// With no argument, the official (tracked) repo; name a repo to fetch and
+    /// show that one instead.
     ShowChangelog { repo: Option<String> },
-    /// Show a chronological log of package changes — installed, upgraded and
-    /// removed, and when — newest first. Derived from the pkgtools admin
-    /// directories, so it also reflects changes made outside slacker.
+    /// Show a chronological log of package changes, newest first.
+    ///
+    /// Installed, upgraded and removed, and when. Derived from the pkgtools
+    /// admin directories, so it also reflects changes made outside slacker.
     History {
         /// Limit to a single package name.
         name: Option<String>,
@@ -191,10 +204,11 @@ enum Cmd {
         #[arg(long)]
         upgraded: bool,
     },
-    /// Find the fastest up-to-date Slackware mirror for your location: probes the
-    /// official mirror list over HTTP and ranks reachable, fresh mirrors by speed,
-    /// lists the 7 fastest and proposes the 3 fastest. Works on -current and stable. Does not change
-    /// your configuration.
+    /// Find the fastest up-to-date Slackware mirror.
+    ///
+    /// Probes the official mirror list over HTTP and ranks reachable, fresh
+    /// mirrors by speed, lists the 7 fastest and proposes the 3 fastest. Works
+    /// on -current and stable. Does not change your configuration.
     FindMirror,
     /// Snapshot installed packages into a template.
     GenerateTemplate { name: String },
@@ -204,26 +218,33 @@ enum Cmd {
     RemoveTemplate { name: String },
     /// Delete a template file (does not touch installed packages).
     DeleteTemplate { name: String },
-    /// Add one or more blacklist rules ("freeze"). Each argument is one rule:
-    /// a glob (`*`, `?`) or a regex, a `series/`, or `@repo PATTERN` (quote rules
-    /// with spaces). Run with no argument to list the current frozen rules.
+    /// Add blacklist rules ("freeze"); no arg lists them.
+    ///
+    /// Each argument is one rule: a glob (`*`, `?`) or a regex, a `series/`, or
+    /// `@repo PATTERN` (quote rules with spaces). Run with no argument to list
+    /// the current frozen rules.
     Frozen { names: Vec<String> },
-    /// Remove one or more blacklist rules ("unfreeze"). Each argument must match
-    /// an existing rule EXACTLY, as a literal string — special characters like
-    /// `.*`, `*`, `-` or `/` are compared verbatim, never as a pattern. Run with
-    /// no argument to list the current rules. Quote rules with spaces.
+    /// Remove blacklist rules ("unfreeze"); no arg lists them.
+    ///
+    /// Each argument must match an existing rule EXACTLY, as a literal string:
+    /// special characters like `.*`, `*`, `-` or `/` are compared verbatim,
+    /// never as a pattern. Run with no argument to list the current rules. Quote
+    /// rules with spaces.
     Unfrozen { names: Vec<String> },
-    /// Pin a package to ONE repo, regardless of priority: `pin repo:package`
-    /// (e.g. `pin alienbob:vlc`). From then on every command (incl. upgrade-all)
-    /// sources that package only from that repo. Stored in the `blacklist` file
-    /// as `@repo 100% package`. A freeze on the same package always wins. Run
-    /// with no argument to list the current pins.
+    /// Pin a package to ONE repo, ignoring priority.
+    ///
+    /// `pin repo:package` (e.g. `pin alienbob:vlc`). From then on every command
+    /// (incl. upgrade-all) sources that package only from that repo. Stored in
+    /// the `blacklist` file as `@repo 100% package`. A freeze on the same
+    /// package always wins. Run with no argument to list the current pins.
     Pin { spec: Option<String> },
-    /// Remove a pin: `unpin package` (e.g. `unpin vlc`). The package returns to
-    /// normal priority-based resolution. Run with no argument to list the
-    /// current pins.
+    /// Remove a pin; no arg lists current pins.
+    ///
+    /// `unpin package` (e.g. `unpin vlc`). The package returns to normal
+    /// priority-based resolution. Run with no argument to list the current pins.
     Unpin { names: Vec<String> },
-    /// Add a binary repository to the `repos` file:
+    /// Add a binary repository to the `repos` file.
+    ///
     /// `add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=...]`.
     /// URL must be http:// or https:// and unique. Separate words, no quotes
     /// (quote only a URL that contains shell-special characters). `immutable`
@@ -240,23 +261,31 @@ enum Cmd {
     },
     /// Remove a binary repository (by name) from the `repos` file.
     DelRepo { name: String },
-    /// Change a repo's priority in the `repos` file: `pri-repo PRIORITY NAME`.
-    /// Refuses if NAME is not an active repo (suggesting the closest match), or
-    /// if PRIORITY is already used by another repo (priorities must be distinct).
+    /// Change a repo's priority in the `repos` file.
+    ///
+    /// `pri-repo PRIORITY NAME`. Refuses if NAME is not an active repo
+    /// (suggesting the closest match), or if PRIORITY is already used by another
+    /// repo (priorities must be distinct).
     PriRepo { priority: String, name: String },
-    /// Add a build-tag priority line to the `repos` file:
+    /// Add a build-tag priority line to the `repos` file.
+    ///
     /// `add-tag PRIORITY NAME TAG` (e.g. `add-tag 100 SBo _SBo`; no quotes).
     AddTag { priority: String, name: String, tag: String },
     /// Remove a build-tag priority line (by its TAG) from the `repos` file.
     DelTag { tag: String },
-    /// Re-run the safety vetting on a repo on demand (fetches metadata only).
-    /// Quarantines it if it fails, or clears a prior quarantine if it now passes.
+    /// Re-run the safety vetting on a repo on demand.
+    ///
+    /// Fetches metadata only. Quarantines it if it fails, or clears a prior
+    /// quarantine if it now passes.
     VetRepo { name: String },
-    /// Trust a quarantined repo, lifting its freeze so it can be used again.
-    /// This overrides slacker's safety verdict — at your own responsibility.
+    /// Trust a quarantined repo, lifting its freeze.
+    ///
+    /// Lets it be used again. This overrides slacker's safety verdict — at your
+    /// own responsibility.
     TrustRepo { name: String },
-    /// Manually quarantine (freeze) a repo so it provides no packages until you
-    /// `trust-repo` it again.
+    /// Manually quarantine a repo so it provides no packages.
+    ///
+    /// Freezes the repo until you `trust-repo` it again.
     DistrustRepo { name: String },
 }
 
