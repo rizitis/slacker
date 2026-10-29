@@ -52,6 +52,7 @@ const HELP_STYLES: clap::builder::Styles = clap::builder::Styles::styled()
     name = "slacker",
     version,
     about = "slackpkg + slackpkg+ in one, minimal Rust tool",
+    after_help = "Run `slacker <command> --help` for the full description and examples.",
     styles = HELP_STYLES
 )]
 struct Cli {
@@ -85,8 +86,10 @@ enum Cmd {
     FileSearch { filename: String },
     /// Show details and per-repo candidates for a package.
     Info { name: String },
-    /// List configured repositories with priority, verify policy and how many
-    /// installed packages came from each.
+    /// List configured repositories and their priorities.
+    ///
+    /// Shows each repo's priority, verify policy, and how many installed
+    /// packages came from it.
     ListRepos,
     /// Health-check the whole setup and report what to do next — the setup doctor.
     ///
@@ -112,8 +115,9 @@ enum Cmd {
     /// key) and downgrades to it with `upgradepkg --reinstall`. Official packages
     /// only (the archive does not carry third-party repos), and only on -current.
     RevertPkg { name: String },
-    /// Download package files without installing. Saved to the cache by
-    /// default, or to a directory given with -o/--output.
+    /// Download package files without installing them.
+    ///
+    /// Saved to the cache by default, or to a directory given with -o/--output.
     Download {
         patterns: Vec<String>,
         /// Directory to save into (default: the slacker package cache).
@@ -122,10 +126,12 @@ enum Cmd {
     },
     /// Upgrade every installed package that has a newer revision.
     UpgradeAll,
-    /// Distribution upgrade: migrate a Slackware 15.0 system to -current (or to
-    /// the next stable). UNLIKE every other command it deliberately ignores
-    /// source priority and the blacklist and takes the target distribution's
-    /// version of every package.
+    /// Distribution upgrade: 15.0 to -current or next stable.
+    ///
+    /// Migrate a Slackware 15.0 system to -current (or to the next stable).
+    /// UNLIKE every other command it deliberately ignores source priority and
+    /// the blacklist and takes the target distribution's version of every
+    /// package.
     ///
     /// TARGET is where you are going, not where you are: `current` for the
     /// rolling release, or a newer stable version like `15.1`. The running
@@ -145,33 +151,40 @@ enum Cmd {
         /// Where to upgrade TO: `current` or a newer stable version (e.g. `15.1`).
         target: String,
     },
-    /// Install every package the selected repos provide that isn't already
-    /// installed — the "fill what's missing" counterpart to `install @repo`:
-    /// catches packages new to the distribution and ones you removed, correct
-    /// across any number of updates. Honours source/tag priority and the blacklist
-    /// (frozen packages are skipped); a newer build/version of an installed package
-    /// is an upgrade (use `upgrade-all`), not new. Default: official repo(s) only;
-    /// name repos to use those instead.
+    /// Install the repos' packages that aren't installed yet.
+    ///
+    /// The "fill what's missing" counterpart to `install @repo`: catches
+    /// packages new to the distribution and ones you removed, correct across any
+    /// number of updates. Honours source/tag priority and the blacklist (frozen
+    /// packages are skipped); a newer build/version of an installed package is an
+    /// upgrade (use `upgrade-all`), not new. Default: official repo(s) only; name
+    /// repos to use those instead.
     InstallNew { repos: Vec<String> },
-    /// Remove installed packages no longer in the official baseline — the
-    /// official repo plus any `immutable` repo. slackpkg-style: a package the
-    /// distribution dropped is removed even if a third-party repo still ships
-    /// the name. Kept by the blacklist, an `IGNORE_TAGS` build tag, or an
-    /// immutable repo.
+    /// Remove installed packages no longer in the official baseline.
+    ///
+    /// The baseline is the official repo plus any `immutable` repo.
+    /// slackpkg-style: a package the distribution dropped is removed even if a
+    /// third-party repo still ships the name. Kept by the blacklist, an
+    /// `IGNORE_TAGS` build tag, or an immutable repo.
     CleanSystem,
-    /// Delete downloaded package files from the cache. Repo metadata and GPG
-    /// keys are never touched. Optionally limit to named repos.
+    /// Delete downloaded package files from the cache.
+    ///
+    /// Repo metadata and GPG keys are never touched. Optionally limit to named
+    /// repos.
     CleanCache { repos: Vec<String> },
     /// Handle leftover *.new configuration files.
     NewConfig,
     /// Check every configured repo for pending updates (exit 100 if any).
     CheckUpdates,
-    /// Print a repo's cached ChangeLog. With no argument, the official (tracked)
-    /// repo; name a repo to fetch and show that one instead.
+    /// Print a repo's cached ChangeLog.
+    ///
+    /// With no argument, the official (tracked) repo; name a repo to fetch and
+    /// show that one instead.
     ShowChangelog { repo: Option<String> },
-    /// Show a chronological log of package changes — installed, upgraded and
-    /// removed, and when — newest first. Derived from the pkgtools admin
-    /// directories, so it also reflects changes made outside slacker.
+    /// Show a chronological log of package changes, newest first.
+    ///
+    /// Installed, upgraded and removed, and when. Derived from the pkgtools
+    /// admin directories, so it also reflects changes made outside slacker.
     History {
         /// Limit to a single package name.
         name: Option<String>,
@@ -191,10 +204,11 @@ enum Cmd {
         #[arg(long)]
         upgraded: bool,
     },
-    /// Find the fastest up-to-date Slackware mirror for your location: probes the
-    /// official mirror list over HTTP and ranks reachable, fresh mirrors by speed,
-    /// lists the 7 fastest and proposes the 3 fastest. Works on -current and stable. Does not change
-    /// your configuration.
+    /// Find the fastest up-to-date Slackware mirror.
+    ///
+    /// Probes the official mirror list over HTTP and ranks reachable, fresh
+    /// mirrors by speed, lists the 7 fastest and proposes the 3 fastest. Works
+    /// on -current and stable. Does not change your configuration.
     FindMirror,
     /// Snapshot installed packages into a template.
     GenerateTemplate { name: String },
@@ -204,26 +218,33 @@ enum Cmd {
     RemoveTemplate { name: String },
     /// Delete a template file (does not touch installed packages).
     DeleteTemplate { name: String },
-    /// Add one or more blacklist rules ("freeze"). Each argument is one rule:
-    /// a glob (`*`, `?`) or a regex, a `series/`, or `@repo PATTERN` (quote rules
-    /// with spaces). Run with no argument to list the current frozen rules.
+    /// Add blacklist rules ("freeze"); no arg lists them.
+    ///
+    /// Each argument is one rule: a glob (`*`, `?`) or a regex, a `series/`, or
+    /// `@repo PATTERN` (quote rules with spaces). Run with no argument to list
+    /// the current frozen rules.
     Frozen { names: Vec<String> },
-    /// Remove one or more blacklist rules ("unfreeze"). Each argument must match
-    /// an existing rule EXACTLY, as a literal string — special characters like
-    /// `.*`, `*`, `-` or `/` are compared verbatim, never as a pattern. Run with
-    /// no argument to list the current rules. Quote rules with spaces.
+    /// Remove blacklist rules ("unfreeze"); no arg lists them.
+    ///
+    /// Each argument must match an existing rule EXACTLY, as a literal string:
+    /// special characters like `.*`, `*`, `-` or `/` are compared verbatim,
+    /// never as a pattern. Run with no argument to list the current rules. Quote
+    /// rules with spaces.
     Unfrozen { names: Vec<String> },
-    /// Pin a package to ONE repo, regardless of priority: `pin repo:package`
-    /// (e.g. `pin alienbob:vlc`). From then on every command (incl. upgrade-all)
-    /// sources that package only from that repo. Stored in the `blacklist` file
-    /// as `@repo 100% package`. A freeze on the same package always wins. Run
-    /// with no argument to list the current pins.
+    /// Pin a package to ONE repo, ignoring priority.
+    ///
+    /// `pin repo:package` (e.g. `pin alienbob:vlc`). From then on every command
+    /// (incl. upgrade-all) sources that package only from that repo. Stored in
+    /// the `blacklist` file as `@repo 100% package`. A freeze on the same
+    /// package always wins. Run with no argument to list the current pins.
     Pin { spec: Option<String> },
-    /// Remove a pin: `unpin package` (e.g. `unpin vlc`). The package returns to
-    /// normal priority-based resolution. Run with no argument to list the
-    /// current pins.
+    /// Remove a pin; no arg lists current pins.
+    ///
+    /// `unpin package` (e.g. `unpin vlc`). The package returns to normal
+    /// priority-based resolution. Run with no argument to list the current pins.
     Unpin { names: Vec<String> },
-    /// Add a binary repository to the `repos` file:
+    /// Add a binary repository to the `repos` file.
+    ///
     /// `add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=...]`.
     /// URL must be http:// or https:// and unique. Separate words, no quotes
     /// (quote only a URL that contains shell-special characters). `immutable`
@@ -240,23 +261,31 @@ enum Cmd {
     },
     /// Remove a binary repository (by name) from the `repos` file.
     DelRepo { name: String },
-    /// Change a repo's priority in the `repos` file: `pri-repo PRIORITY NAME`.
-    /// Refuses if NAME is not an active repo (suggesting the closest match), or
-    /// if PRIORITY is already used by another repo (priorities must be distinct).
+    /// Change a repo's priority in the `repos` file.
+    ///
+    /// `pri-repo PRIORITY NAME`. Refuses if NAME is not an active repo
+    /// (suggesting the closest match), or if PRIORITY is already used by another
+    /// repo (priorities must be distinct).
     PriRepo { priority: String, name: String },
-    /// Add a build-tag priority line to the `repos` file:
+    /// Add a build-tag priority line to the `repos` file.
+    ///
     /// `add-tag PRIORITY NAME TAG` (e.g. `add-tag 100 SBo _SBo`; no quotes).
     AddTag { priority: String, name: String, tag: String },
     /// Remove a build-tag priority line (by its TAG) from the `repos` file.
     DelTag { tag: String },
-    /// Re-run the safety vetting on a repo on demand (fetches metadata only).
-    /// Quarantines it if it fails, or clears a prior quarantine if it now passes.
+    /// Re-run the safety vetting on a repo on demand.
+    ///
+    /// Fetches metadata only. Quarantines it if it fails, or clears a prior
+    /// quarantine if it now passes.
     VetRepo { name: String },
-    /// Trust a quarantined repo, lifting its freeze so it can be used again.
-    /// This overrides slacker's safety verdict — at your own responsibility.
+    /// Trust a quarantined repo, lifting its freeze.
+    ///
+    /// Lets it be used again. This overrides slacker's safety verdict — at your
+    /// own responsibility.
     TrustRepo { name: String },
-    /// Manually quarantine (freeze) a repo so it provides no packages until you
-    /// `trust-repo` it again.
+    /// Manually quarantine a repo so it provides no packages.
+    ///
+    /// Freezes the repo until you `trust-repo` it again.
     DistrustRepo { name: String },
 }
 
@@ -806,6 +835,30 @@ fn ask_protected_dep(p: &ProtectedDep, inst_src: &str, off_src: &str) -> KeepCho
 /// Expand a set of root packages into a full, ordered install plan by reading
 /// each package's `.dep` file and pulling in dependencies from the *same* repo.
 /// Dependencies are placed before the packages that need them.
+/// Quarantine a repo whose dependency graph blew past the depth cap, and tell the
+/// user what happened and how to undo it. On a dry run nothing is written, only a
+/// warning. Best-effort: a failed write just means the warning stands for this run.
+fn quarantine_deep_repo(cfg: &Config, repo_name: &str, reason: &str, dry_run: bool) {
+    if dry_run {
+        eprintln!("{}", ui::yellow(&format!(
+            "repo '{repo_name}' declares an abnormally deep dependency chain — would quarantine it (dry-run)."
+        )));
+        eprintln!("  {}", ui::dim(reason));
+        return;
+    }
+    if let Some(r) = cfg.repo_by_name(repo_name) {
+        let _ = repo::quarantine(r, &cfg.cache_dir, &cfg.state_dir, repo::QuarantineKind::Hard, reason);
+    }
+    eprintln!("{}", ui::red(&format!(
+        "repo '{repo_name}' declares an abnormally deep dependency chain — quarantined."
+    )));
+    eprintln!("  {}", ui::yellow(reason));
+    eprintln!("  {}", ui::red("While quarantined it provides NO packages."));
+    eprintln!("  {}", ui::dim(&format!(
+        "Investigate it, then `slacker trust-repo {repo_name}` to lift, or `del-repo {repo_name}` to remove."
+    )));
+}
+
 fn expand_with_deps(
     cfg: &Config,
     db: &PkgDb,
@@ -813,6 +866,7 @@ fn expand_with_deps(
     roots: Vec<(repo::AvailPkg, InstallAction)>,
     resolve: bool,
     assume_yes: bool,
+    dry_run: bool,
 ) -> Result<Vec<PlanItem>, String> {
     if cfg.resolve_stock && !cfg.stock_db_path().exists() {
         eprintln!(
@@ -832,11 +886,29 @@ fn expand_with_deps(
     // root entry, so we must not prompt about it as a "conflict".
     let root_names: HashSet<String> =
         roots.iter().map(|(p, _)| p.id.name.clone()).collect();
+    let mut quarantined_now: HashSet<String> = HashSet::new();
     for (pkg, action) in roots {
-        add_with_deps(
+        let repo_name = pkg.repo.clone();
+        // a repo quarantined earlier in this run provides nothing more.
+        if quarantined_now.contains(&repo_name) {
+            continue;
+        }
+        let protected_before = protected.len();
+        match add_with_deps(
             cfg, db, installed, pkg, action, None, resolve, assume_yes, &root_names,
             &mut plan, &mut planned, &mut visiting, &mut skip_all, &mut protected,
-        )?;
+        ) {
+            Ok(()) => {}
+            // An abnormally deep chain means a hostile or broken repo, not a reason
+            // to abort the whole run: quarantine that repo and carry on with the rest.
+            Err(e) if e.starts_with(DEEP_CHAIN_ERR) => {
+                visiting.clear(); // the aborted descent left its path behind
+                protected.truncate(protected_before);
+                quarantine_deep_repo(cfg, &repo_name, &e, dry_run);
+                quarantined_now.insert(repo_name);
+            }
+            Err(e) => return Err(e),
+        }
     }
     // Dependencies kept by the priority rule: show them and let the user replace
     // any with the version offered by the repo that pulled them in. Anything the
@@ -853,6 +925,9 @@ fn expand_with_deps(
     }
     Ok(plan)
 }
+
+const MAX_DEP_DEPTH: usize = 512;
+const DEEP_CHAIN_ERR: &str = "dependency chain too deep";
 
 #[allow(clippy::too_many_arguments)]
 fn add_with_deps(
@@ -877,6 +952,11 @@ fn add_with_deps(
     }
     if !visiting.insert(name.clone()) {
         return Ok(()); // already on the stack: dependency cycle, stop recursing
+    }
+    // cap the chain depth so a hostile repo can't recurse us into a stack overflow
+    if visiting.len() > MAX_DEP_DEPTH {
+        visiting.remove(&name);
+        return Err(format!("{DEEP_CHAIN_ERR} (>{MAX_DEP_DEPTH}) at '{name}' — refusing"));
     }
 
     if resolve {
@@ -6147,7 +6227,7 @@ fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     // `already` is shown via the same blue "kept" line as priority skips — both
     // mean "installed, leaving it alone".
     show_plan(&plan, &frozen, &already);
@@ -6231,7 +6311,7 @@ fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, 
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Upgrade)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     show_plan(&plan, &frozen, &protected);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
@@ -6295,7 +6375,7 @@ fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Reinstall)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     show_plan(&plan, &frozen, &protected);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
@@ -7963,7 +8043,7 @@ fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     // Resolve dependencies up front, so the complete plan — including any new
     // packages pulled in as dependencies — is shown *before* we ask to proceed.
     // In a dry-run we keep installed versions for conflicts (no prompts).
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
 
     print_plan(&plan);
     report_pinned_in_plan(cfg, &plan);
@@ -8092,7 +8172,7 @@ fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Result<Outcome,
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
     // Resolve dependencies up front so any extra packages pulled in are shown
     // before we ask to proceed (dry-run keeps installed versions, no prompts).
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     // No frozen list here: it was already counted above, once per run.
     show_plan(&plan, &[], &[]);
     report_pinned_in_plan(cfg, &plan);
@@ -9567,7 +9647,7 @@ fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, 
     }
     let resolve = cfg.resolve_deps && !cli.no_deps;
     let roots = todo.into_iter().map(|p| (p.clone(), InstallAction::Install)).collect();
-    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes)?;
+    let plan = expand_with_deps(cfg, &db, &installed, roots, resolve, cli.dry_run || cli.yes, cli.dry_run)?;
     print_plan(&plan);
     report_pinned_in_plan(cfg, &plan);
     hint_freeze_pin();
@@ -9829,7 +9909,7 @@ fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
             println!("  {s}");
         }
         println!("  active repos: {}", active.join(", "));
-        if !confirm("declare them anyway?", cli.yes) {
+        if !confirm("declare them anyway?", cli.yes || cli.dry_run) {
             println!("{}", ui::blue("aborted — nothing changed"));
             return Ok(Outcome::Ok);
         }
@@ -9845,6 +9925,10 @@ fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
             ui::dim("→"),
             rule.describe()
         );
+    }
+    if cli.dry_run {
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
     }
     if !confirm("Add these to the blacklist?", cli.yes) {
         println!("{}", ui::blue("aborted — nothing changed"));
@@ -9901,7 +9985,7 @@ fn blacklist_remove(text: &str, wanted: &[&str]) -> (String, Vec<String>, Vec<St
 /// Remove ("unfreeze") one or more blacklist rules. The counterpart to `frozen`.
 /// With no argument it lists the current rules so the exact text to remove is
 /// visible. Matching is by exact literal rule text (see `blacklist_remove`).
-fn cmd_unfrozen(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
+fn cmd_unfrozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
     let path = cfg.config_dir.join("blacklist");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -9940,6 +10024,18 @@ fn cmd_unfrozen(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, S
             path.display(),
             not_found.join(", ")
         ));
+    }
+
+    if cli.dry_run {
+        println!("Would unfreeze (remove from blacklist): {}", removed.join(", "));
+        if !not_found.is_empty() {
+            println!(
+                "  {}",
+                ui::dim(&format!("not found (unchanged): {}", not_found.join(", ")))
+            );
+        }
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
     }
 
     std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
@@ -10109,6 +10205,10 @@ fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Outcome, Strin
 
     println!("About to pin (only source for '{name}', ignoring priority):");
     println!("  {}", ui::white(&line));
+    if cli.dry_run {
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
+    }
     if !confirm("write it to the blacklist?", cli.yes) {
         println!("{}", ui::blue("aborted — nothing changed"));
         return Ok(Outcome::Ok);
@@ -10126,7 +10226,7 @@ fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Outcome, Strin
 
 /// Remove a package's pin, returning it to normal priority-based resolution. The
 /// counterpart to `pin`. With no argument, lists the current pins.
-fn cmd_unpin(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
+fn cmd_unpin(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
     let path = cfg.config_dir.join("blacklist");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -10159,6 +10259,13 @@ fn cmd_unpin(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
             "no pin found for: {}\n  (run `slacker unpin` with no argument to list pins)",
             wanted.join(", ")
         ));
+    }
+    if cli.dry_run {
+        let summary: Vec<String> =
+            removed.iter().map(|(p, r)| format!("{p} (was -> {r})")).collect();
+        println!("Would unpin: {}", summary.join(", "));
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
     }
     std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
     let summary: Vec<String> =
