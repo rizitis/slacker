@@ -12,23 +12,40 @@
 
 ████ LOADING PACKAGE INFO ██████████████████████████████████████████████
 [0x01] PACKAGE   : slacker v0.12.5  [OK]
-[0x02] TYPE      : APPLICATION  [OK]
+[0x02] TYPE      : APPLICATION (cli + gui)  [OK]
 [0x03] SIZE      : 2.7 MiB  [OK]
 [0x04] DATE      : 2026-10-02  [OK]
-[0x05] MD5       : af3b2f43d9460cc1681d35026c51dfff  [OK]
-[0x06] ARCH      : x86_64 i686 aarch64  [OK]
-[0x07] DEVELOPER : rizitis
+[0x05] MD5       : da34b54e2d3a9e352440a39cb26af709  [OK]
+[0x06] ARCH      : x86_64 i686  [OK]
+[0x07] TARGET    : Slackware 15.0 | development branch  [OK]
+[0x08] LANG      : Rust 1.88+  [OK]
+[0x09] DEVELOPER : rizitis
 ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 
 ████ FILE MAP STREAM ███████████████████████████████████████████████████
 [0x0000] /.........................LOADING
-[0x1000] bin/.....................slacker | slacker-gui
-[0x2000] etc/................mirrors | repos | slacker.conf | blacklist
-[0x3000] lib/.....................rust
-[0x4000] docs/....................README.md | NEWS | LICENSE
-[0x5000] assets/..................slacker.png
-[0x6000] nfo/.....................slacker.nfo
+[0x1000] usr/bin/.................slacker | slacker-gui
+[0x2000] etc/slacker/.............slacker.conf | repos | mirrors
+[0x2100] etc/slacker/.............blacklist | distro-upgrade.conf
+[0x2200] etc/slacker/.............credentials.* | templates/
+[0x3000] usr/man/man8/............slacker.8
+[0x4000] usr/share/...............bash | zsh | fish completions
+[0x4100] usr/share/...............applications | polkit-1 | icons
+[0x5000] usr/doc/slacker-*/.......README.md | NEWS | CONF/ | SlackBuild
+[0x6000] var/cache/slacker/.......repos/ | packages/  (runtime)
+[0x7000] var/lib/slacker/.........trusted/ | quarantine/ | gpg/ (run)
 ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+████ CODE MAP STREAM ███████████████████████████████████████████████████
+[SRC] main.rs ..........entry | dispatch | resolver | fetch/verify
+[SRC] cli.rs ...........every command and flag
+[SRC] commands/ ........install | upgrade_dist | update | status | clean
+[SRC] commands/ ........new_config | revert_pkg | repos | blacklist
+[SRC] commands/ ........query | logs | find_mirror | templates
+[SRC] helpers ..........config | pkgdb | repo | gpg | download | system
+[SRC] helpers ..........dist | mirrors | history | revert | stockdb | ui
+[DOC] ARCHITECTURE.md ..where everything lives, and what never changes
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 ████ REPOSITORIES PULSE ████████████████████████████████████████████████
 ▒forge.slackware.nl : https://forge.slackware.nl/rizitis/slacker
@@ -37,14 +54,18 @@
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 ████ CONFIG STREAM █████████████████████████████████████████████████████
-[CFG] SLACKER_HOME="/usr/bin/"
-[CFG] LOG_LEVEL="INFO"
-[CFG] ENABLE_CACHE="yes"
-[CFG] REPOS_FILE="/etc/slacker/"
+[CFG] CONFIG_DIR="/etc/slacker"
+[CFG] CACHE_DIR="/var/cache/slacker"
+[CFG] STATE_DIR="/var/lib/slacker"
+[CFG] VERIFY="all"
+[CFG] MAX_PARALLEL="4"
+[CFG] REVERT="on"
 
 ████ NOTES & STATUS ████████████████████████████████████████████████████
-- /bin: Executables
-- /etc: Auto-sourced configs
-- /nfo: Retro info
-- Repo follow Slackware Linux layout
+- usr/bin: slacker (cli) and slacker-gui
+- etc/slacker: shipped as .new, merged by doinst.sh config()
+- var/lib/slacker: trust anchors (GPG pins, quarantine); keep it
+- var/cache/slacker: disposable; slacker clean-cache empties packages/
+- Installs through pkgtools only; never touches /var/adm by itself
+- Repo follows Slackware Linux layout
 ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
