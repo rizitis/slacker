@@ -9909,7 +9909,7 @@ fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
             println!("  {s}");
         }
         println!("  active repos: {}", active.join(", "));
-        if !confirm("declare them anyway?", cli.yes) {
+        if !confirm("declare them anyway?", cli.yes || cli.dry_run) {
             println!("{}", ui::blue("aborted — nothing changed"));
             return Ok(Outcome::Ok);
         }
@@ -9925,6 +9925,10 @@ fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
             ui::dim("→"),
             rule.describe()
         );
+    }
+    if cli.dry_run {
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
     }
     if !confirm("Add these to the blacklist?", cli.yes) {
         println!("{}", ui::blue("aborted — nothing changed"));
@@ -9981,7 +9985,7 @@ fn blacklist_remove(text: &str, wanted: &[&str]) -> (String, Vec<String>, Vec<St
 /// Remove ("unfreeze") one or more blacklist rules. The counterpart to `frozen`.
 /// With no argument it lists the current rules so the exact text to remove is
 /// visible. Matching is by exact literal rule text (see `blacklist_remove`).
-fn cmd_unfrozen(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
+fn cmd_unfrozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
     let path = cfg.config_dir.join("blacklist");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -10020,6 +10024,18 @@ fn cmd_unfrozen(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, S
             path.display(),
             not_found.join(", ")
         ));
+    }
+
+    if cli.dry_run {
+        println!("Would unfreeze (remove from blacklist): {}", removed.join(", "));
+        if !not_found.is_empty() {
+            println!(
+                "  {}",
+                ui::dim(&format!("not found (unchanged): {}", not_found.join(", ")))
+            );
+        }
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
     }
 
     std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
@@ -10189,6 +10205,10 @@ fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Outcome, Strin
 
     println!("About to pin (only source for '{name}', ignoring priority):");
     println!("  {}", ui::white(&line));
+    if cli.dry_run {
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
+    }
     if !confirm("write it to the blacklist?", cli.yes) {
         println!("{}", ui::blue("aborted — nothing changed"));
         return Ok(Outcome::Ok);
@@ -10206,7 +10226,7 @@ fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Outcome, Strin
 
 /// Remove a package's pin, returning it to normal priority-based resolution. The
 /// counterpart to `pin`. With no argument, lists the current pins.
-fn cmd_unpin(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
+fn cmd_unpin(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
     let path = cfg.config_dir.join("blacklist");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
@@ -10239,6 +10259,13 @@ fn cmd_unpin(_cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, Stri
             "no pin found for: {}\n  (run `slacker unpin` with no argument to list pins)",
             wanted.join(", ")
         ));
+    }
+    if cli.dry_run {
+        let summary: Vec<String> =
+            removed.iter().map(|(p, r)| format!("{p} (was -> {r})")).collect();
+        println!("Would unpin: {}", summary.join(", "));
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
     }
     std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
     let summary: Vec<String> =
