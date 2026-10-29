@@ -1,11 +1,12 @@
 Version Beta 0.12.5
 =====
 - Update: slacker-cli
-  - Shorten subcommand help to one line each; add a footer pointing to `<command> --help`
+  - Fix bug: Honor --dry-run in frozen, unfrozen, pin and unpin
+  - Shorten subcommand help to one line each; add a footer pointing to `<command> --help`:
     - slacker --help now looks much prettier
     - slacker <CMD> -h is very short
     - slacker <CMD> --help full detailed
-  - Limit dependency recursion depth to prevent stack overflow from a crafted repo
+  - Limit dependency recursion depth to prevent stack overflow from a crafted repo:
     - We did a reverse engineering of the binaries and then a full source audit. At the critical points (GPG pinning, verify, path-traversal guards argv, SQL, downloads, credentials) slacker is clean, no RCE/privesc.
       We found a real pre-auth DoS: unbounded recursion in add_with_deps, which with a malicious dependency chain dropped the stack. We reproduced it end-to-end.
       The fix: 7 lines only in main.rs, MAX_DEP_DEPTH = 512. It measures depth, not count, so it doesn't touch legitimate installations. 219 tests pass.
