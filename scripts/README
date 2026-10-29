@@ -9,3 +9,30 @@ NOTES:
       If auditable used on cargo build then you run audit binaries (if you have installed audit) like this:
        cargo audit bin /tmp/package-slacker/usr/bin/slacker
        cargo audit bin /tmp/package-slacker/usr/bin/slacker-gui
+
+3. ^Fail then cargo update and all from scratch...
+   Για το slacker, προτείνω δύο εντολές, ανάλογα με την περίπτωση:
+
+            1. Όταν το cargo audit βρει κάτι (όπως σήμερα), ενημερώνεις μόνο ό,τι αναφέρει:
+
+            cargo update -p <crate>
+
+            Αν το crate υπάρχει σε δύο εκδόσεις, γράφεις -p <crate>@<παλιά-έκδοση>. Ύστερα τρέχεις:
+
+            cargo build --release --locked && cargo test --locked && cargo audit
+
+            Αυτή είναι η πιο ασφαλής επιλογή λίγο πριν από release, γιατί αλλάζει μόνο ό,τι χρειάζεται και ξέρεις ακριβώς τι μπήκε.
+
+            2. Μία φορά στην αρχή κάθε κύκλου ανάπτυξης (όχι την ημέρα του release), ενημερώνεις όλα τα crates:
+
+            cargo update
+
+            Και πάλι build, test και audit. Έτσι οι εξαρτήσεις δεν μένουν πίσω, και αν κάτι σπάσει, το βλέπεις με άνεση και όχι πάνω στο release.
+
+            Ένα προαιρετικό extra, για να μην ξαναβρεθείς με το θέμα του MSRV. Αφού βάλεις rust-version = "1.88", μπορείς να πεις στο cargo να μη διαλέγει crates που θέλουν νεότερο Rust. Φτιάχνεις το αρχείο .cargo/config.toml μέσα στο slacker-cli/:
+
+            toml
+            [resolver]
+            incompatible-rust-versions = "fallback"
+
+            Με αυτό, ακόμα και το σκέτο cargo update διαλέγει την πιο πρόσφατη έκδοση που χτίζεται με το 1.88. Θέλει cargo 1.84 ή νεότερο, που το έχεις. Είναι επιλογή, όχι υποχρέωση. Αν το slacker απευθύνεται μόνο στο development branch, όπου ο compiler είναι πάντα νέος, μπορείς να το παραλείψεις.

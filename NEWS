@@ -1,6 +1,63 @@
 Version Beta 0.12.5
 =====
 - Update: slacker-cli
+  - Update crates: security fixes and rust-version = "1.88"
+    - cargo audit bin /tmp/package-slacker/usr/bin/slacker
+          Fetching advisory database from https://github.com/RustSec/advisory-db.git
+            Loaded 1386 security advisories (from /home/omen/.cargo/advisory-db)
+          Updating crates.io index
+            Found 'cargo auditable' data in /tmp/package-slacker/usr/bin/slacker (95 dependencies)
+      Crate:     rustls
+      Version:   0.23.45
+      Title:     Unauthenticated ServerHello can downgrade later connections to classical key exchange
+      Date:      2026-10-14
+      ID:        RUSTSEC-2026-0349
+      URL:       https://rustsec.org/advisories/RUSTSEC-2026-0349
+      Severity:  3.7 (low)
+      Solution:  Upgrade to >=0.23.46
+
+      Crate:     rustls
+      Version:   0.23.45
+      Title:     Debug impls for client session values expose TLS secrets
+      Date:      2026-10-14
+      ID:        RUSTSEC-2026-0346
+      URL:       https://rustsec.org/advisories/RUSTSEC-2026-0346
+      Severity:  4 (medium)
+      Solution:  Upgrade to >=0.23.46
+
+      Crate:     rustls
+      Version:   0.23.45
+      Title:     Buffered application data sent to outer server after ECH rejection
+      Date:      2026-10-14
+      ID:        RUSTSEC-2026-0347
+      URL:       https://rustsec.org/advisories/RUSTSEC-2026-0347
+      Severity:  2.3 (low)
+      Solution:  Upgrade to >=0.23.46
+
+      Crate:     rustls
+      Version:   0.23.45
+      Title:     Brotli certificate decompression can allocate up to 1 GiB before authentication
+      Date:      2026-10-14
+      ID:        RUSTSEC-2026-0348
+      URL:       https://rustsec.org/advisories/RUSTSEC-2026-0348
+      Severity:  3.7 (low)
+      Solution:  Upgrade to >=0.23.46
+
+      Crate:     rustls-webpki
+      Version:   0.103.15
+      Title:     Certificate verification may accept distrusted intermediates
+      Date:      2026-10-20
+      ID:        RUSTSEC-2026-0382
+      URL:       https://rustsec.org/advisories/RUSTSEC-2026-0382
+      Solution:  Upgrade to >=0.103.16, <0.104.0-alpha.1 OR >=0.104.0-alpha.8
+
+      Crate:     webpki-roots
+      Version:   1.0.9
+      Title:     Bundled root certificates allow trust in distrusted emSign intermediates
+      Date:      2026-10-19
+      ID:        RUSTSEC-2026-0381
+      URL:       https://rustsec.org/advisories/RUSTSEC-2026-0381
+      Solution:  Upgrade to >=1.0.10
   - Fix bug: Honor --dry-run in frozen, unfrozen, pin and unpin
   - Shorten subcommand help to one line each; add a footer pointing to `<command> --help`:
     - slacker --help now looks much prettier
@@ -10,25 +67,19 @@ Version Beta 0.12.5
     - We did a reverse engineering of the binaries and then a full source audit. At the critical points (GPG pinning, verify, path-traversal guards argv, SQL, downloads, credentials) slacker is clean, no RCE/privesc.
       We found a real pre-auth DoS: unbounded recursion in add_with_deps, which with a malicious dependency chain dropped the stack. We reproduced it end-to-end.
       The fix: 7 lines only in main.rs, MAX_DEP_DEPTH = 512. It measures depth, not count, so it doesn't touch legitimate installations. 219 tests pass.
-
       What the attacker needs: to check the metadata of a repo that the victim has in the repos. That is, one of the repositories has been hacked or a future repository has to be "smartly" malicious.
       Three realistic ways:
       Malicious third-party repo. Someone creates a tempting repo (a build of some popular package that is missing from SBo), people add it with add-repo. From there, they have full control over the PACKAGES.TXT they serve.
       Compromised or malicious mirror of a repo you already trust.
       MITM on http repo. If the repo is http:// (or https that is broken), the attacker on the network changes the PACKAGES.TXT in-stream.
-
       The attack, step by step:
       In PACKAGES.TXT (or in per-package .dep files) they put a linear chain of dependencies: pkgA requires pkgB, pkgB requires pkgC, and so on, with ~10-20 thousand different names. It is a text file of a few MB, trivial to create.
       The victim does slacker update (downloads metadata) and then anything that touches the dependency resolution, even harmless ones: slacker install pkgA, or just slacker upgrade-all, or even --dry-run.
       add_with_deps calls itself once per link in the chain. At ~8-10 thousand links, the 8 MB stack of the main thread is exhausted and slacker dies with SIGABRT: stack overflow.
-
       Why it was more insidious than it seems: the crash happened in the design phase, before any package was even downloaded or verified. That is, the whole GPG trust model, the pinned keys, the checksums, did not protect you at all, because the signature check comes later. And the metadata itself (PACKAGES.TXT, .dep) is not GPG-signed, only CHECKSUMS is. So it was pre-authentication: you would crash with input that doesn't pass any signature.
-
       What the attacker gains: denial of service. Slacker becomes useless as long as the malicious repo is active, every time you run update/install/upgrade it crashes.
       It's NOT RCE: Rust on stack overflow does a controlled abort with guard page, not memory corruption, so NO attacker code is executed. But in a root tool that is the only way to keep the system up to date, being able to reliably drop a repo is a real problem.
-
       After the fix, at link 512 it stops cleanly with a dependency chain too deep message, without touching anything.
-
       - After Cap dependency recursion depth also quarantine repos that exceed it
 
 ---
