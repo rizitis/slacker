@@ -116,8 +116,15 @@ pub fn build(app: &adw::Application) {
         .build();
     footer.add_css_class("sidebar-footer");
 
+    // The page list, then the slacker mark centred in the free space under it.
+    let sidebar_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    sidebar_box.append(&nav);
+    if let Some(logo) = sidebar_logo() {
+        sidebar_box.append(&logo);
+    }
+
     let sidebar_scroller = gtk::ScrolledWindow::builder()
-        .child(&nav)
+        .child(&sidebar_box)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vexpand(true)
         .build();
@@ -313,4 +320,26 @@ fn show_about(window: &adw::ApplicationWindow) {
         .build();
     about.add_credit_section(Some("Maintainer"), &["rizitis"]);
     about.present(Some(window));
+}
+
+/// The slacker mark shown under the sidebar's page list. The SVG is compiled
+/// in and rasterised once through gdk-pixbuf (librsvg), at twice the shown
+/// size so it stays sharp on HiDPI screens. Without an SVG loader there is
+/// simply no logo; nothing else changes.
+fn sidebar_logo() -> Option<gtk::Image> {
+    const SVG: &[u8] = include_bytes!("slacker-mark.svg");
+    const SIZE: i32 = 140;
+    let loader = gtk::gdk_pixbuf::PixbufLoader::with_type("svg").ok()?;
+    loader.set_size(SIZE * 2, SIZE * 2);
+    loader.write(SVG).ok()?;
+    loader.close().ok()?;
+    let pixbuf = loader.pixbuf()?;
+    let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
+    let image = gtk::Image::from_paintable(Some(&texture));
+    image.set_pixel_size(SIZE);
+    image.set_vexpand(true);
+    image.set_valign(gtk::Align::Center);
+    image.set_halign(gtk::Align::Center);
+    image.add_css_class("sidebar-logo");
+    Some(image)
 }

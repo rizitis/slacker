@@ -37,6 +37,7 @@
 .brand-mark { color: @accent_color; font-size: 1.1em; }
 .navigation-sidebar row { min-height: 40px; }
 .nav-row { padding: 0 4px; }
+.sidebar-logo { margin: 24px 0; }
 .sidebar-footer {
   padding: 10px 16px;
   font-size: 0.85em;

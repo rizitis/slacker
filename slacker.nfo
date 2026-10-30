@@ -11,7 +11,7 @@
     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 
 ████ LOADING PACKAGE INFO ██████████████████████████████████████████████
-[0x01] PACKAGE   : slacker v0.13.0  [OK]
+[0x01] PACKAGE   : slacker v0.13.0_beta.5  [OK]
 [0x02] TYPE      : APPLICATION (cli + gui)  [OK]
 [0x03] SIZE      : 2.7 MiB  [OK]
 [0x04] DATE      : 2026-10-02  [OK]
