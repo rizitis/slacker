@@ -1,3 +1,23 @@
+Version Beta 0.13.0
+=====
+SEMANTIC CHANGES (No command or anything in the way Slacker works or its philosophy has been tampered with.)
+- Update: slacker-cli
+    - refactoring slacker-cli/src
+      main.rs had become huge with thousands of lines of code. Of course this wasn't a problem and a grep on a single file would have given us exactly what we were looking for. But in the future a novice forker or developer would have a hard time understanding where what goes, and what does what...
+      Τhe ARCHITECTURE.md file was added, so after separating main.rs into various rs, anyone who reads ARCHITECTURE.md can immediately understand where what goes and what not to touch...
+- Update: slacker-gui _beta.5
+    - Added a slackware-mark.svg to the empty space to the left of the menu.
+- Update scripts
+    - Added scripts/DEV
+      This folder contains info and tools for developers and LLMs:
+      - ARCHITECTURE-el.md  (greeks)
+      - README
+      - refactor-plan.md  (refactored steps and suggestions)
+      - slacker-refactor-harness.tar.gz (script and tools used by Claude LLM for refactoring step by step)
+Everything was tested very hard, I m very happy for this release because now a future developer can easy work on slacker.
+
+---
+
 Version Beta 0.12.5
 =====
 - Update: slacker-cli
