@@ -116,14 +116,16 @@ find . \( -type d          ! -perm 755 -exec chmod 00755 {} \; \) -o \
 # is compiled by rustc for the host arch (i686 / x86_64) automatically.
 # Build ONCE: cargo-auditable embeds an SBOM and is a superset of `cargo build`,
 # so use it when present, otherwise fall back to a plain build (no double build).
+# --locked: fail if Cargo.lock does not match Cargo.toml.
 if command -v cargo-auditable >/dev/null 2>&1; then
-  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --release
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --release --locked
 else
-  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build --release
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build --release --locked
 fi
 
 # run tests
-cargo test
+# same profile and CFLAGS as the build, so the C code (sqlite, ring) is not rebuilt
+CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo test --release --locked
 
 # completion must list exactly the binary's subcommands
 sh contrib/check-completion-drift.sh target/release/slacker
@@ -192,13 +194,23 @@ install -m0644 contrib/slacker.fish \
   $PKG/usr/share/fish/vendor_completions.d/slacker.fish
 
 # Now we build slacker-gui on top of slacker
-pushd $CWD/slacker-gui || exit 1
+# Built in $TMP like slacker-cli, never inside $CWD.
+mkdir -p $TMP/slacker-gui
+cd $TMP/slacker-gui
+cp -R $CWD/slacker-gui/* .
+rm -rf target || true
+chown -R root:root .
+# same permission normalization as for slacker-cli above
+find . \( -type d          ! -perm 755 -exec chmod 00755 {} \; \) -o \
+       \( -type f   -perm /111 ! -perm 755 -exec chmod -f 755 {} + \) -o \
+       \( -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} + \)
+
 if command -v cargo-auditable >/dev/null 2>&1; then
-  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --release
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --release --locked
 else
-  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build --release
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build --release --locked
 fi
-cargo test --release
+CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo test --release --locked
 
 install -Dm755 target/release/slacker-gui $PKG/usr/bin/slacker-gui
 install -Dm644 data/nl.slackware.forge.rizitis.SlackerGui.desktop \
@@ -210,7 +222,6 @@ install -Dm644 data/nl.slackware.forge.rizitis.slacker.policy \
 ( cd data/icons && find hicolor -type f ) | while read -r f; do
   install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
 done
-popd || exit 1
 
 # Whatever came from the source trees is owned by root.
 chown -R root:root $PKG/usr
@@ -231,7 +242,15 @@ else
 fi
 
 rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new /tmp/stockdb_test_*.txt
-
-
+echo "=============================================================="
+# audit the embedded dependency lists (cargo-auditable)
+if command -v cargo-audit >/dev/null 2>&1; then
+  for b in slacker slacker-gui; do
+    cargo audit bin $PKG/usr/bin/$b || echo "WARNING: cargo audit reported problems in $b"
+  done
+else
+  echo "skip audit: cargo-audit not found for root or not installed."
+fi
+echo "=============================================================="
 #sleep 1
 #gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
