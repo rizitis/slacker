@@ -177,10 +177,14 @@ fn advise_console_for_foundational(plan: &[PlanItem]) {
 }
 
 /// Read-only: for packages in the plan whose *name* is also offered by other
-/// repos, list those alternatives. The plan already holds the priority/pin
-/// winner that `collect` chose; this only surfaces what was NOT applied so the
-/// user can answer "n" at the prompt and pin / switch a repo if they would
-/// rather have a different build. It never reads or changes the plan's choice.
+/// repos, list those alternatives. The plan's build is NOT always the priority
+/// winner. A package the user asked for is the pin or priority winner that
+/// `collect` chose, or the build named with `repo:name`. A dependency comes
+/// from its parent's repo (`add_with_deps` looks only there), and a protected
+/// dependency the user chose to "replace" comes from the repo that asked for
+/// it, so either can sit below a higher-priority repo offering the same name.
+/// This only surfaces what was NOT applied, so the user can answer "n" at the
+/// prompt and pin / switch a repo. It never reads or changes the plan's choice.
 /// Returns, per package: (name, chosen-source, [other-sources]).
 pub(crate) fn plan_alternatives(db: &PkgDb, plan: &[PlanItem]) -> Vec<(String, String, Vec<String>)> {
     let src = |a: &repo::AvailPkg| {
@@ -234,10 +238,15 @@ fn fetch_dep_names(cfg: &Config, avail: &repo::AvailPkg) -> Vec<String> {
 /// Styled informational note, shown after the plan and before the prompt, so a
 /// cross-repo collision is visible before the user commits. For every planned
 /// package (target or dependency) whose *name* is also offered by other repos,
-/// it lists each alternative build with its version (flagged same/different) and
-/// \(em when dependency resolution is on \(em an on-the-fly diff of that repo's
-/// declared `.dep` against the chosen one. Purely informational: priority (or a
-/// pin) still decides; answer "n" to switch. Empty -> prints nothing.
+/// it lists each alternative build with its version (flagged same/different)
+/// and, when dependency resolution is on, an on-the-fly diff of that repo's
+/// declared `.dep` against the chosen one. The chosen build's line says WHY it
+/// was chosen (dependency of its parent, pinned, priority winner, or the user's
+/// choice), because for dependencies and "replace" answers it is not the
+/// priority winner. Do not go back to one "priority winner" label for every
+/// chosen build: an earlier version did that and it was wrong. Purely
+/// informational: answer "n" to switch.
+/// Empty -> prints nothing.
 fn show_plan_alternatives(cfg: &Config, db: &PkgDb, plan: &[PlanItem], resolve: bool) {
     if plan_alternatives(db, plan).is_empty() {
         return;
@@ -245,7 +254,7 @@ fn show_plan_alternatives(cfg: &Config, db: &PkgDb, plan: &[PlanItem], resolve: 
     let verstr = |a: &repo::AvailPkg| format!("{}-{}-{}", a.id.version, a.id.arch, a.id.build);
     println!(
         "\n{}",
-        ui::blue("Also offered by other repos (kept the priority winner — answer 'n' to pin a different build):")
+        ui::blue("Also offered by other repos (answer 'n' to pin a different build):")
     );
     for item in plan {
         let cands = db.candidates(&item.pkg.id.name);
@@ -265,10 +274,26 @@ fn show_plan_alternatives(cfg: &Config, db: &PkgDb, plan: &[PlanItem], resolve: 
             )
         };
         println!("  {}", ui::cyan(&item.pkg.id.name));
+        // Why this build: a dependency comes from its parent's repo; a package
+        // asked for is the pin or the priority winner; anything else was picked
+        // by the user (a `repo:name`, or "replace" at a protected dependency).
+        let why = match &item.dep_for {
+            Some(parent) => format!("dependency of {parent}, from its repo"),
+            None if cfg.pinned_repo(&item.pkg.id.name) == Some(item.pkg.repo.as_str()) => {
+                "pinned".to_string()
+            }
+            None if db
+                .resolve_unfrozen(&item.pkg.id.name)
+                .is_some_and(|w| w.repo == item.pkg.repo) =>
+            {
+                "priority winner".to_string()
+            }
+            None => "your choice".to_string(),
+        };
         println!(
             "{}  {}",
             row(&item.pkg, db.repo_priority(&item.pkg.repo)),
-            ui::green("\u{2190} installing")
+            ui::green(&format!("\u{2190} installing ({why})"))
         );
         let chosen_deps = if resolve { fetch_dep_names(cfg, &item.pkg) } else { Vec::new() };
         for &c in &others {

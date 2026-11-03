@@ -1,6 +1,6 @@
 # slacker: code structure, rules and refactor history
 
-Last updated: 29 Oct 2026. Covers `slacker-cli` after the refactor (steps 1–14). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
+Last updated: 3 Nov 2026. Covers `slacker-cli` 0.13.0, the refactored code (steps 1–14). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
 
 This document is for anyone, human or AI, opening the code for the first time. It says **what lives where, why it lives there, and what must not change**. If anything here disagrees with the code, the code wins and this document gets fixed.
 
@@ -171,6 +171,10 @@ Mostly pure logic and system integration. They know nothing about commands.
 ### Semantics (settled, do not reopen)
 
 - **Priority above all:** never silently migrate or downgrade. Only an explicit `repo:name` or a pin overrides it.
+- **Dependencies come from the parent's repo.** `add_with_deps` resolves a dependency only as `<parent's repo>:<dep>`, so a dependency that is not installed is taken from the same repo as the package that needs it, not from the priority winner. This is intended. An installed dependency from a source of equal or higher priority becomes a protected dependency (k/r/a/q prompt); a missing one only warns.
+- **Official Slackware packages are never declared as dependencies.** Slackware assumes a full install. Do not invent scenarios where a third-party package lists an official one as a dependency.
+- **upgrade-all may move an installed package to a higher-priority source** (`upgrades_for` in `pkgdb.rs`), even at the same version. This is correct, and it was checked against a real report (ghostty, Nov 2026). Do not change it.
+- **The install plan says why each build was chosen.** In `show_plan_alternatives` (`commands/install.rs`) the chosen line reads `installing (dependency of <parent>, from its repo | pinned | priority winner | your choice)`. An earlier version labelled every chosen build "priority winner", which was wrong for dependencies and for a "replace" at a protected dependency.
 - **Freeze:** installed + rule -> FROZEN. Not installed + rule -> hidden from install-new/upgrades/check-updates, visible in search/info. A frozen candidate is treated as absent and resolution continues with the remaining candidates.
 - **Pin:** `@repo 100% name`, exact name, never freezes. A real freeze on the same name wins.
 - **install-new:** `cmd_install_new` and `dist_install_new` are intentionally different (normal: official + subtrees ranked above official; dist: official + patches only, regardless of priority).
@@ -250,9 +254,11 @@ The scripts are in `slacker-refactor-harness.tar.gz` (kept by r-tz, not part of 
 - **The shared core was not moved** (the planned step 15: `plan.rs`, `execute.rs`, `select.rs`, `prompt.rs`). The resolver with `MAX_DEP_DEPTH`, execution, fetch/verify and package selection stay where they were tested on a real system. The only gain would have been organisation. The same goes for `collect_tests` (about 550 lines with shared fixtures).
 - **The entry point stays in `main.rs`:** `main`, `run`, `Outcome`, lock, privilege checks.
 
-### 8.5 Sync rule
+### 8.5 After the refactor
 
-Until the refactor is released, **every change in the normal branch must also go into the refactor** (as was done with the dry-run fix). Otherwise the "refactor == normal" proof no longer holds. After any such change, `check_all.sh` and the comparison with the normal binary run again. Before a release: a run on a real system by the maintainer.
+The 0.12.x line is no longer maintained, so there is no normal branch to keep in sync. Changes go straight into this code. The "identical to the normal branch" result in 8.3 is historical: it held for the refactor as delivered.
+
+The first change after the refactor was the plan label (see 7). It changes only the label lines of the install plan, so the `inst` baseline of `check_all.sh` has to be re-taken with the new binary. After any change: build with no warnings, `cargo test`, `check_all.sh`. Before a release: a run on a real system by the maintainer.
 
 ---
 
