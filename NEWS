@@ -1,13 +1,13 @@
 Version Beta 0.13.0
 =====
-SEMANTIC CHANGES (No command or anything in the way Slacker works or its philosophy has been tampered with.)
+SEMANTIC CHANGES (slacker.conf need update)
 - Update: slacker-cli
     - new slacker.conf option BANNER=off hides the labyrinth header and the
   SLACKWARE art (#12). Default is on.
     - list-repos, status and history attribute each installed package to the
   repo it came from, not to the first repo using its build tag (#11).
-   - `remove @repo` removes only what list-repos counts for that repo.
-  Before, `remove @extras` also took every alien package and every official one.
+   - `remove @ repo` removes only what list-repos counts for that repo.
+  Before, `remove @ extras` also took every alien package and every official one.
    - clean-system now lists alienbob's packages as foreign like any third-party
   repo; add `alien` to IGNORE_TAGS to keep them.
     - refactoring slacker-cli/src
@@ -17,6 +17,7 @@ SEMANTIC CHANGES (No command or anything in the way Slacker works or its philoso
     - Added a slackware-mark.svg to the empty space to the left of the menu.
 - Update: man pages
 Everything was tested very hard, I m very happy for this release because now a future developer can easy work on slacker.
+Thanks @gegechris99  for bug report and suggestions
 
 ---
 
