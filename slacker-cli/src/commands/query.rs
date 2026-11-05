@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
-use crate::{closest, current_uid, installed_source_label, Outcome};
+use crate::{bl_installed, closest, current_uid, installed_source_label, Outcome};
 use crate::{manifest, pkg, repo, system, ui};
 use std::collections::HashSet;
 
@@ -320,6 +320,29 @@ pub(crate) fn cmd_info(cfg: &Config, name: &str) -> Result<Outcome, String> {
                 p.series
             ))
         );
+        // What this build pulls in, read exactly as the resolver reads it (its
+        // `.dep`, else `PACKAGE REQUIRED`), marking the ones that stay out: a
+        // dependency exclusion for this package, or a frozen dependency.
+        if let Some(repo) = cfg.repo_by_name(&p.repo) {
+            let deps = repo::fetch_dep(repo, p);
+            if !deps.is_empty() {
+                let list: Vec<String> = deps
+                    .iter()
+                    .map(|d| {
+                        let frozen = db.resolve(&format!("{}:{d}", p.repo)).is_some_and(|o| o.frozen)
+                            || system::installed_by_name(&installed, d)
+                                .is_some_and(|i| bl_installed(cfg, Some(&db), i));
+                        match cfg.nodep_rule(&p.id.name, d) {
+                            Some(rule) => format!("{d} (not pulled in: {rule})"),
+                            None if frozen => format!("{d} (not pulled in: frozen)"),
+                            None => d.clone(),
+                        }
+                    })
+                    .collect();
+                let off = if cfg.resolve_deps { "" } else { "   (RESOLVE_DEPS=no: none are pulled in)" };
+                println!("        {}", ui::dim(&format!("requires: {}{off}", list.join(", "))));
+            }
+        }
         if !p.description.is_empty() {
             for line in p.description.lines() {
                 println!("        {line}");

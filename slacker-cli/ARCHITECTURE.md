@@ -92,7 +92,7 @@ Each file holds the `pub(crate) fn cmd_*` of one group of commands, plus the hel
 |---|---|---|
 | `templates.rs` | generate/install/remove/delete-template | |
 | `repos.rs` | add-repo, del-repo, pri-repo, add-tag, del-tag, vet-repo, trust-repo, distrust-repo | the vetting itself (`vet_repo`, `apply_vet`, `reload_repo`) is in the core |
-| `blacklist.rs` | frozen, unfrozen, pin, unpin | honour `--dry-run` (fixed in 0.12.5) |
+| `blacklist.rs` | frozen, unfrozen, pin, unpin, nodep, undep | honour `--dry-run` (fixed in 0.12.5) |
 | `logs.rs` | history, show-changelog | not named `history.rs`, which already exists |
 | `query.rs` | search, file-search, info | read-only |
 | `find_mirror.rs` | find-mirror | not named `mirrors.rs`, which already exists |
@@ -178,6 +178,8 @@ Mostly pure logic and system integration. They know nothing about commands.
 - **The install plan says why each build was chosen.** In `show_plan_alternatives` (`commands/install.rs`) the chosen line reads `installing (dependency of <parent>, from its repo | pinned | priority winner | your choice)`. An earlier version labelled every chosen build "priority winner", which was wrong for dependencies and for a "replace" at a protected dependency.
 - **Where an installed package came from** (`repo_for_installed` in `pkgdb.rs`): the repo shipping that exact build; else the same name with the same build tag; else, by tag only, the repo shipping the most packages with that tag. When several repos match, a pin on the name picks its repo if it is one of them, otherwise the higher priority wins. A tagless package is the official repo's. list-repos, status, history, `@repo` blacklist rules on installed packages and clean-system all use this. A build tag does not belong to one repo: Slackware's extra/ ships alienbob's `slackpkg+` with the `alien` tag (issue #11, Nov 2026, where every alien package was counted under extras).
 - **`remove @repo` removes exactly what list-repos counts for that repo.** Never "every installed package carrying a tag the repo ships": that took every alien package for `@extras`, and every official package for any repo that ships a tagless build. `upgrade @repo` and `reinstall @repo` still select by the repo's tags, but they only act where that repo offers the package itself, and the priority check applies.
+- **Dependency exclusion** (`!package:dependency`, `!*:dependency` for any package, in the `blacklist`; commands `nodep`/`undep`): `add_with_deps` does not pull that dependency in for that package; any other package that requires it still does, and it can be installed by name. One dependency per line, exact names, no spaces (anything else is rejected, never guessed); the commands take several at once and check them all before writing. `info` prints each candidate's `requires:` line, read as the resolver reads it (`.dep`, else `PACKAGE REQUIRED`), marking what is not pulled in. A rule acts only on what the package requires itself: `nodep` warns (and still writes the rule) when it does not, naming the dependency one level down that does (`nodep_reach_note` in `commands/blacklist.rs`). Freezing the dependency is not a substitute: a freeze applies to every package, silently, and blocks installing it by name (feature request by gegechris99, Nov 2026).
+- **A dependency left out is always said.** When a frozen or excluded dependency is not installed, not asked for and not planned for another package, the plan prints `note: not pulling in '<dep>' for '<package>' (<rule or frozen>)`, so nothing is installed without one of its dependencies unnoticed.
 - **Freeze:** installed + rule -> FROZEN. Not installed + rule -> hidden from install-new/upgrades/check-updates, visible in search/info. A frozen candidate is treated as absent and resolution continues with the remaining candidates.
 - **Pin:** `@repo 100% name`, exact name, never freezes. A real freeze on the same name wins.
 - **install-new:** `cmd_install_new` and `dist_install_new` are intentionally different (normal: official + subtrees ranked above official; dist: official + patches only, regardless of priority).
@@ -261,14 +263,14 @@ The scripts were written for this refactor and ran only in the environment where
 
 The 0.12.x line is no longer maintained, so there is no normal branch to keep in sync. Changes go straight into this code. The "identical to the normal branch" result in 8.3 is historical: it held for the refactor as delivered.
 
-The first change after the refactor was the plan label (see 7). The second was issue #11 (source attribution and `remove @repo`, see 7), with 2 tests. The third was `BANNER` (issue #12, see 4), with 1 test. After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
+The first change after the refactor was the plan label (see 7). The second was issue #11 (source attribution and `remove @repo`, see 7), with 2 tests. The third was `BANNER` (issue #12, see 4), with 1 test. The fourth was the dependency exclusion (see 7), with 4 tests. After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **222 passed, 1 ignored** (223 in total).
-- Per file: `main.rs` 45, `config.rs` 31, `pkgdb.rs` 31, `repo.rs` 12, `revert.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `commands/blacklist.rs` 8, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `download.rs` 4, `system.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, and one each in `newconfig.rs`, `commands/clean.rs`, `commands/new_config.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **226 passed, 1 ignored** (227 in total).
+- Per file: `main.rs` 45, `config.rs` 32, `pkgdb.rs` 31, `repo.rs` 12, `revert.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `commands/blacklist.rs` 11, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `download.rs` 4, `system.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, and one each in `newconfig.rs`, `commands/clean.rs`, `commands/new_config.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Test modules in `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (with the `av()` and `fixture()` fixtures), `freshness_tests`, `foundational_tests`.
 
 ---

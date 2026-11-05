@@ -208,6 +208,22 @@ pub(crate) enum Cmd {
     /// `unpin package` (e.g. `unpin vlc`). The package returns to normal
     /// priority-based resolution. Run with no argument to list the current pins.
     Unpin { names: Vec<String> },
+    /// Never pull a dependency in for one package (or for any).
+    ///
+    /// `nodep package:dependency...` (e.g. `nodep python-sqlalchemy:python-psycopg2`)
+    /// stops `dependency` being pulled in when `package` requires it; other
+    /// packages that require it still get it. `nodep '*:dependency'` does this
+    /// for every package (quote the `*`). One dependency per argument, exact
+    /// names, no spaces; give several arguments for several. Stored in the
+    /// `blacklist` file as one `!package:dependency` line each. The plan notes
+    /// every dependency left out this way, and `info` shows it. Run with no
+    /// argument to list the current exclusions.
+    Nodep { specs: Vec<String> },
+    /// Remove dependency exclusions; no arg lists them.
+    ///
+    /// `undep package:dependency...` (e.g. `undep python-sqlalchemy:python-psycopg2`),
+    /// as listed by `nodep`. Run with no argument to list the current exclusions.
+    Undep { names: Vec<String> },
     /// Add a binary repository to the `repos` file.
     ///
     /// `add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=...]`.

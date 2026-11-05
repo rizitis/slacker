@@ -92,7 +92,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 |---|---|---|
 | `templates.rs` | generate/install/remove/delete-template | |
 | `repos.rs` | add-repo, del-repo, pri-repo, add-tag, del-tag, vet-repo, trust-repo, distrust-repo | το vetting (`vet_repo`, `apply_vet`, `reload_repo`) είναι στον πυρήνα |
-| `blacklist.rs` | frozen, unfrozen, pin, unpin | σέβονται το `--dry-run` (διόρθωση 0.12.5) |
+| `blacklist.rs` | frozen, unfrozen, pin, unpin, nodep, undep | σέβονται το `--dry-run` (διόρθωση 0.12.5) |
 | `logs.rs` | history, show-changelog | το όνομα δεν είναι `history.rs`, γιατί υπάρχει ήδη |
 | `query.rs` | search, file-search, info | read-only |
 | `find_mirror.rs` | find-mirror | δεν είναι `mirrors.rs`, γιατί υπάρχει ήδη |
@@ -178,6 +178,8 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 - **Το πλάνο εγκατάστασης λέει γιατί επιλέχθηκε κάθε build.** Στο `show_plan_alternatives` (`commands/install.rs`) η γραμμή της επιλογής γράφει `installing (dependency of <parent>, from its repo | pinned | priority winner | your choice)`. Παλιότερη έκδοση έγραφε «priority winner» σε κάθε επιλογή, και ήταν λάθος για τις εξαρτήσεις και για ένα «replace» σε protected dependency.
 - **Από πού ήρθε ένα εγκατεστημένο πακέτο** (`repo_for_installed` στο `pkgdb.rs`): από το repo που έχει ακριβώς αυτό το build. Αλλιώς από αυτό που έχει το ίδιο όνομα με το ίδιο build tag. Αλλιώς, μόνο με βάση το tag, από το repo με τα περισσότερα πακέτα με αυτό το tag. Αν ταιριάζουν πολλά repo, ένα pin στο όνομα διαλέγει το repo του, αν είναι ένα από αυτά, αλλιώς κερδίζει η μεγαλύτερη προτεραιότητα. Πακέτο χωρίς tag ανήκει στο επίσημο repo. Αυτό χρησιμοποιούν τα list-repos, status, history, οι κανόνες blacklist `@repo` για εγκατεστημένα πακέτα, και το clean-system. Ένα build tag δεν ανήκει σε ένα μόνο repo: το extra/ του Slackware έχει το `slackpkg+` του alienbob με tag `alien` (issue #11, Νοε 2026, όπου όλα τα alien πακέτα μετρούσαν στο extras).
 - **Το `remove @repo` αφαιρεί ακριβώς ό,τι μετρά το list-repos για εκείνο το repo.** Ποτέ «κάθε εγκατεστημένο πακέτο με tag που έχει το repo»: αυτό έπαιρνε όλα τα alien πακέτα για το `@extras`, και όλα τα επίσημα πακέτα για κάθε repo που έχει έστω ένα build χωρίς tag. Τα `upgrade @repo` και `reinstall @repo` διαλέγουν ακόμα με βάση τα tags του repo, αλλά ενεργούν μόνο όπου το ίδιο το repo προσφέρει το πακέτο, και ισχύει ο έλεγχος προτεραιότητας.
+- **Εξαίρεση εξάρτησης** (`!πακέτο:εξάρτηση`, ή `!*:εξάρτηση` για κάθε πακέτο, στο `blacklist`. Εντολές `nodep`/`undep`): το `add_with_deps` δεν τραβά αυτή την εξάρτηση για αυτό το πακέτο. Κάθε άλλο πακέτο που τη χρειάζεται την τραβά κανονικά, και εγκαθίσταται και με το όνομά της. Μία εξάρτηση ανά γραμμή, ακριβή ονόματα, χωρίς κενά (οτιδήποτε άλλο απορρίπτεται, δεν μαντεύεται). Οι εντολές δέχονται πολλά μαζί και τα ελέγχουν όλα πριν γράψουν. Το `info` τυπώνει για κάθε υποψήφιο γραμμή `requires:`, διαβασμένη όπως τη διαβάζει ο resolver (`.dep`, αλλιώς `PACKAGE REQUIRED`), και σημειώνει ό,τι δεν τραβιέται. Ένας κανόνας ισχύει μόνο για ό,τι ζητά το ίδιο το πακέτο: όταν δεν το ζητά, το `nodep` προειδοποιεί (και γράφει πάλι τον κανόνα) και ονομάζει την εξάρτηση ένα επίπεδο πιο κάτω που το ζητά (`nodep_reach_note` στο `commands/blacklist.rs`). Το freeze της εξάρτησης δεν είναι υποκατάστατο: ισχύει για όλα τα πακέτα, σιωπηλά, και μπλοκάρει και τη ρητή εγκατάσταση (αίτημα του gegechris99, Νοε 2026).
+- **Μια εξάρτηση που μένει έξω λέγεται πάντα.** Όταν μια frozen ή εξαιρεμένη εξάρτηση δεν είναι εγκατεστημένη, δεν ζητήθηκε και δεν μπαίνει για άλλο πακέτο, το πλάνο γράφει `note: not pulling in '<dep>' for '<package>' (<κανόνας ή frozen>)`, ώστε να μην εγκατασταθεί ποτέ κάτι χωρίς εξάρτησή του χωρίς να το δεις.
 - **Freeze:** εγκατεστημένο + κανόνας -> FROZEN. Μη εγκατεστημένο + κανόνας -> κρυμμένο από install-new/upgrades/check-updates, ορατό στο search/info. Ένα frozen candidate θεωρείται ότι δεν υπάρχει, και η επίλυση συνεχίζει στους υπόλοιπους.
 - **Pin:** `@repo 100% name`, ακριβές όνομα, δεν παγώνει ποτέ. Ένα πραγματικό freeze στο ίδιο όνομα κερδίζει.
 - **install-new:** το `cmd_install_new` και το `dist_install_new` είναι σκόπιμα διαφορετικά (κανονικό: official + subtrees πάνω από το official. Dist: μόνο official + patches, ανεξάρτητα από προτεραιότητα).
@@ -261,14 +263,14 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 
 Η σειρά 0.12.x δεν συντηρείται πια, οπότε δεν υπάρχει κανονικό branch για συγχρονισμό. Οι αλλαγές μπαίνουν κατευθείαν σε αυτόν τον κώδικα. Το αποτέλεσμα «ίδιο με το κανονικό branch» στο 8.3 είναι ιστορικό: ίσχυε για το refactor όπως παραδόθηκε.
 
-Η πρώτη αλλαγή μετά το refactor ήταν η ετικέτα του πλάνου (βλ. 7). Η δεύτερη ήταν το issue #11 (από πού ήρθε ένα εγκατεστημένο πακέτο, και `remove @repo`, βλ. 7), με 2 tests. Η τρίτη ήταν το `BANNER` (issue #12, βλ. 4), με 1 test. Μετά από κάθε αλλαγή: `cargo build --release --locked` χωρίς warnings, `cargo test --release --locked`, και οι έλεγχοι που τρέχει το SlackBuild (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Πριν από release: ένα τρέξιμο σε πραγματικό σύστημα από τον συντηρητή.
+Η πρώτη αλλαγή μετά το refactor ήταν η ετικέτα του πλάνου (βλ. 7). Η δεύτερη ήταν το issue #11 (από πού ήρθε ένα εγκατεστημένο πακέτο, και `remove @repo`, βλ. 7), με 2 tests. Η τρίτη ήταν το `BANNER` (issue #12, βλ. 4), με 1 test. Η τέταρτη ήταν η εξαίρεση εξάρτησης (βλ. 7), με 4 tests. Μετά από κάθε αλλαγή: `cargo build --release --locked` χωρίς warnings, `cargo test --release --locked`, και οι έλεγχοι που τρέχει το SlackBuild (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Πριν από release: ένα τρέξιμο σε πραγματικό σύστημα από τον συντηρητή.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **222 passed, 1 ignored** (223 συνολικά).
-- Ανά αρχείο: `main.rs` 45, `config.rs` 31, `pkgdb.rs` 31, `repo.rs` 12, `revert.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `commands/blacklist.rs` 8, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `download.rs` 4, `system.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, και από 1 στα `newconfig.rs`, `commands/clean.rs`, `commands/new_config.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **226 passed, 1 ignored** (227 συνολικά).
+- Ανά αρχείο: `main.rs` 45, `config.rs` 32, `pkgdb.rs` 31, `repo.rs` 12, `revert.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `commands/blacklist.rs` 11, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `download.rs` 4, `system.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, και από 1 στα `newconfig.rs`, `commands/clean.rs`, `commands/new_config.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Modules tests στο `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (με τα fixtures `av()` και `fixture()`), `freshness_tests`, `foundational_tests`.
 
 ---

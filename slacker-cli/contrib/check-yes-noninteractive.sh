@@ -160,6 +160,7 @@ check "remove"                      remove slkyes-upme
 check "remove-template"             remove-template yesrm
 check "clean-system"                clean-system
 check "frozen"                      frozen slkyes-hello
+check "nodep"                       nodep slkyes-hello:slkyes-world
 
 echo
 if [ "$fail" -ne 0 ]; then

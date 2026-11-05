@@ -26,7 +26,7 @@ mod ui;
 
 use clap::Parser;
 use cli::{Cli, Cmd};
-use commands::blacklist::{cmd_frozen, cmd_pin, cmd_unfrozen, cmd_unpin};
+use commands::blacklist::{cmd_frozen, cmd_nodep, cmd_pin, cmd_undep, cmd_unfrozen, cmd_unpin};
 use commands::clean::{cmd_clean_cache, cmd_clean_system};
 use commands::find_mirror::cmd_find_mirror;
 use commands::install::{
@@ -217,6 +217,8 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::Unfrozen { names } => cmd_unfrozen(cli, &cfg, names),
         Cmd::Pin { spec } => cmd_pin(cli, &cfg, spec.as_deref()),
         Cmd::Unpin { names } => cmd_unpin(cli, &cfg, names),
+        Cmd::Nodep { specs } => cmd_nodep(cli, &cfg, specs),
+        Cmd::Undep { names } => cmd_undep(cli, &cfg, names),
         Cmd::AddRepo { priority, name, url, flags } => {
             cmd_add_repo(cli, &cfg, priority, name, url, flags)
         }
@@ -376,6 +378,8 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::Unfrozen { .. } => "unfrozen",
         Cmd::Pin { .. } => "pin",
         Cmd::Unpin { .. } => "unpin",
+        Cmd::Nodep { .. } => "nodep",
+        Cmd::Undep { .. } => "undep",
         Cmd::AddRepo { .. } => "add-repo",
         Cmd::DelRepo { .. } => "del-repo",
         Cmd::PriRepo { .. } => "pri-repo",
@@ -760,7 +764,20 @@ fn add_with_deps(
                     .is_some_and(|o| o.frozen)
                     || system::installed_by_name(installed, &dep)
                         .is_some_and(|i| bl_installed(cfg, Some(db), i));
-                if bl {
+                // Nor one the user excluded for this package (`!parent:dep`, or
+                // `!*:dep` for any package); other packages still pull it in.
+                let nodep = cfg.nodep_rule(&name, &dep);
+                if bl || nodep.is_some() {
+                    // Say so when that leaves it off the system, so a package is
+                    // never installed without a dependency unnoticed. Not when it
+                    // is installed anyway, asked for, or planned for another one.
+                    if system::installed_by_name(installed, &dep).is_none()
+                        && !root_names.contains(&dep)
+                        && !planned.contains(&dep)
+                    {
+                        let why = nodep.unwrap_or_else(|| "frozen".to_string());
+                        eprintln!("  note: not pulling in '{dep}' for '{name}' ({why})");
+                    }
                     continue;
                 }
                 // A dependency that is itself a root (will be upgraded anyway)

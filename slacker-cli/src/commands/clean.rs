@@ -13,10 +13,10 @@ use std::io::Write;
 /// Whether an installed package should be treated as "pinned to its source" by
 /// clean-system: it carries a persistent pin (`pin_repo` is `Some`) AND its
 /// installed build actually came from that pinned repo (`installed_tag_repo` —
-/// the repo that owns the installed build tag — equals the pin's repo). A pinned
-/// name installed from some OTHER repo returns false: the pin is then ignored and
-/// the package falls through to the normal foreign-package logic (kept if
-/// official, removed if nothing else protects it).
+/// the repo the installed build came from, `repo_for_installed` — equals the
+/// pin's repo). A pinned name installed from some OTHER repo returns false: the
+/// pin is then ignored and the package falls through to the normal
+/// foreign-package logic (kept if official, removed if nothing else protects it).
 fn is_pinned_from_its_repo(pin_repo: Option<&str>, installed_tag_repo: Option<&str>) -> bool {
     matches!((pin_repo, installed_tag_repo), (Some(p), Some(o)) if p == o)
 }
@@ -31,11 +31,12 @@ pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, Strin
     // keeps exactly the packages slacker attributes to it:
     //
     //   * Tagged install (cf, alien, _SBo, ...): it came from a tagged source,
-    //     identified by its build tag. Kept iff that tag is in IGNORE_TAGS, OR
-    //     the repo that owns the tag is `immutable`. So `immutable extras` keeps
-    //     every package carrying extras' tag — but making `patches` immutable
-    //     does NOT keep a `foo` you installed from alienbob (its `alien` tag is
-    //     owned by alienbob, not patches), so that `foo` is still foreign.
+    //     found from the package and its build tag (`repo_for_installed`). Kept
+    //     iff that tag is in IGNORE_TAGS, OR the repo it came from is
+    //     `immutable`. So `immutable extras` keeps alienbob's slackpkg+ that
+    //     extra/ ships (tag `alien`) but not alienbob's own alien packages; and
+    //     making `patches` immutable does NOT keep a `foo` you installed from
+    //     alienbob, so that `foo` is still foreign.
     //   * Tagless install (empty build tag — the Slackware/official convention):
     //     slacker cannot tell which tagless repo it came from, so it is kept iff
     //     its NAME is in the baseline (official + every `immutable` repo). This
@@ -92,10 +93,10 @@ pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, Strin
             }
             if !p.is_official_build() {
                 // Genuine third-party tag (e.g. `_SBo`, `alien`): kept by
-                // IGNORE_TAGS, or if its owning repo is immutable.
+                // IGNORE_TAGS, or if the repo it came from is immutable.
                 let tag = p.build_tag();
                 let owned_by_immutable =
-                    db.repo_for_tag(tag).is_some_and(|r| immutable.contains(r));
+                    db.repo_for_installed(p).is_some_and(|r| immutable.contains(r));
                 !(cfg.is_ignored_tag(tag) || owned_by_immutable)
             } else {
                 // Official: tagless (-current) OR a `_slack<version>` stable patch
@@ -109,14 +110,14 @@ pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, Strin
         .collect();
 
     // Among the foreign packages, separate out ones the user PINNED to a repo
-    // and actually installed FROM that repo (the pin's repo owns the installed
-    // build tag). A pin is an explicit "take this from here" choice, so removing
+    // and actually installed FROM that repo (`repo_for_installed` names the
+    // pin's repo). A pin is an explicit "take this from here" choice, so removing
     // such a package is offered as a deliberate decision (R/K/P, default Keep)
     // rather than lumped in with the rest. A pinned name whose installed copy is
     // NOT from the pin repo keeps falling through to the normal logic above.
     let (pinned, mut orphans): (Vec<&pkg::PkgId>, Vec<&pkg::PkgId>) =
         orphans.into_iter().partition(|p| {
-            is_pinned_from_its_repo(cfg.pinned_repo(&p.name), db.repo_for_tag(p.build_tag()))
+            is_pinned_from_its_repo(cfg.pinned_repo(&p.name), db.repo_for_installed(p))
         });
 
     if !pinned.is_empty() {

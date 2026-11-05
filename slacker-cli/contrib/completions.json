@@ -32,6 +32,8 @@
     "unfrozen":          {"selector": false, "positional": "none"},
     "pin":               {"selector": false, "positional": "repo:pkg"},
     "unpin":             {"selector": false, "positional": "installed"},
+    "nodep":             {"selector": false, "positional": "none"},
+    "undep":             {"selector": false, "positional": "none"},
     "add-repo":          {"selector": false, "positional": "none"},
     "del-repo":          {"selector": false, "positional": "repo"},
     "pri-repo":          {"selector": false, "positional": "repo"},
