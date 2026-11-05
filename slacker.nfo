@@ -1,6 +1,6 @@
     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
     ▒ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ▒
-    ▒          ██╗                ██╗ ░░slacker v0.12.5░░░ ▒
+    ▒          ██╗                ██╗ ░░slacker v0.13.0░░░ ▒
     ▒   ██████╗██║  █████╗ ██████╗██║ ██╗██████╗██╗████╗   ▒
     ▒   ██╔═══╝██║  ╚═══██╗██╔═══╝██║██╔╝██╔═██║████╔══╝   ▒
     ▒   ██████╗██║  ██████║██║    ████╔╝ ██████║██╔═╝      ▒
@@ -11,13 +11,13 @@
     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 
 ████ LOADING PACKAGE INFO ██████████████████████████████████████████████
-[0x01] PACKAGE   : slacker v0.12.5  [OK]
+[0x01] PACKAGE   : slacker v0.13.0_beta.5  [OK]
 [0x02] TYPE      : APPLICATION (cli + gui)  [OK]
 [0x03] SIZE      : 2.7 MiB  [OK]
 [0x04] DATE      : 2026-10-02  [OK]
 [0x05] MD5       : da34b54e2d3a9e352440a39cb26af709  [OK]
-[0x06] ARCH      : x86_64 i686  [OK]
-[0x07] TARGET    : Slackware 15.0 | development branch  [OK]
+[0x06] ARCH      : x86_64 i686  aarch64 [OK]
+[0x07] TARGET    : Slackware | development branch  [OK]
 [0x08] LANG      : Rust 1.88+  [OK]
 [0x09] DEVELOPER : rizitis
 ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
@@ -50,7 +50,7 @@
 ████ REPOSITORIES PULSE ████████████████████████████████████████████████
 ▒forge.slackware.nl : https://forge.slackware.nl/rizitis/slacker
 ▓github             : https://github.com/rizitis/slacker
-▒conraid            : https://slackers.it/repository/slackware64-current
+▒wiki               : https://forge.slackware.nl/rizitis/slacker/wiki
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 ████ CONFIG STREAM █████████████████████████████████████████████████████

@@ -1,4 +1,4 @@
-.TH SLACKER 8 "October 2026" "slacker 0.12.5" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.13.0" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -330,8 +330,9 @@ rule; its build tag is listed in
 .BR IGNORE_TAGS ;
 or it is attributed to an
 .B immutable
-repository (for a tagged package, the repo that owns its build tag; for a
-tagless one, any immutable repo that provides its name). Use these to protect
+repository (for a tagged package, the repo it came from: the one shipping that
+exact build, or the same name with the same build tag; for a tagless one, any
+immutable repo that provides its name). Use these to protect
 SBo/local builds and packages from
 .IR extra/ ", " testing/ ", " patches/
 that you keep installed. As a safety guard slacker refuses to run if a baseline
@@ -346,8 +347,8 @@ A
 by itself does not protect a package here (unlike a freeze). Instead, any foreign
 package that is pinned
 .I and
-was actually installed from the repo it is pinned to (the pin's repo owns its
-build tag) is presented in a separate step before the main list, offering
+was actually installed from the repo it is pinned to (the pin's repo ships that
+build) is presented in a separate step before the main list, offering
 .RB ( R )emove
 all,
 .RB ( K )eep
@@ -631,11 +632,23 @@ and
 .BR download ,
 every package available in that repo, e.g.
 .I @gnome
-to install a whole desktop repo. For commands acting on installed packages
-.RB ( upgrade ", " reinstall ", " remove )
-it means every installed package whose build tag belongs to that repo \(em the
-packages actually built from it \(em so a same\-named package installed from
-another source is left untouched.
+to install a whole desktop repo. For
+.B upgrade
+and
+.B reinstall
+it means every installed package whose build tag that repo ships and that the
+repo still offers \(em the packages actually built from it \(em so a
+same\-named package installed from another source is left untouched. For
+.B remove
+it means exactly the packages
+.B list-repos
+counts for that repo: a tagless package belongs to the official repo, a tagged
+one to the repo shipping that build (or the same name with the same build tag).
+A build tag shared by two repos, such as the
+.I alien
+tag of the slackpkg+ that Slackware ships in
+.IR extra/ ,
+does not pull in the other repo's packages.
 .TP
 .BI @ _tag
 Every package carrying that build tag, e.g.
@@ -746,6 +759,15 @@ is the cumulative \-current archive it fetches superseded official packages from
 \(em a revert\-only source, never consulted by
 .BR update ", " upgrade ", " install " or " check-updates ,
 so its historical packages never enter the priority model.
+.B BANNER
+(default
+.IR on )
+shows the labyrinth header at the top of every command and the SLACKWARE art
+after an upgrade that touched the official tree and at
+.BR upgrade-dist ;
+set it to
+.I off
+to hide both. They are printed only on a terminal, never into a pipe or a file.
 .PP
 The
 .I repos
