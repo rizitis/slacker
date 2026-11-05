@@ -1,0 +1,10 @@
+Installed: (none)
+Available candidates (highest priority first):
+  [conraid] blueprint-compiler-0.22.2-x86_64-4cf
+        series: x   compressed: ?   uncompressed: ?   md5 ok
+        requires: gtk4
+        blueprint-compiler (test)
+  [lngn] blueprint-compiler-0.22.2-x86_64-1_lngn
+        series: x   compressed: ?   uncompressed: ?   md5 ok
+        requires: xvfb-run (not pulled in: !*:xvfb-run)
+        blueprint-compiler (test)

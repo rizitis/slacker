@@ -1,0 +1,6 @@
+Installed: (none)
+Available candidates (highest priority first):
+  [lngn] ghostty-1.4.0-x86_64-5_lngn
+        series: x   compressed: ?   uncompressed: ?   md5 ok
+        requires: blueprint-compiler, gtk4-layer-shell, cargo-auditable, bash   (RESOLVE_DEPS=no: none are pulled in)
+        ghostty (test)

@@ -1,6 +1,6 @@
 Version Beta 0.13.0
 =====
-SEMANTIC CHANGES (slacker.conf need update)
+SEMANTIC CHANGES (etc/slacker/{slacker.conf,blacklist} are new files, slacker.conf need update)
 - Update: slacker-cli
     - new commands nodep / undep: never pull one dependency in for one package
       (`nodep python-sqlalchemy:python-psycopg2`), or for any package

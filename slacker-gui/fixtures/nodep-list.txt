@@ -1,0 +1,5 @@
+Current dependency exclusions:
+  !ghostty:cargo-auditable  ('cargo-auditable' is not pulled in for 'ghostty')
+  !*:xvfb-run  ('xvfb-run' is not pulled in for any package)
+  !slackpkg+:gtk+3  ('gtk+3' is not pulled in for 'slackpkg+')
+  to add: `nodep package:dependency...`, e.g. `nodep python-sqlalchemy:python-psycopg2`, or `nodep '*:cargo-auditable'` for any package

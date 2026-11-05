@@ -194,6 +194,7 @@ fn package_row(ctx: &Ctx, e: &Event, repo_names: Option<&HashSet<String>>) -> ad
     let pinned = ctx.pinned_repo(&e.name);
     let pin = item(if pinned.is_some() { "Pin to Another Repository\u{2026}" } else { "Pin to a Repository\u{2026}" });
     let unpin = pinned.as_ref().map(|r| item(&format!("Remove Pin ({r})")));
+    let deps = item("Dependencies\u{2026}");
     pop_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     let reinstall = from_repo.then(|| item("Reinstall\u{2026}"));
     if !from_repo {
@@ -251,6 +252,13 @@ fn package_row(ctx: &Ctx, e: &Event, repo_names: Option<&HashSet<String>>) -> ad
         b.connect_clicked(move |_| {
             p.popdown();
             crate::edit::unpin(&ctx, &name);
+        });
+    }
+    {
+        let (ctx, name, p) = (ctx.clone(), name.clone(), popover.clone());
+        deps.connect_clicked(move |_| {
+            p.popdown();
+            crate::deps::dialog(&ctx, &name);
         });
     }
     for b in [&freeze, &pin].into_iter().chain(unpin.iter()) {
