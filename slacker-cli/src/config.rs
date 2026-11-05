@@ -556,6 +556,16 @@ fn read_optional(path: &Path) -> Result<String, String> {
     }
 }
 
+/// Whether to print the decorative banners: the labyrinth header at the top of
+/// every command and the SLACKWARE art (`BANNER` in slacker.conf, same on/off
+/// rule as `REVERT`: on unless explicitly off/no/false/0). Read on its own, like
+/// `system_arch`, because the header is printed before the full config is
+/// loaded and must not depend on it being valid; an unreadable file means on.
+pub fn banner_enabled(dir: &Path) -> bool {
+    let text = read_optional(&dir.join("slacker.conf")).unwrap_or_default();
+    parse_revert_enabled(parse_keyvals(&text).get("BANNER").map(String::as_str))
+}
+
 /// Architecture tokens we recognise in Slackware package names / os-release.
 const KNOWN_ARCHES: &[&str] = &["x86_64", "aarch64", "i586", "i686", "arm", "noarch"];
 
@@ -1166,6 +1176,20 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("slacker.conf"), "ARCH=i586\n").unwrap();
         assert_eq!(system_arch(&dir), "i586");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn banner_on_unless_conf_says_off() {
+        let dir = std::env::temp_dir().join(format!("slacker-banner-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(banner_enabled(&dir)); // no slacker.conf
+        std::fs::write(dir.join("slacker.conf"), "MAX_PARALLEL=4\n").unwrap();
+        assert!(banner_enabled(&dir)); // key absent
+        std::fs::write(dir.join("slacker.conf"), "BANNER=on\n").unwrap();
+        assert!(banner_enabled(&dir));
+        std::fs::write(dir.join("slacker.conf"), "BANNER=\"off\"  # quiet\n").unwrap();
+        assert!(!banner_enabled(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

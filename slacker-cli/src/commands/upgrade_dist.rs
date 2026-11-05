@@ -11,7 +11,7 @@ use crate::{
     slackware_dir, summarize_outcomes, update_one_repo, DlItem, InstallAction, Outcome, PlanItem,
     UpdateOutcomes,
 };
-use crate::{banner, changelog, dist, download, pkg, system, template, ui};
+use crate::{banner, changelog, config, dist, download, pkg, system, template, ui};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
@@ -416,7 +416,9 @@ fn dist_execute(
 /// and install core-first, then install-new, then the rest.
 pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome, String> {
     // A little ceremony for the distribution-scale operation on the official tree.
-    banner::show();
+    if config::banner_enabled(&cfg.config_dir) {
+        banner::show();
+    }
     // Running side: codename is authoritative for -current; VERSION_ID names a
     // stable. An unrecognisable os-release is a refusal, never a guess.
     let running = dist::parse_release_from_os(

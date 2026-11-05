@@ -1,6 +1,6 @@
 # slacker: δομή του κώδικα, κανόνες και ιστορικό του refactor
 
-Τελευταία ενημέρωση: 29 Οκτ 2026. Αφορά το `slacker-cli` μετά το refactor (βήματα 1–14). Συντηρητής: Ioannis Anagnostakis (`rizitis`).
+Τελευταία ενημέρωση: 5 Νοε 2026. Αφορά το `slacker-cli` 0.13.0, τον κώδικα μετά το refactor (βήματα 1–14). Συντηρητής: Ioannis Anagnostakis (`rizitis`).
 
 Το έγγραφο απευθύνεται σε όποιον (άνθρωπο ή AI) πιάνει τον κώδικα για πρώτη φορά. Λέει **τι είναι πού, γιατί είναι εκεί, και τι δεν αλλάζει**. Αν κάτι εδώ διαφωνεί με τον κώδικα, ισχύει ο κώδικας, και διορθώνεται το έγγραφο.
 
@@ -37,7 +37,7 @@ slacker/
 
 - `cargo build --release` μέσα στο `slacker-cli/`. Το release profile έχει `lto = true`, `strip = true`, `opt-level = 2`.
 - Εξαρτήσεις: `clap` (derive), `ureq` 2 (rustls, gzip), `md-5`, `regex`, `rusqlite` (bundled).
-- **MSRV:** το `Cargo.toml` λέει `1.85.1`, αλλά τα `icu_*` (μέσω ureq -> url -> idna) θέλουν **1.88**, ήδη από το icu 2.3. Η σωστή τιμή είναι `rust-version = "1.88"`.
+- **MSRV:** `rust-version = "1.88"`. Τα `icu_*` (μέσω ureq -> url -> idna) το χρειάζονται από το icu 2.3.
 - Ενημέρωση εξαρτήσεων: στοχευμένα με `cargo update -p <crate>` όταν το `cargo audit` βρει κάτι, ολικά με `cargo update` στην αρχή κύκλου ανάπτυξης (όχι τη μέρα του release). Μετά πάντα `cargo build --release --locked && cargo test --locked && cargo audit`.
 
 ---
@@ -60,6 +60,7 @@ slacker/
 
 Σειρά μέσα στο `run()` (στο `main.rs`):
 
+0. **Η κεφαλίδα με τον λαβύρινθο** (`banner2::show()`), μόνο σε τερματικό, εκτός αν το slacker.conf έχει `BANNER=off`. Αυτό το ένα κλειδί διαβάζεται μόνο του (`config::banner_enabled`, όπως το `system_arch`), γιατί η κεφαλίδα τυπώνεται πριν φορτωθεί το config και δεν πρέπει να εξαρτάται από το αν είναι σωστό. Το ίδιο κλειδί κρύβει και το σχέδιο SLACKWARE (`banner::show()`) μετά από upgrade-all που άγγιξε το επίσημο δέντρο, και στο upgrade-dist.
 1. **Εντολές που τρέχουν πριν φορτωθεί το config:** `status`, `find-mirror`, `new-config`. Πρέπει να δουλεύουν και όταν το config είναι χαλασμένο (το `status` το διαγνώνει, το `new-config` είναι αυτό που το διορθώνει). Το `new-config` ελέγχει δικαιώματα και παίρνει lock.
 2. `Config::load_dir()`. Αυστηρό: λάθος στο `repos`/`mirrors` σταματάει εδώ.
 3. `migrate_state()`: μεταφορά παλιών trust anchors από το cache στο STATE_DIR, μία φορά, χωρίς ποτέ να σβήσει υπάρχοντα.
@@ -171,6 +172,12 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 ### Σημασιολογία (λύθηκε, μην ξανανοίγει)
 
 - **Προτεραιότητα πάνω από όλα:** ποτέ σιωπηλή μεταφορά ή υποβάθμιση. Μόνο ρητό `repo:name` ή pin την παρακάμπτουν.
+- **Οι εξαρτήσεις έρχονται από το repo του γονέα.** Το `add_with_deps` επιλύει μια εξάρτηση μόνο ως `<repo του γονέα>:<dep>`, οπότε μια εξάρτηση που δεν είναι εγκατεστημένη παίρνεται από το ίδιο repo με το πακέτο που τη χρειάζεται, όχι από τον νικητή της προτεραιότητας. Αυτό είναι σκόπιμο. Μια εγκατεστημένη εξάρτηση από πηγή ίσης ή μεγαλύτερης προτεραιότητας γίνεται protected dependency (ερώτηση k/r/a/q). Αν δεν βρεθεί ούτε εγκατεστημένη ούτε στο repo του γονέα, βγαίνει μόνο προειδοποίηση.
+- **Τα επίσημα πακέτα του Slackware δεν δηλώνονται ποτέ ως εξαρτήσεις.** Το Slackware θεωρεί δεδομένη την πλήρη εγκατάσταση. Μην επινοείτε σενάρια όπου ένα third-party πακέτο δηλώνει επίσημο πακέτο ως εξάρτηση.
+- **Το upgrade-all μπορεί να μεταφέρει εγκατεστημένο πακέτο σε πηγή μεγαλύτερης προτεραιότητας** (`upgrades_for` στο `pkgdb.rs`), ακόμα και στην ίδια έκδοση. Αυτό είναι σωστό, και ελέγχθηκε με πραγματική αναφορά (ghostty, Νοε 2026). Δεν αλλάζει.
+- **Το πλάνο εγκατάστασης λέει γιατί επιλέχθηκε κάθε build.** Στο `show_plan_alternatives` (`commands/install.rs`) η γραμμή της επιλογής γράφει `installing (dependency of <parent>, from its repo | pinned | priority winner | your choice)`. Παλιότερη έκδοση έγραφε «priority winner» σε κάθε επιλογή, και ήταν λάθος για τις εξαρτήσεις και για ένα «replace» σε protected dependency.
+- **Από πού ήρθε ένα εγκατεστημένο πακέτο** (`repo_for_installed` στο `pkgdb.rs`): από το repo που έχει ακριβώς αυτό το build. Αλλιώς από αυτό που έχει το ίδιο όνομα με το ίδιο build tag. Αλλιώς, μόνο με βάση το tag, από το repo με τα περισσότερα πακέτα με αυτό το tag. Αν ταιριάζουν πολλά repo, ένα pin στο όνομα διαλέγει το repo του, αν είναι ένα από αυτά, αλλιώς κερδίζει η μεγαλύτερη προτεραιότητα. Πακέτο χωρίς tag ανήκει στο επίσημο repo. Αυτό χρησιμοποιούν τα list-repos, status, history, οι κανόνες blacklist `@repo` για εγκατεστημένα πακέτα, και το clean-system. Ένα build tag δεν ανήκει σε ένα μόνο repo: το extra/ του Slackware έχει το `slackpkg+` του alienbob με tag `alien` (issue #11, Νοε 2026, όπου όλα τα alien πακέτα μετρούσαν στο extras).
+- **Το `remove @repo` αφαιρεί ακριβώς ό,τι μετρά το list-repos για εκείνο το repo.** Ποτέ «κάθε εγκατεστημένο πακέτο με tag που έχει το repo»: αυτό έπαιρνε όλα τα alien πακέτα για το `@extras`, και όλα τα επίσημα πακέτα για κάθε repo που έχει έστω ένα build χωρίς tag. Τα `upgrade @repo` και `reinstall @repo` διαλέγουν ακόμα με βάση τα tags του repo, αλλά ενεργούν μόνο όπου το ίδιο το repo προσφέρει το πακέτο, και ισχύει ο έλεγχος προτεραιότητας.
 - **Freeze:** εγκατεστημένο + κανόνας -> FROZEN. Μη εγκατεστημένο + κανόνας -> κρυμμένο από install-new/upgrades/check-updates, ορατό στο search/info. Ένα frozen candidate θεωρείται ότι δεν υπάρχει, και η επίλυση συνεχίζει στους υπόλοιπους.
 - **Pin:** `@repo 100% name`, ακριβές όνομα, δεν παγώνει ποτέ. Ένα πραγματικό freeze στο ίδιο όνομα κερδίζει.
 - **install-new:** το `cmd_install_new` και το `dist_install_new` είναι σκόπιμα διαφορετικά (κανονικό: official + subtrees πάνω από το official. Dist: μόνο official + patches, ανεξάρτητα από προτεραιότητα).
@@ -243,23 +250,25 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 
 **Τελικός έλεγχος:** το παραδοτέο χτίστηκε σε καθαρό αντίγραφο του repo. Όλα τα παραπάνω βγήκαν **ίδια με το binary του κανονικού branch** (0.12.4 με cap+quarantine, help, dry-run fix). Δηλαδή το refactor συμπεριφέρεται ακριβώς όπως ο κώδικας που τρέχει σε παραγωγή.
 
-Τα scripts είναι στο `slacker-refactor-harness.tar.gz` (τα κρατά ο r-tz, δεν μπαίνουν στο repo). Χρειάζονται root, `unshare`, `gpg`, `python3`. Ο φάκελός τους είναι γραμμένος μέσα στα scripts (μεταβλητή `SP`), οπότε σε άλλο μηχάνημα πρέπει να αλλάξει. Το `check_all.sh` τρέχει από το `slacker-cli/` και τα κάνει όλα μαζί.
+Τα scripts γράφτηκαν για αυτό το refactor και έτρεξαν μόνο στο περιβάλλον όπου έγινε. Εκτός από root, `unshare`, `gpg` και `python3`, εξαρτώνται από καταλόγους με fixtures και από συγκεκριμένα binaries προετοιμασίας που δεν είναι μέσα στο `slacker-refactor-harness.tar.gz`, και οι διαδρομές τους είναι γραμμένες μέσα στα scripts. Ο r-tz κρατά το tarball για αρχείο. Δεν μπαίνει στο repo.
 
 ### 8.4 Τι ΔΕΝ έγινε, σκόπιμα
 
 - **Ο κοινός πυρήνας δεν μετακινήθηκε** (το σχεδιαζόμενο βήμα 15: `plan.rs`, `execute.rs`, `select.rs`, `prompt.rs`). Ο resolver με το `MAX_DEP_DEPTH`, η εκτέλεση, το fetch/verify και η επιλογή πακέτων μένουν εκεί που δοκιμάστηκαν σε πραγματικό σύστημα. Το κέρδος θα ήταν μόνο οργάνωση. Το ίδιο ισχύει για το `collect_tests` (περίπου 550 γραμμές με κοινά fixtures).
 - **Η είσοδος μένει στο `main.rs`:** `main`, `run`, `Outcome`, lock, δικαιώματα.
 
-### 8.5 Κανόνας συγχρονισμού
+### 8.5 Μετά το refactor
 
-Μέχρι να μπει το refactor σε release, **κάθε αλλαγή στο κανονικό branch περνάει και στο refactor** (όπως έγινε με το dry-run fix). Αλλιώς παύει να ισχύει η απόδειξη «refactor == κανονικό». Μετά από κάθε τέτοια αλλαγή, ξανατρέχει το `check_all.sh` και η σύγκριση με το κανονικό binary. Πριν από release: ένα τρέξιμο σε πραγματικό σύστημα από τον συντηρητή.
+Η σειρά 0.12.x δεν συντηρείται πια, οπότε δεν υπάρχει κανονικό branch για συγχρονισμό. Οι αλλαγές μπαίνουν κατευθείαν σε αυτόν τον κώδικα. Το αποτέλεσμα «ίδιο με το κανονικό branch» στο 8.3 είναι ιστορικό: ίσχυε για το refactor όπως παραδόθηκε.
+
+Η πρώτη αλλαγή μετά το refactor ήταν η ετικέτα του πλάνου (βλ. 7). Η δεύτερη ήταν το issue #11 (από πού ήρθε ένα εγκατεστημένο πακέτο, και `remove @repo`, βλ. 7), με 2 tests. Η τρίτη ήταν το `BANNER` (issue #12, βλ. 4), με 1 test. Μετά από κάθε αλλαγή: `cargo build --release --locked` χωρίς warnings, `cargo test --release --locked`, και οι έλεγχοι που τρέχει το SlackBuild (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Πριν από release: ένα τρέξιμο σε πραγματικό σύστημα από τον συντηρητή.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **219 passed, 1 ignored** (220 συνολικά).
-- Ανά αρχείο: `main.rs` 45, `config.rs` 30, `pkgdb.rs` 29, `repo.rs` 12, `revert.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `commands/blacklist.rs` 8, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `download.rs` 4, `system.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, και από 1 στα `newconfig.rs`, `commands/clean.rs`, `commands/new_config.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **222 passed, 1 ignored** (223 συνολικά).
+- Ανά αρχείο: `main.rs` 45, `config.rs` 31, `pkgdb.rs` 31, `repo.rs` 12, `revert.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `commands/blacklist.rs` 8, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `download.rs` 4, `system.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, και από 1 στα `newconfig.rs`, `commands/clean.rs`, `commands/new_config.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Modules tests στο `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (με τα fixtures `av()` και `fixture()`), `freshness_tests`, `foundational_tests`.
 
 ---
@@ -268,7 +277,6 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 
 - **Δύο `arch_compatible` με ανάποδη σειρά ορισμάτων:** `main.rs` `(sys_arch, pkg_arch)` και `repo.rs` `(pkg_arch, arch)`. Κάνουν το ίδιο πράγμα. Δεν είναι bug σήμερα, αλλά είναι παγίδα. Αξίζει ενοποίηση, ως ξεχωριστή αλλαγή.
 - **Ημερομηνίες του `history` μετά από restore (ΔΕΝ διορθώθηκε, σκόπιμα):** η ζώνη ώρας υπολογίζεται συγκρίνοντας την ώρα στο όνομα `-upgraded-<T>` με το ctime. Το ctime χάνεται σε επαναφορά από backup, και τότε μετατοπίζονται οι ημερομηνίες. Μια απλή λύση «αγνόησε μη ρεαλιστικές ζώνες ώρας» ΔΕΝ αρκεί. Αφορά μόνο εμφάνιση και μόνο επαναφερμένα συστήματα. Θέλει δικό του σχεδιασμό αν ποτέ γίνει.
-- **MSRV:** βλ. 2 (`rust-version = "1.88"`).
 - **Doc comments σε λάθος θέση** (μόνο rustdoc, όχι λειτουργία): μια παράγραφος του `warn_unverified_repos` πάνω από το `unverified_repo_names` (`main.rs`), το doc του `cmd_status` πάνω από το `MLOCATE_DB` (`commands/status.rs`), ένα «Parse a keep-selection» πάνω από το `select_packages_pkgid` (`commands/install.rs`), και ένα «GATE ONLY for now» πάνω από το `DIST_CRITICAL` (`commands/upgrade_dist.rs`). Έμειναν ως έχουν για την απόδειξη «αυτούσιο κείμενο». Διορθώνονται ως ξεχωριστή, καλλωπιστική αλλαγή.
 - **Τα `.asc` των πακέτων μένουν στο cache** μετά από install/upgrade-dist (το πακέτο σβήνεται, η υπογραφή όχι). Παρατηρήθηκε στις δοκιμές. Είναι μικρά αρχεία και τα σβήνει το `clean-cache`. Δεν έχει αξιολογηθεί αν πρέπει να αλλάξει.
 

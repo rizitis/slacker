@@ -33,17 +33,17 @@ fn verify_label(p: &config::VerifyPolicy) -> String {
     }
 }
 
-/// Attribute each installed package to a source by its build tag (pure core).
-/// An empty tag is the official repo; a tag the `resolve_repo` closure maps to a
-/// binary repo goes there; a tag matching a declared tag-priority rule (e.g.
-/// `_SBo`) maps to that rule's name; any other tag is itself the source. An
-/// installed package is never "untracked" — its build tag is the user's own
-/// choice and a legitimate source. Returns (per-repo, per-tag-rule-by-name,
-/// per-other-tag).
+/// Attribute each installed package to a source (pure core). An empty tag is
+/// the official repo; a package the `resolve_repo` closure maps to a binary repo
+/// (by the package itself, not only its tag) goes there; a tag matching a
+/// declared tag-priority rule (e.g. `_SBo`) maps to that rule's name; any other
+/// tag is itself the source. An installed package is never "untracked" — its
+/// build tag is the user's own choice and a legitimate source. Returns
+/// (per-repo, per-tag-rule-by-name, per-other-tag).
 fn attribute_tags(
     official_repo: Option<&str>,
     tag_priorities: &[config::TagPriority],
-    resolve_repo: impl Fn(&str) -> Option<String>,
+    resolve_repo: impl Fn(&pkg::PkgId) -> Option<String>,
     installed: &[pkg::PkgId],
 ) -> (
     HashMap<String, usize>,
@@ -58,7 +58,7 @@ fn attribute_tags(
         let repo = if tag.is_empty() {
             official_repo.map(|s| s.to_string())
         } else {
-            resolve_repo(tag)
+            resolve_repo(p)
         };
         if let Some(r) = repo {
             *per_repo.entry(r).or_default() += 1;
@@ -75,7 +75,7 @@ fn attribute_tags(
 }
 
 /// Attribute installed packages using the available-package DB to resolve which
-/// repo serves a build tag. With no DB, all maps are empty.
+/// repo each one came from. With no DB, all maps are empty.
 fn installed_attribution(
     cfg: &Config,
     db: Option<&PkgDb>,
@@ -89,7 +89,7 @@ fn installed_attribution(
         Some(db) => attribute_tags(
             cfg.official_repo_name(),
             &cfg.tag_priorities,
-            |t| db.repo_for_tag(t).map(|s| s.to_string()),
+            |p| db.repo_for_installed(p).map(|s| s.to_string()),
             installed,
         ),
         None => (HashMap::new(), HashMap::new(), HashMap::new()),
@@ -1770,7 +1770,7 @@ mod attribution_tests {
         let (per_repo, per_rule, per_other) = attribute_tags(
             Some("slackware"),
             &rules,
-            |t| (t == "cf").then(|| "conraid".to_string()),
+            |p| (p.build_tag() == "cf").then(|| "conraid".to_string()),
             &installed,
         );
 

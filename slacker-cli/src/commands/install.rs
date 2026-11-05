@@ -842,17 +842,30 @@ pub(crate) fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result
 
     for pat in patterns {
         if let Some(rest) = pat.strip_prefix('@') {
-            // @repo  -> installed packages whose build tag belongs to that repo
+            // @repo  -> installed packages that came from that repo, exactly
+            //           what list-repos counts for it: a tagless build is the
+            //           official repo's, any other goes by `repo_for_installed`.
+            //           Not "any build tag the repo ships": a tag can be shared
+            //           (extra/ ships alienbob's slackpkg+ as `alien`) and most
+            //           subtrees ship tagless builds, so `@extras` used to take
+            //           every alien package and every official one.
             // @_tag  -> installed packages carrying that build tag
             let db = db.as_ref().expect("db loaded for @ selector");
             validate_selector(db, pat)?;
-            let tags: HashSet<String> = if db.is_repo(rest) {
-                db.repo_build_tags(rest)
-            } else {
-                std::iter::once(rest.to_string()).collect()
+            let is_repo = db.is_repo(rest);
+            let from_here = |inst: &pkg::PkgId| {
+                if !is_repo {
+                    return inst.build_tag() == rest;
+                }
+                let src = if inst.build_tag().is_empty() {
+                    cfg.official_repo_name()
+                } else {
+                    db.repo_for_installed(inst)
+                };
+                src == Some(rest)
             };
             for inst in &installed {
-                if tags.contains(inst.build_tag()) && seen.insert(inst.name.clone()) {
+                if from_here(inst) && seen.insert(inst.name.clone()) {
                     if bl_installed(cfg, Some(db), inst) {
                         frozen.push(inst.name.clone());
                         continue;
@@ -1117,6 +1130,7 @@ pub(crate) fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String
     if plan
         .iter()
         .any(|it| cfg.repo_by_name(&it.pkg.repo).is_some_and(|r| r.official || r.subtree))
+        && config::banner_enabled(&cfg.config_dir)
     {
         banner::show();
     }

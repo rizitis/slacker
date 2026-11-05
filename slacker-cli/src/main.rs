@@ -136,7 +136,10 @@ fn clap_error_exit(e: clap::Error) -> ExitCode {
 fn run(cli: &Cli) -> Result<Outcome, String> {
     // Banner No. 2 (the labyrinth masthead) heads every command, on a terminal
     // only (show() no-ops when stdout is piped, so scripts/pipes stay clean).
-    banner2::show();
+    // BANNER=off in slacker.conf hides it.
+    if config::banner_enabled(&cli.config_dir) {
+        banner2::show();
+    }
     // `status` must work even when the configuration is broken — diagnosing
     // exactly that is its job — so it loads resiliently on its own and is
     // dispatched before the strict load below (which aborts on those problems).
@@ -2423,15 +2426,16 @@ fn priority_display(prio: i32) -> String {
 
 /// Is an installed package blacklisted (frozen)? Matched against its full id,
 /// the series looked up from the db, and its source repo — the official repo
-/// for an empty build tag, otherwise the repo owning that tag. `db` may be None
-/// when a command hasn't loaded it; then only plain regex rules can match.
+/// for an empty build tag, otherwise the repo it came from (`repo_for_installed`).
+/// `db` may be None when a command hasn't loaded it; then only plain regex rules
+/// can match.
 fn bl_installed(cfg: &Config, db: Option<&PkgDb>, i: &pkg::PkgId) -> bool {
     let series = db.and_then(|d| d.series_of(&i.name));
     let tag = i.build_tag();
     let repo = if tag.is_empty() {
         cfg.official_repo_name()
     } else {
-        db.and_then(|d| d.repo_for_tag(tag))
+        db.and_then(|d| d.repo_for_installed(i))
     };
     cfg.blacklist_hit(&i.tag(), series, repo)
 }

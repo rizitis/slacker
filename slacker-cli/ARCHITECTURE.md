@@ -1,6 +1,6 @@
 # slacker: code structure, rules and refactor history
 
-Last updated: 3 Nov 2026. Covers `slacker-cli` 0.13.0, the refactored code (steps 1–14). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
+Last updated: 5 Nov 2026. Covers `slacker-cli` 0.13.0, the refactored code (steps 1–14). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
 
 This document is for anyone, human or AI, opening the code for the first time. It says **what lives where, why it lives there, and what must not change**. If anything here disagrees with the code, the code wins and this document gets fixed.
 
@@ -37,7 +37,7 @@ slacker/
 
 - `cargo build --release` inside `slacker-cli/`. The release profile uses `lto = true`, `strip = true`, `opt-level = 2`.
 - Dependencies: `clap` (derive), `ureq` 2 (rustls, gzip), `md-5`, `regex`, `rusqlite` (bundled).
-- **MSRV:** `Cargo.toml` says `1.85.1`, but the `icu_*` crates (pulled in via ureq -> url -> idna) require **1.88**, and have since icu 2.3. The correct value is `rust-version = "1.88"`.
+- **MSRV:** `rust-version = "1.88"`. The `icu_*` crates (pulled in via ureq -> url -> idna) require it since icu 2.3.
 - Updating dependencies: targeted `cargo update -p <crate>` when `cargo audit` reports something; a full `cargo update` at the start of a development cycle, not on release day. Always follow with `cargo build --release --locked && cargo test --locked && cargo audit`.
 
 ---
@@ -60,6 +60,7 @@ slacker/
 
 Order inside `run()` (in `main.rs`):
 
+0. **The labyrinth header** (`banner2::show()`), on a terminal only, unless `BANNER=off` in slacker.conf. That one key is read on its own (`config::banner_enabled`, like `system_arch`) because the header prints before the config is loaded and must not depend on it being valid. The same key hides the SLACKWARE art (`banner::show()`) after an upgrade-all that touched the official tree and at upgrade-dist.
 1. **Commands that run before the config is loaded:** `status`, `find-mirror`, `new-config`. They must work even when the config is broken: `status` is what diagnoses it, and `new-config` is what repairs it. `new-config` still checks privileges and takes the lock.
 2. `Config::load_dir()`. Strict: an error in `repos`/`mirrors` stops here.
 3. `migrate_state()`: moves old trust anchors from the cache to STATE_DIR, once, never overwriting existing ones.
@@ -175,6 +176,8 @@ Mostly pure logic and system integration. They know nothing about commands.
 - **Official Slackware packages are never declared as dependencies.** Slackware assumes a full install. Do not invent scenarios where a third-party package lists an official one as a dependency.
 - **upgrade-all may move an installed package to a higher-priority source** (`upgrades_for` in `pkgdb.rs`), even at the same version. This is correct, and it was checked against a real report (ghostty, Nov 2026). Do not change it.
 - **The install plan says why each build was chosen.** In `show_plan_alternatives` (`commands/install.rs`) the chosen line reads `installing (dependency of <parent>, from its repo | pinned | priority winner | your choice)`. An earlier version labelled every chosen build "priority winner", which was wrong for dependencies and for a "replace" at a protected dependency.
+- **Where an installed package came from** (`repo_for_installed` in `pkgdb.rs`): the repo shipping that exact build; else the same name with the same build tag; else, by tag only, the repo shipping the most packages with that tag. When several repos match, a pin on the name picks its repo if it is one of them, otherwise the higher priority wins. A tagless package is the official repo's. list-repos, status, history, `@repo` blacklist rules on installed packages and clean-system all use this. A build tag does not belong to one repo: Slackware's extra/ ships alienbob's `slackpkg+` with the `alien` tag (issue #11, Nov 2026, where every alien package was counted under extras).
+- **`remove @repo` removes exactly what list-repos counts for that repo.** Never "every installed package carrying a tag the repo ships": that took every alien package for `@extras`, and every official package for any repo that ships a tagless build. `upgrade @repo` and `reinstall @repo` still select by the repo's tags, but they only act where that repo offers the package itself, and the priority check applies.
 - **Freeze:** installed + rule -> FROZEN. Not installed + rule -> hidden from install-new/upgrades/check-updates, visible in search/info. A frozen candidate is treated as absent and resolution continues with the remaining candidates.
 - **Pin:** `@repo 100% name`, exact name, never freezes. A real freeze on the same name wins.
 - **install-new:** `cmd_install_new` and `dist_install_new` are intentionally different (normal: official + subtrees ranked above official; dist: official + patches only, regardless of priority).
@@ -247,7 +250,7 @@ The fake systems run in a private mount (and net) namespace: a copy of `/etc` wi
 
 **Final check:** the deliverable was built on a clean checkout of the repo. All of the above came out **identical to the binary of the normal branch** (0.12.4 with cap+quarantine, help, dry-run fix). In other words, the refactor behaves exactly like the code running in production.
 
-The scripts are in `slacker-refactor-harness.tar.gz` (kept by r-tz, not part of the repo). They need root, `unshare`, `gpg` and `python3`. Their directory is hard-coded in the scripts (the `SP` variable), so it has to be changed on another machine. `check_all.sh` runs from `slacker-cli/` and does everything in one go.
+The scripts were written for this refactor and ran only in the environment where it was done. Besides root, `unshare`, `gpg` and `python3`, they depend on fixture directories and fixed setup binaries that are not in `slacker-refactor-harness.tar.gz`, and their paths are hard-coded. r-tz keeps the tarball as a record; it is not part of the repo.
 
 ### 8.4 What was deliberately not done
 
@@ -258,14 +261,14 @@ The scripts are in `slacker-refactor-harness.tar.gz` (kept by r-tz, not part of 
 
 The 0.12.x line is no longer maintained, so there is no normal branch to keep in sync. Changes go straight into this code. The "identical to the normal branch" result in 8.3 is historical: it held for the refactor as delivered.
 
-The first change after the refactor was the plan label (see 7). It changes only the label lines of the install plan, so the `inst` baseline of `check_all.sh` has to be re-taken with the new binary. After any change: build with no warnings, `cargo test`, `check_all.sh`. Before a release: a run on a real system by the maintainer.
+The first change after the refactor was the plan label (see 7). The second was issue #11 (source attribution and `remove @repo`, see 7), with 2 tests. The third was `BANNER` (issue #12, see 4), with 1 test. After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **219 passed, 1 ignored** (220 in total).
-- Per file: `main.rs` 45, `config.rs` 30, `pkgdb.rs` 29, `repo.rs` 12, `revert.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `commands/blacklist.rs` 8, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `download.rs` 4, `system.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, and one each in `newconfig.rs`, `commands/clean.rs`, `commands/new_config.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **222 passed, 1 ignored** (223 in total).
+- Per file: `main.rs` 45, `config.rs` 31, `pkgdb.rs` 31, `repo.rs` 12, `revert.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `commands/blacklist.rs` 8, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `download.rs` 4, `system.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, and one each in `newconfig.rs`, `commands/clean.rs`, `commands/new_config.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Test modules in `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (with the `av()` and `fixture()` fixtures), `freshness_tests`, `foundational_tests`.
 
 ---
@@ -274,7 +277,6 @@ The first change after the refactor was the plan label (see 7). It changes only 
 
 - **Two `arch_compatible` functions with opposite argument order:** `main.rs` `(sys_arch, pkg_arch)` and `repo.rs` `(pkg_arch, arch)`. They do the same thing. Not a bug today, but a trap. Worth unifying as a separate change.
 - **`history` dates after a restore (NOT fixed, on purpose):** the timezone is derived by comparing the time in the `-upgraded-<T>` name with the file's ctime. ctime is lost when restoring from a backup, and then the dates shift. A simple "ignore unrealistic timezones" does NOT fix it. Display only, and only on restored systems. Needs its own design if it is ever done.
-- **MSRV:** see 2 (`rust-version = "1.88"`).
 - **Misplaced doc comments** (rustdoc only, no functional effect): a paragraph belonging to `warn_unverified_repos` above `unverified_repo_names` (`main.rs`); the `cmd_status` doc above `MLOCATE_DB` (`commands/status.rs`); a "Parse a keep-selection" above `select_packages_pkgid` (`commands/install.rs`); a "GATE ONLY for now" above `DIST_CRITICAL` (`commands/upgrade_dist.rs`). Left as they were to keep the "verbatim text" proof. Fix them as a separate cosmetic change.
 - **Package `.asc` files stay in the cache** after install/upgrade-dist (the package is deleted, the signature is not). Seen in testing. They are small and `clean-cache` removes them. Whether this should change has not been evaluated.
 

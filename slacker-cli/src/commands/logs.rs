@@ -53,14 +53,14 @@ pub(crate) fn cmd_show_changelog(cfg: &Config, repo_name: Option<&str>) -> Resul
 }
 
 /// Source label for a single package id, mirroring installed-attribution
-/// precedence: official (empty tag) -> repo that serves the tag -> declared
-/// tag-rule name -> the raw tag itself.
+/// precedence: official (empty tag) -> repo it came from (`repo_for_installed`)
+/// -> declared tag-rule name -> the raw tag itself.
 fn source_of(cfg: &Config, db: &PkgDb, pkg: &pkg::PkgId) -> String {
     let tag = pkg.build_tag();
     if tag.is_empty() {
         return cfg.official_repo_name().unwrap_or("official").to_string();
     }
-    if let Some(r) = db.repo_for_tag(tag) {
+    if let Some(r) = db.repo_for_installed(pkg) {
         return r.to_string();
     }
     if let Some(tp) = cfg.tag_priorities.iter().find(|tp| tp.tag == tag) {
