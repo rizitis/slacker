@@ -1386,9 +1386,106 @@ fn summarize_outcomes(outcomes: &[DlOutcome], total: usize) -> (Vec<bool>, Vec<(
     (ready, failed)
 }
 
+/// How often the live download line is redrawn.
+const DL_TICK: std::time::Duration = std::time::Duration::from_millis(500);
+/// Off a terminal, a download still running after this long gets a line saying
+/// it started.
+const DL_ANNOUNCE: std::time::Duration = std::time::Duration::from_secs(1);
+/// After this long without a byte, the live line says so for that download.
+const DL_STALL: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// One running download, as the live line shows it.
+struct DlLive {
+    name: String,
+    done: u64,
+    total: Option<u64>,
+    stalled_secs: Option<u64>,
+}
+
+/// Bytes as megabytes: one decimal below 10 M, none above.
+fn fmt_mb(b: u64) -> String {
+    let m = b as f64 / (1024.0 * 1024.0);
+    if m < 10.0 {
+        format!("{m:.1} M")
+    } else {
+        format!("{m:.0} M")
+    }
+}
+
+/// `  ↓ llvm 214/612 M · mesa 3.1/40 M`, cut to fit `width` columns: the
+/// downloads that do not fit are counted as `+N`. Never ends in `?`, `:` or a
+/// bracket, so nothing reading the output takes it for a question. Empty when
+/// nothing is running. Pure, so it is unit-tested.
+fn live_line(running: &[DlLive], width: usize) -> String {
+    if running.is_empty() {
+        return String::new();
+    }
+    let room = width.saturating_sub(1).max(20);
+    let entry = |d: &DlLive| {
+        let size = match d.total {
+            Some(t) => {
+                let full = fmt_mb(t);
+                let unit = full.trim_end_matches(" M");
+                let m = d.done as f64 / (1024.0 * 1024.0);
+                let done = if unit.contains('.') { format!("{m:.1}") } else { format!("{m:.0}") };
+                format!("{done}/{unit} M")
+            }
+            None => fmt_mb(d.done),
+        };
+        match d.stalled_secs {
+            Some(s) => format!("{} {size} no data for {s}s", d.name),
+            None => format!("{} {size}", d.name),
+        }
+    };
+    let mut line = String::from("  ↓ ");
+    for (i, d) in running.iter().enumerate() {
+        let e = entry(d);
+        let sep = if i == 0 { "" } else { " · " };
+        let rest = running.len() - i - 1;
+        let more = if rest > 0 { format!(" +{rest}") } else { String::new() };
+        // The first one is always shown, cut if it must be.
+        if i > 0 && line.chars().count() + sep.chars().count() + e.chars().count() + more.chars().count() > room {
+            line.push_str(&format!(" +{}", running.len() - i));
+            break;
+        }
+        line.push_str(sep);
+        line.push_str(&e);
+    }
+    if line.chars().count() > room {
+        line = line.chars().take(room).collect();
+    }
+    line
+}
+
+/// Columns of the terminal on stdout, asked of the terminal itself (TIOCGWINSZ)
+/// so it is right after a resize and under sudo, where $COLUMNS may be stale or
+/// belong to another terminal. 80 when it cannot be read.
+fn term_width() -> usize {
+    #[repr(C)]
+    struct Winsize {
+        rows: u16,
+        cols: u16,
+        xpixel: u16,
+        ypixel: u16,
+    }
+    // Linux on x86, x86_64, arm and aarch64.
+    const TIOCGWINSZ: std::ffi::c_ulong = 0x5413;
+    extern "C" {
+        fn ioctl(fd: i32, request: std::ffi::c_ulong, ...) -> i32;
+    }
+    let mut ws = Winsize { rows: 0, cols: 0, xpixel: 0, ypixel: 0 };
+    let rc = unsafe { ioctl(1, TIOCGWINSZ, &mut ws as *mut Winsize) };
+    if rc == 0 && ws.cols > 0 {
+        ws.cols as usize
+    } else {
+        80
+    }
+}
+
 /// Download + verify every item concurrently, bounded by `max_parallel`, writing
 /// each package to its OWN destination (no shared files, so no races). Prints a
-/// live ✓/✗ counter as items complete and returns one outcome per item, ordered
+/// live ✓/✗ counter as items complete, and what is downloading meanwhile
+/// (see the receive loop), and returns one outcome per item, ordered
 /// to match `items`. Network phase only — nothing is installed here.
 fn parallel_fetch(cfg: &Config, items: &[DlItem], max_parallel: usize) -> Vec<DlOutcome> {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1401,19 +1498,22 @@ fn parallel_fetch(cfg: &Config, items: &[DlItem], max_parallel: usize) -> Vec<Dl
     let workers = max_parallel.clamp(1, total);
     let next = AtomicUsize::new(0);
 
+    let meters: Vec<download::Meter> = (0..total).map(|_| download::Meter::default()).collect();
     let mut outcomes: Vec<DlOutcome> = std::thread::scope(|s| {
         let (tx, rx) = mpsc::channel::<DlOutcome>();
         for _ in 0..workers {
             let tx = tx.clone();
             let next = &next;
             let items = &items;
+            let meters = &meters;
             s.spawn(move || loop {
                 let i = next.fetch_add(1, Ordering::Relaxed);
                 if i >= total {
                     break;
                 }
                 let it = &items[i];
-                let result = fetch_and_verify(cfg, it.repo, it.pkg, &it.dest, true);
+                let result =
+                    fetch_and_verify_metered(cfg, it.repo, it.pkg, &it.dest, true, Some(&meters[i]));
                 let _ = tx.send(DlOutcome {
                     idx: i,
                     name: it.pkg.id.name.clone(),
@@ -1423,26 +1523,119 @@ fn parallel_fetch(cfg: &Config, items: &[DlItem], max_parallel: usize) -> Vec<Dl
         }
         drop(tx); // receive loop ends once every worker has finished and dropped its sender
 
+        // What is downloading right now. On a terminal: one line, redrawn in
+        // place, with the bytes of every running download, so a large package
+        // shows it is moving (or says when no data has come for a while).
+        // Elsewhere (a pipe, a log, the GUI): one plain line when a download
+        // starts. Only this thread prints, so lines never interleave.
+        let tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+        let mut finished = vec![false; total];
+        let mut announced = vec![false; total];
+        // When this loop first saw each download running.
+        let mut first_seen: Vec<Option<std::time::Instant>> = vec![None; total];
+        // (bytes last seen, when they last changed), per item.
+        let mut seen: Vec<(u64, std::time::Instant)> = vec![(0, std::time::Instant::now()); total];
+        // Columns of the live line on screen (0 = none), and the terminal width
+        // it was drawn for.
+        let mut drawn = 0usize;
+        let mut width = if tty { term_width() } else { 80 };
+        // Back to the start of the live line and erase it to the end of the
+        // screen. The line is kept narrower than the terminal, so it is one
+        // row, unless the window got narrower since: then the terminal wrapped
+        // it, and the cursor goes up the rows it now takes.
+        let clear = |drawn: &mut usize, width: usize| {
+            if *drawn > 0 {
+                let up = (*drawn - 1) / width.max(1);
+                if up > 0 {
+                    print!("\r\x1b[{up}A\x1b[J");
+                } else {
+                    print!("\r\x1b[J");
+                }
+                *drawn = 0;
+            }
+        };
+
         let mut got: Vec<DlOutcome> = Vec::with_capacity(total);
         let mut done = 0usize;
-        while let Ok(o) = rx.recv() {
-            done += 1;
-            match &o.result {
-                Ok(checks) => println!(
-                    "  {} {} {}[{done}/{total}]",
-                    ui::green("✓"),
-                    o.name,
-                    verify_suffix(checks)
-                ),
-                Err(e) => println!(
-                    "  {} {} [{done}/{total}]  {}",
-                    ui::red("✗"),
-                    o.name,
-                    e.lines().next().unwrap_or("download failed")
-                ),
+        loop {
+            match rx.recv_timeout(DL_TICK) {
+                Ok(o) => {
+                    done += 1;
+                    clear(&mut drawn, width);
+                    if o.idx < total {
+                        finished[o.idx] = true;
+                        announced[o.idx] = true;
+                    }
+                    match &o.result {
+                        Ok(checks) => println!(
+                            "  {} {} {}[{done}/{total}]",
+                            ui::green("✓"),
+                            o.name,
+                            verify_suffix(checks)
+                        ),
+                        Err(e) => println!(
+                            "  {} {} [{done}/{total}]  {}",
+                            ui::red("✗"),
+                            o.name,
+                            e.lines().next().unwrap_or("download failed")
+                        ),
+                    }
+                    got.push(o);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
-            got.push(o);
+            let now = std::time::Instant::now();
+            let mut running: Vec<DlLive> = Vec::new();
+            for i in 0..total {
+                if finished[i] || !meters[i].started.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let name = &items[i].pkg.id.name;
+                let hint = items[i].pkg.size_k.map(|k| k * 1024);
+                let since = *first_seen[i].get_or_insert(now);
+                if !tty {
+                    // Only a download still running after a moment: a quick
+                    // one is told by its ✓ line alone, so a log does not
+                    // depend on timing for every small package.
+                    if !announced[i] && now.duration_since(since) >= DL_ANNOUNCE {
+                        announced[i] = true;
+                        match hint {
+                            Some(b) => println!("  ↓ {name} ({})", fmt_mb(b)),
+                            None => println!("  ↓ {name}"),
+                        }
+                    }
+                    continue;
+                }
+                let bytes = meters[i].done.load(Ordering::Relaxed);
+                if bytes != seen[i].0 {
+                    seen[i] = (bytes, now);
+                }
+                let total_b = Some(meters[i].total.load(Ordering::Relaxed)).filter(|t| *t > 0).or(hint);
+                let idle = now.duration_since(seen[i].1);
+                running.push(DlLive {
+                    name: name.clone(),
+                    done: bytes,
+                    total: total_b,
+                    stalled_secs: (idle >= DL_STALL).then_some(idle.as_secs()),
+                });
+            }
+            if tty {
+                let now_width = term_width();
+                clear(&mut drawn, now_width);
+                width = now_width;
+                let line = live_line(&running, width);
+                if !line.is_empty() {
+                    print!("{line}");
+                    drawn = line.chars().count();
+                }
+                let _ = std::io::stdout().flush();
+            }
         }
+        if tty {
+            clear(&mut drawn, term_width());
+        }
+        let _ = std::io::stdout().flush();
         got
     });
 
@@ -2009,6 +2202,19 @@ fn fetch_and_verify(
     dest: &std::path::Path,
     quiet: bool,
 ) -> Result<Vec<String>, String> {
+    fetch_and_verify_metered(cfg, repo, p, dest, quiet, None)
+}
+
+/// fetch_and_verify, counting the package download into `meter` (the
+/// parallel downloads show it while they run).
+fn fetch_and_verify_metered(
+    cfg: &Config,
+    repo: &config::Repo,
+    p: &repo::AvailPkg,
+    dest: &std::path::Path,
+    quiet: bool,
+    meter: Option<&download::Meter>,
+) -> Result<Vec<String>, String> {
     let policy = repo.verify_policy(&cfg.verify);
 
     // Guard against a symlink planted at the destination (e.g. in a shared
@@ -2035,7 +2241,7 @@ fn fetch_and_verify(
         if !quiet {
             println!("  fetching {url}");
         }
-        download::download_to(&url, dest)?;
+        download::download_to_metered(&url, dest, meter)?;
     }
 
     // Track which verifications actually ran, to report them on success.
@@ -3042,6 +3248,42 @@ fn hilite_keys(text: &str) -> String {
 #[cfg(test)]
 mod parallel_download_tests {
     use super::{summarize_outcomes, verify_suffix, DlOutcome};
+    use super::{fmt_mb, live_line, DlLive};
+
+    fn live(name: &str, done_m: f64, total_m: Option<f64>, stalled: Option<u64>) -> DlLive {
+        let b = |m: f64| (m * 1024.0 * 1024.0) as u64;
+        DlLive { name: name.into(), done: b(done_m), total: total_m.map(b), stalled_secs: stalled }
+    }
+
+    #[test]
+    fn live_line_shows_every_running_download() {
+        assert_eq!(live_line(&[], 80), "");
+        assert_eq!(
+            live_line(&[live("llvm", 214.0, Some(612.0), None), live("mesa", 3.14, Some(4.0), None)], 80),
+            "  ↓ llvm 214/612 M · mesa 3.1/4.0 M"
+        );
+        assert_eq!(live_line(&[live("x", 1.5, None, None)], 80), "  ↓ x 1.5 M");
+        assert_eq!(
+            live_line(&[live("llvm", 214.0, Some(612.0), Some(15))], 80),
+            "  ↓ llvm 214/612 M no data for 15s"
+        );
+    }
+
+    #[test]
+    fn live_line_fits_the_terminal_and_never_looks_like_a_question() {
+        let many: Vec<DlLive> =
+            (0..12).map(|i| live(&format!("package-number-{i}"), 10.0, Some(100.0), None)).collect();
+        for w in [10, 20, 40, 80, 200] {
+            let l = live_line(&many, w);
+            assert!(l.chars().count() <= w.saturating_sub(1).max(20), "{w}: {l}");
+            let last = l.chars().last().unwrap();
+            assert!(!"?:>)]".contains(last), "{l}");
+        }
+        let l = live_line(&many, 80);
+        assert!(l.starts_with("  ↓ package-number-0 10/100 M · ") && l.ends_with(" +10"), "{l}");
+        assert_eq!(fmt_mb(0), "0.0 M");
+        assert_eq!(fmt_mb(612 * 1024 * 1024), "612 M");
+    }
 
     fn ok(idx: usize, name: &str, checks: &[&str]) -> DlOutcome {
         DlOutcome {

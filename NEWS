@@ -2,6 +2,12 @@ Version Beta 0.13.0
 =====
 SEMANTIC CHANGES (etc/slacker/{slacker.conf,blacklist} are new files, slacker.conf need update)
 - Update: slacker-cli
+    - parallel downloads (upgrade-all, install, upgrade-dist, download) now
+      show what is being downloaded (#14). On a terminal one line is redrawn with
+      the MB of every running download, e.g. `↓ llvm 214/612 M · mesa 3.1/40 M`,
+      and says `no data for 15s` if a download stops receiving. Off a terminal
+      (GUI, pipe, log) a plain `↓ llvm (612 M)` line is printed when a download
+      runs longer than a second.
     - new commands nodep / undep: never pull one dependency in for one package
       (`nodep python-sqlalchemy:python-psycopg2`), or for any package
       (`nodep '*:cargo-auditable'`). Other packages that need it still get it.
