@@ -198,6 +198,13 @@ pub struct Repo {
     /// only. Setting it is an explicit, at-your-own-risk override, since the
     /// login would then be exposed on the wire.
     pub insecure: bool,
+    /// `dep` flag on the repos line, deliberately undocumented. The official
+    /// tree and its subtrees ship no `.dep` files, so slacker does not ask for
+    /// them there (hundreds of 404s per upgrade). Should Slackware ever start
+    /// shipping `.dep` files, add `dep` to those repos lines and they are read
+    /// like any third-party repo's, with no code change. `PACKAGE REQUIRED` in
+    /// PACKAGES.TXT is read either way.
+    pub dep: bool,
 }
 
 impl Repo {
@@ -1148,6 +1155,7 @@ fn parse_repos(
         let mut verify: Option<VerifyPolicy> = None;
         let mut credentials: Option<String> = None;
         let mut insecure = false;
+        let mut dep = false;
         for flag in fields {
             if flag == "official" {
                 official = true;
@@ -1157,6 +1165,10 @@ fn parse_repos(
                 subtree = true;
             } else if flag == "insecure" {
                 insecure = true;
+            } else if flag == "dep" {
+                // Not listed in the error below or in the docs on purpose;
+                // see Repo::dep.
+                dep = true;
             } else if let Some(v) = flag.strip_prefix("verify=") {
                 verify = Some(
                     VerifyPolicy::parse(v)
@@ -1188,6 +1200,7 @@ fn parse_repos(
             verify,
             credentials,
             insecure,
+            dep,
         });
     }
 
@@ -1603,6 +1616,35 @@ mod tests {
         ] {
             assert!(!is_coordinate_segment(seg), "{seg} is not a coordinate");
         }
+    }
+
+    #[test]
+    fn repos_dep_flag_is_off_unless_given() {
+        let (repos, _t) = parse_repos(
+            "100 slackware mirror official\n\
+             200 patches https://m/slackware64-current/patches subtree dep\n",
+            Some("https://m/slackware64-current/"),
+        )
+        .unwrap();
+        assert!(!repos.iter().find(|r| r.name == "slackware").unwrap().dep);
+        assert!(repos.iter().find(|r| r.name == "patches").unwrap().dep);
+    }
+
+    #[test]
+    fn official_and_subtrees_are_not_asked_for_dep_files() {
+        let (repos, _t) = parse_repos(
+            "100 slackware mirror official\n\
+             200 patches https://m/s/patches subtree immutable\n\
+             90 extras https://m/s/extra subtree dep\n\
+             80 conraid https://slackers.it/r\n",
+            Some("https://m/s/"),
+        )
+        .unwrap();
+        let reads = |n: &str| crate::repo::reads_dep_files(repos.iter().find(|r| r.name == n).unwrap());
+        assert!(!reads("slackware"));
+        assert!(!reads("patches"));
+        assert!(reads("extras")); // the dep flag turns it back on
+        assert!(reads("conraid"));
     }
 
     #[test]

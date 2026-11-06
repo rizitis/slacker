@@ -771,6 +771,9 @@ bar: bar (another thing)
 /// shares the package's stem (its `name-version-arch-build` tag) with a `.dep`
 /// extension, in the same location. A missing file (404) yields no deps.
 pub fn fetch_dep(repo: &Repo, avail: &AvailPkg) -> Vec<String> {
+    if !reads_dep_files(repo) {
+        return avail.required.clone();
+    }
     let url = dep_url(repo, avail);
     let cached = dep_cache().lock().ok().and_then(|c| c.get(&url).cloned());
     let from_dep = match cached {
@@ -792,6 +795,13 @@ pub fn fetch_dep(repo: &Repo, avail: &AvailPkg) -> Vec<String> {
     } else {
         from_dep
     }
+}
+
+/// Whether `.dep` files are asked for from this repo: every repo except the
+/// official tree and its subtrees, which have none, unless their line carries
+/// the (undocumented) `dep` flag. See `Repo::dep`.
+pub fn reads_dep_files(repo: &Repo) -> bool {
+    repo.dep || !(repo.official || repo.subtree)
 }
 
 fn dep_url(repo: &Repo, avail: &AvailPkg) -> String {
@@ -823,6 +833,7 @@ pub fn prefetch_deps(pkgs: &[(&Repo, &AvailPkg)], workers: usize, mut progress: 
         let cache = dep_cache().lock().ok();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         pkgs.iter()
+            .filter(|(r, _)| reads_dep_files(r))
             .map(|(r, p)| dep_url(r, p))
             .filter(|u| cache.as_ref().is_none_or(|c| !c.contains_key(u)) && seen.insert(u.clone()))
             .collect()
@@ -898,7 +909,6 @@ pub fn parse_dep(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod dep_tests {
     use super::parse_dep;
-
     #[test]
     fn parses_names_and_skips_noise() {
         let text = "aubio\n# a comment\n\nliblo   \nlilv # inline\n";
