@@ -15,7 +15,7 @@
 [0x02] TYPE      : APPLICATION (cli + gui)  [OK]
 [0x03] SIZE      : 2.7 MiB  [OK]
 [0x04] DATE      : 2026-10-02  [OK]
-[0x05] MD5       : d56dc72d710b8c5328544154121fa08e5  [OK]
+[0x05] MD5       :   []
 [0x06] ARCH      : x86_64 i686  aarch64 [OK]
 [0x07] TARGET    : Slackware | development branch  [OK]
 [0x08] LANG      : Rust 1.88+  [OK]
