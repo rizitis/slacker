@@ -1,4 +1,4 @@
-.TH SLACKER 8 "November 2026" "slacker 0.13.0" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.13.1" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -830,6 +830,21 @@ after an upgrade that touched the official tree and at
 set it to
 .I off
 to hide both. They are printed only on a terminal, never into a pipe or a file.
+.B TERSE
+(default
+.IR off )
+set to
+.I on
+passes
+.B \-\-terse
+to
+.BR installpkg " and " upgradepkg ,
+so each package prints a single line;
+.B removepkg
+is terse already.
+When several packages are installed, each one is preceded by its place in the
+run, e.g.
+.BR "[ 37/245 ] upgrading glibc\-2.44\-x86_64\-5" .
 .PP
 The
 .I repos

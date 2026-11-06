@@ -7,7 +7,7 @@ use crate::commands::status::cmd_status;
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{
-    collect, in_graphical_session, package_dest, parallel_fetch, report_batch_failures,
+    collect, in_graphical_session, install_counter, package_dest, parallel_fetch, report_batch_failures,
     slackware_dir, summarize_outcomes, update_one_repo, DlItem, InstallAction, Outcome, PlanItem,
     UpdateOutcomes,
 };
@@ -295,9 +295,9 @@ fn dist_execute(
     // counterpart (renames across releases, e.g. glibc-solibs -> aaa_glibc-solibs),
     // hence --install-new even for the "upgrade" action.
     let do_install = |dest: &Path, action: InstallAction| match action {
-        InstallAction::Install => system::install(dest),
-        InstallAction::Upgrade => system::upgrade_install_new(dest),
-        InstallAction::Reinstall => system::reinstall(dest),
+        InstallAction::Install => system::install(dest, cfg.terse),
+        InstallAction::Upgrade => system::upgrade_install_new(dest, cfg.terse),
+        InstallAction::Reinstall => system::reinstall(dest, cfg.terse),
     };
     let rm_cached = |dest: &Path| {
         let _ = std::fs::remove_file(dest);
@@ -338,6 +338,7 @@ fn dist_execute(
         //      post-install record check. ----
         println!("{}", ui::blue("Phase 0 — core packages (in order):"));
         for (i, it) in citems.iter().enumerate() {
+            install_counter(i + 1, citems.len(), critical[i].action, &it.pkg.id.tag());
             do_install(&it.dest, critical[i].action).map_err(|e| {
                 format!(
                     "Phase 0: installing core '{}' failed: {e}\nThe system may be in a partial \
@@ -391,6 +392,7 @@ fn dist_execute(
             if !ready[b] {
                 continue; // download/verify failed; counted in dl_failed
             }
+            install_counter(gi + 1, total_noncore, noncore[gi].action, &it.pkg.id.tag());
             match do_install(&it.dest, noncore[gi].action) {
                 Ok(()) => done += 1,
                 Err(e) => install_failed.push((it.pkg.id.name.clone(), e)),

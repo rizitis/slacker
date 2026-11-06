@@ -655,6 +655,29 @@ fn expand_with_deps(
         );
         eprintln!("    run `slacker update` first. continuing without stock deps.");
     }
+    // Building the plan reads each package's `.dep` from its repo, and with
+    // hundreds of packages that is a long silence. Say what is happening, read
+    // them in parallel first, and on a terminal count them as they come in.
+    if resolve && roots.len() > 1 {
+        println!("{}", ui::blue(&format!("Preparing the plan for {} package(s)...", roots.len())));
+        let list: Vec<(&config::Repo, &repo::AvailPkg)> = roots
+            .iter()
+            .filter_map(|(p, _)| cfg.repo_by_name(&p.repo).map(|r| (r, p)))
+            .collect();
+        let tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+        let mut drawn = false;
+        repo::prefetch_deps(&list, cfg.max_parallel, |done, total| {
+            if tty {
+                print!("\r\x1b[K  {done}/{total}");
+                let _ = std::io::stdout().flush();
+                drawn = true;
+            }
+        });
+        if drawn {
+            print!("\r\x1b[K");
+            let _ = std::io::stdout().flush();
+        }
+    }
     let mut plan = Vec::new();
     let mut planned: HashSet<String> = HashSet::new();
     let mut visiting: HashSet<String> = HashSet::new();
@@ -2124,9 +2147,9 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
         let it = &items[0];
         fetch_and_verify(cfg, it.repo, it.pkg, &it.dest, false)?;
         match plan[0].action {
-            InstallAction::Install => system::install(&it.dest)?,
-            InstallAction::Upgrade => system::upgrade_only(&it.dest)?,
-            InstallAction::Reinstall => system::reinstall(&it.dest)?,
+            InstallAction::Install => system::install(&it.dest, cfg.terse)?,
+            InstallAction::Upgrade => system::upgrade_only(&it.dest, cfg.terse)?,
+            InstallAction::Reinstall => system::reinstall(&it.dest, cfg.terse)?,
         }
         kernel_reboot_reminder(plan);
         perl_rebuild_reminder(&cfg.pkg_db_dir, plan);
@@ -2148,19 +2171,25 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
     let mut installed = 0usize;
     // Separate each package's pkgtools output with a blank line so a multi-package
     // run is readable (the installpkg blocks otherwise butt up against each other).
+    // With TERSE each package is one line, so no blank line between them. Each
+    // package gets its place in the run, `[ 37/245 ]`, before pkgtools speaks.
     let mut printed_any = false;
+    let to_install = ready.iter().filter(|r| **r).count();
+    let mut nth = 0usize;
     for (i, it) in items.iter().enumerate() {
         if !ready[i] {
             continue;
         }
-        if printed_any {
+        if printed_any && !cfg.terse {
             println!();
         }
         printed_any = true;
+        nth += 1;
+        install_counter(nth, to_install, plan[i].action, &it.pkg.id.tag());
         let res = match plan[i].action {
-            InstallAction::Install => system::install(&it.dest),
-            InstallAction::Upgrade => system::upgrade_only(&it.dest),
-            InstallAction::Reinstall => system::reinstall(&it.dest),
+            InstallAction::Install => system::install(&it.dest, cfg.terse),
+            InstallAction::Upgrade => system::upgrade_only(&it.dest, cfg.terse),
+            InstallAction::Reinstall => system::reinstall(&it.dest, cfg.terse),
         };
         match res {
             Ok(()) => installed += 1,
@@ -2172,6 +2201,22 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
     kernel_reboot_reminder(plan);
     perl_rebuild_reminder(&cfg.pkg_db_dir, plan);
     Ok(())
+}
+
+/// `[ 37/245 ] upgrading glibc-2.44-x86_64-5`: where a batch install stands,
+/// printed before pkgtools' own output for the package.
+pub(crate) fn install_counter(nth: usize, total: usize, action: InstallAction, tag: &str) {
+    println!("{}", ui::blue(&counter_line(nth, total, action, tag)));
+}
+
+fn counter_line(nth: usize, total: usize, action: InstallAction, tag: &str) -> String {
+    let w = total.to_string().len();
+    let verb = match action {
+        InstallAction::Install => "installing",
+        InstallAction::Upgrade => "upgrading",
+        InstallAction::Reinstall => "reinstalling",
+    };
+    format!("[ {nth:>w$}/{total} ] {verb} {tag}")
 }
 
 /// Download a package (if needed) and verify md5 before use.
@@ -3247,7 +3292,18 @@ fn hilite_keys(text: &str) -> String {
 
 #[cfg(test)]
 mod parallel_download_tests {
+    use super::{counter_line, InstallAction};
     use super::{summarize_outcomes, verify_suffix, DlOutcome};
+
+    #[test]
+    fn install_counter_is_padded_to_the_total() {
+        assert_eq!(counter_line(7, 245, InstallAction::Upgrade, "glibc-2.44-x86_64-5"),
+                   "[   7/245 ] upgrading glibc-2.44-x86_64-5");
+        assert_eq!(counter_line(245, 245, InstallAction::Install, "a-1-noarch-1"),
+                   "[ 245/245 ] installing a-1-noarch-1");
+        assert_eq!(counter_line(1, 2, InstallAction::Reinstall, "b-1-x86_64-1"),
+                   "[ 1/2 ] reinstalling b-1-x86_64-1");
+    }
     use super::{fmt_mb, live_line, DlLive};
 
     fn live(name: &str, done_m: f64, total_m: Option<f64>, stalled: Option<u64>) -> DlLive {

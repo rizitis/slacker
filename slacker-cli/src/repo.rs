@@ -771,11 +771,17 @@ bar: bar (another thing)
 /// shares the package's stem (its `name-version-arch-build` tag) with a `.dep`
 /// extension, in the same location. A missing file (404) yields no deps.
 pub fn fetch_dep(repo: &Repo, avail: &AvailPkg) -> Vec<String> {
-    let rel = format!("{}{}.dep", avail.location, avail.id.tag());
-    let url = repo.join_url(&rel);
-    let from_dep = match crate::download::get_bytes(&url) {
-        Ok(bytes) => parse_dep(&String::from_utf8_lossy(&bytes)),
-        Err(_) => Vec::new(),
+    let url = dep_url(repo, avail);
+    let cached = dep_cache().lock().ok().and_then(|c| c.get(&url).cloned());
+    let from_dep = match cached {
+        Some(v) => v,
+        None => {
+            let v = read_dep(&url);
+            if let Ok(mut c) = dep_cache().lock() {
+                c.insert(url, v.clone());
+            }
+            v
+        }
     };
     // A per-package `.dep` is authoritative. Only when the repo ships none (the
     // fetch 404s or is empty) do we fall back to the names declared in
@@ -786,6 +792,69 @@ pub fn fetch_dep(repo: &Repo, avail: &AvailPkg) -> Vec<String> {
     } else {
         from_dep
     }
+}
+
+fn dep_url(repo: &Repo, avail: &AvailPkg) -> String {
+    repo.join_url(&format!("{}{}.dep", avail.location, avail.id.tag()))
+}
+
+/// The names in a `.dep`; a missing or unreadable one is an empty list.
+fn read_dep(url: &str) -> Vec<String> {
+    match crate::download::get_bytes(url) {
+        Ok(bytes) => parse_dep(&String::from_utf8_lossy(&bytes)),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// `.dep` contents already read in this run, by URL, so each is fetched once.
+fn dep_cache() -> &'static std::sync::Mutex<HashMap<String, Vec<String>>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Vec<String>>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Read the `.dep` of every package in `pkgs`, up to `workers` at a time, so
+/// that `fetch_dep` finds them in memory instead of asking the server one by
+/// one while the plan is built. `progress(done, total)` is called on the
+/// caller's thread after each one.
+pub fn prefetch_deps(pkgs: &[(&Repo, &AvailPkg)], workers: usize, mut progress: impl FnMut(usize, usize)) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let urls: Vec<String> = {
+        let cache = dep_cache().lock().ok();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        pkgs.iter()
+            .map(|(r, p)| dep_url(r, p))
+            .filter(|u| cache.as_ref().is_none_or(|c| !c.contains_key(u)) && seen.insert(u.clone()))
+            .collect()
+    };
+    let total = urls.len();
+    if total == 0 {
+        return;
+    }
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        for _ in 0..workers.clamp(1, total) {
+            let (tx, next, urls) = (tx.clone(), &next, &urls);
+            s.spawn(move || loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                if i >= total {
+                    break;
+                }
+                let v = read_dep(&urls[i]);
+                if let Ok(mut c) = dep_cache().lock() {
+                    c.insert(urls[i].clone(), v);
+                }
+                let _ = tx.send(());
+            });
+        }
+        drop(tx);
+        let mut done = 0usize;
+        while rx.recv().is_ok() {
+            done += 1;
+            progress(done, total);
+        }
+    });
 }
 
 /// Parse a comma-separated PACKAGES.TXT package-NAME list — shared by

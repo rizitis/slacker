@@ -81,19 +81,32 @@ pub fn is_installed(installed: &[PkgId], name: &str) -> bool {
     installed.iter().any(|p| p.name == name)
 }
 
+/// `--terse` first when asked for (TERSE=on), then the given arguments.
+fn pkgtools_args<'a>(terse: bool, args: &[&'a str]) -> Vec<&'a str> {
+    let mut v: Vec<&str> = Vec::with_capacity(args.len() + 1);
+    if terse {
+        v.push("--terse");
+    }
+    v.extend_from_slice(args);
+    v
+}
+
 /// Upgrade only (do not install if absent): plain `upgradepkg`.
-pub fn upgrade_only(pkg_file: &Path) -> Result<(), String> {
-    run("upgradepkg", &[&pkg_file.to_string_lossy()])
+pub fn upgrade_only(pkg_file: &Path, terse: bool) -> Result<(), String> {
+    let f = pkg_file.to_string_lossy();
+    run("upgradepkg", &pkgtools_args(terse, &[&f]))
 }
 
 /// Reinstall the same version: `upgradepkg --reinstall`.
-pub fn reinstall(pkg_file: &Path) -> Result<(), String> {
-    run("upgradepkg", &["--reinstall", &pkg_file.to_string_lossy()])
+pub fn reinstall(pkg_file: &Path, terse: bool) -> Result<(), String> {
+    let f = pkg_file.to_string_lossy();
+    run("upgradepkg", &pkgtools_args(terse, &["--reinstall", &f]))
 }
 
 /// Fresh install: `installpkg`.
-pub fn install(pkg_file: &Path) -> Result<(), String> {
-    run("installpkg", &[&pkg_file.to_string_lossy()])
+pub fn install(pkg_file: &Path, terse: bool) -> Result<(), String> {
+    let f = pkg_file.to_string_lossy();
+    run("installpkg", &pkgtools_args(terse, &[&f]))
 }
 
 /// Upgrade, installing the package even if no matching package is currently
@@ -102,11 +115,9 @@ pub fn install(pkg_file: &Path) -> Result<(), String> {
 /// (e.g. 15.0 `glibc-solibs` becomes -current `aaa_glibc-solibs`): a plain
 /// `upgradepkg` would skip the new name as "not installed", whereas
 /// `--install-new` installs it. Mirrors the official Slackware upgrade path.
-pub fn upgrade_install_new(pkg_file: &Path) -> Result<(), String> {
-    run(
-        "upgradepkg",
-        &["--install-new", &pkg_file.to_string_lossy()],
-    )
+pub fn upgrade_install_new(pkg_file: &Path, terse: bool) -> Result<(), String> {
+    let f = pkg_file.to_string_lossy();
+    run("upgradepkg", &pkgtools_args(terse, &["--install-new", &f]))
 }
 
 /// Read `VERSION_CODENAME` from `/etc/os-release` (e.g. `current` on a -current
@@ -172,6 +183,13 @@ pub fn cached_pkg_path(cache_root: &Path, repo: &str, filename: &str) -> PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terse_goes_first_only_when_asked() {
+        assert_eq!(pkgtools_args(false, &["--reinstall", "a.txz"]), vec!["--reinstall", "a.txz"]);
+        assert_eq!(pkgtools_args(true, &["--reinstall", "a.txz"]), vec!["--terse", "--reinstall", "a.txz"]);
+        assert_eq!(pkgtools_args(true, &["a.txz"]), vec!["--terse", "a.txz"]);
+    }
 
     #[test]
     fn reads_fake_installed_db() {

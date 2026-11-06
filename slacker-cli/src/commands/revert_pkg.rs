@@ -337,7 +337,7 @@ pub(crate) fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outc
 
     // Downgrade.
     println!("{} {}", ui::blue("Reverting to"), ui::white(&target.tag()));
-    system::reinstall(&dest)?;
+    system::reinstall(&dest, cfg.terse)?;
 
     // Offer to freeze so a later upgrade-all won't pull it forward again.
     println!();

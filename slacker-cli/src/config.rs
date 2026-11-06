@@ -127,6 +127,9 @@ pub struct Config {
     pub repos: Vec<Repo>,
     /// Resolve .dep files and pull in dependencies (RESOLVE_DEPS, default on).
     pub resolve_deps: bool,
+    /// Pass `--terse` to installpkg/upgradepkg: one line per package
+    /// (TERSE, default off).
+    pub terse: bool,
     /// resolve-stock: also pull a stock package's stock deps from the
     /// local depgraph.db (RESOLVE_STOCK, default off).
     pub resolve_stock: bool,
@@ -263,6 +266,10 @@ impl Config {
             _ => true,
         };
 
+        // TERSE defaults off; on/yes/true/1 passes --terse to installpkg and
+        // upgradepkg (removepkg is terse already).
+        let terse = parse_terse(conf.get("TERSE").map(String::as_str));
+
         // RESOLVE_STOCK defaults OFF. yes/on/true/1 turns it on. The user's
         // explicit declaration that this is a container/minimal system.
         let resolve_stock = matches!(
@@ -346,6 +353,7 @@ impl Config {
             blacklist,
             repos,
             resolve_deps,
+            terse,
             resolve_stock,
             stock_db_url,
             ignore_tags,
@@ -1221,6 +1229,14 @@ fn parse_max_parallel(raw: Option<&str>) -> usize {
     }
 }
 
+/// TERSE: off unless explicitly on/yes/true/1.
+fn parse_terse(v: Option<&str>) -> bool {
+    matches!(
+        v.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("on") | Some("yes") | Some("true") | Some("1")
+    )
+}
+
 /// Parse a `REVERT` on/off value. Default is on; only an explicit
 /// off/no/false/0 disables the revert-pkg command. Pure, for unit testing.
 fn parse_revert_enabled(raw: Option<&str>) -> bool {
@@ -1315,6 +1331,18 @@ mod tests {
         assert_eq!(parse_max_parallel(Some("999")), 16); // ceiling
         assert_eq!(parse_max_parallel(Some("abc")), 4); // garbage -> default
         assert_eq!(parse_max_parallel(Some("")), 4); // empty -> default
+    }
+
+    #[test]
+    fn terse_defaults_off() {
+        assert!(!parse_terse(None));
+        assert!(!parse_terse(Some("off")));
+        assert!(!parse_terse(Some("anything")));
+        assert!(parse_terse(Some("on")));
+        assert!(parse_terse(Some(" ON ")));
+        assert!(parse_terse(Some("yes")));
+        assert!(parse_terse(Some("true")));
+        assert!(parse_terse(Some("1")));
     }
 
     #[test]
@@ -1755,6 +1783,7 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            terse: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1802,6 +1831,7 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            terse: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1851,6 +1881,7 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            terse: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1900,6 +1931,7 @@ mod tests {
             blacklist: vec![],
             repos,
             resolve_deps: true,
+            terse: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
