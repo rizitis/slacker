@@ -9,6 +9,8 @@
       built, with a counter on a terminal. The .dep files are now read in
       parallel (MAX_PARALLEL), so with hundreds of packages the wait before
       the table drops from about a minute to a few seconds.
+      The official tree and its subtrees are no longer asked for .dep files
+      (they ship none), so for them the plan is ready at once.
 - Update: man pages
 Thanks @gegechris99 for the requests.
 ---
