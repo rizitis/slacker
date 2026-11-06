@@ -151,11 +151,73 @@ impl PkgDb {
         self.all.iter().find(|p| p.id.name == name).map(|p| p.series.as_str())
     }
 
-    /// Which repo a (non-empty) build tag belongs to — the first repo shipping a
-    /// package with that exact tag. Used to evaluate `@repo` blacklist rules
-    /// against an installed package, whose source is recorded only as a tag.
+    /// Which repo a (non-empty) build tag belongs to: the repo shipping the
+    /// most packages with that exact tag (a tie goes to the higher priority).
+    /// Not "the first repo found": a tag can be shared, e.g. Slackware's extra/
+    /// ships alienbob's `slackpkg+` with the `alien` tag, and taking the first
+    /// match put every alien package under extras. For an installed package use
+    /// `repo_for_installed`, which looks at the package itself first.
     pub fn repo_for_tag(&self, build_tag: &str) -> Option<&str> {
-        self.all.iter().find(|p| p.id.build_tag() == build_tag).map(|p| p.repo.as_str())
+        let mut count: HashMap<&str, usize> = HashMap::new();
+        for p in self.all.iter().filter(|p| p.id.build_tag() == build_tag) {
+            *count.entry(p.repo.as_str()).or_default() += 1;
+        }
+        let most = count.values().copied().max()?;
+        let top: Vec<&str> =
+            count.into_iter().filter(|&(_, n)| n == most).map(|(r, _)| r).collect();
+        self.best_repo(top, None)
+    }
+
+    /// The repo an installed package came from, for source attribution
+    /// (list-repos, status, history, `@repo` blacklist rules, clean-system).
+    /// The installed copy records its source only as a build tag, and a tag can
+    /// be shared by two repos (see `repo_for_tag`), so the package itself is
+    /// matched first and the tag is the last resort:
+    ///   1. a repo shipping this exact package (name-version-arch-build)
+    ///   2. a repo shipping the same name with the same build tag
+    ///   3. a pin's repo if it ships the tag at all, else `repo_for_tag`
+    ///
+    /// If several repos match at 1 or 2, a pin on the name picks its repo when
+    /// that repo is one of them; otherwise the higher priority wins. A pin whose
+    /// repo does not match is ignored: the installed copy did not come from it.
+    /// The caller handles an empty (official) tag. Frozen candidates count:
+    /// this asks where the package came from, not what may replace it.
+    pub fn repo_for_installed(&self, inst: &PkgId) -> Option<&str> {
+        let tag = inst.build_tag();
+        let pin = self.pins.get(&inst.name).map(String::as_str);
+        let same = |p: &&AvailPkg| p.id.name == inst.name && p.id.build_tag() == tag;
+        let exact: Vec<&str> = self
+            .all
+            .iter()
+            .filter(same)
+            .filter(|p| p.id == *inst)
+            .map(|p| p.repo.as_str())
+            .collect();
+        if !exact.is_empty() {
+            return self.best_repo(exact, pin);
+        }
+        let by_name: Vec<&str> = self.all.iter().filter(same).map(|p| p.repo.as_str()).collect();
+        if !by_name.is_empty() {
+            return self.best_repo(by_name, pin);
+        }
+        if let Some(r) = pin {
+            if let Some(p) = self.all.iter().find(|p| p.repo == r && p.id.build_tag() == tag) {
+                return Some(p.repo.as_str());
+            }
+        }
+        self.repo_for_tag(tag)
+    }
+
+    /// Pick one of several matching repos: the pin's repo if it is among them,
+    /// else the highest priority (name order breaks a tie, so the answer does
+    /// not depend on load order).
+    fn best_repo<'a>(&self, repos: Vec<&'a str>, pin: Option<&str>) -> Option<&'a str> {
+        if let Some(r) = pin.and_then(|pin| repos.iter().find(|r| **r == pin)) {
+            return Some(r);
+        }
+        repos.into_iter().max_by(|a, b| {
+            self.repo_priority(a).cmp(&self.repo_priority(b)).then_with(|| b.cmp(a))
+        })
     }
 
     /// Resolve a single name (or `repo:name`) to the winning candidate.
@@ -1147,6 +1209,57 @@ mod upgrade_tests {
         let db = shared_tag_db();
         let removed = PkgId::parse("gone-1.0-x86_64-9alien").unwrap();
         assert_eq!(db.installed_priority(&removed, &[]), 90);
+    }
+
+    // Issue #11: list-repos/status put every alien package under extras,
+    // because the `alien` tag was mapped to the first repo shipping it.
+    fn alien_extras_db(pins: &[(&str, &str)]) -> PkgDb {
+        let mut d = db(
+            vec![
+                avail("slackpkg+-1.8.4-noarch-1alien", "extras"),
+                avail("chromium-ungoogled-156.0-x86_64-1alien", "alienbob"),
+                avail("vlc-3.0.21-x86_64-2alien", "alienbob"),
+                avail("libdvdcss-1.4.3-x86_64-1alien", "alienbob"),
+                avail("same-1.0-x86_64-1alien", "extras"),
+                avail("same-1.0-x86_64-1alien", "alienbob"),
+            ],
+            &[("slackware", 100), ("extras", 90), ("alienbob", 60), ("lngn", 80)],
+            Some(100),
+        );
+        d.pins = pins.iter().map(|(n, r)| (n.to_string(), r.to_string())).collect();
+        d
+    }
+
+    fn src(d: &PkgDb, id: &str) -> Option<String> {
+        d.repo_for_installed(&PkgId::parse(id).unwrap()).map(str::to_string)
+    }
+
+    #[test]
+    fn installed_alien_pkg_is_attributed_to_its_own_repo() {
+        let d = alien_extras_db(&[]);
+        assert_eq!(src(&d, "chromium-ungoogled-156.0-x86_64-1alien").as_deref(), Some("alienbob"));
+        assert_eq!(src(&d, "slackpkg+-1.8.4-noarch-1alien").as_deref(), Some("extras"));
+        // older installed build, same name and tag: still its own repo
+        assert_eq!(src(&d, "vlc-3.0.20-x86_64-1alien").as_deref(), Some("alienbob"));
+        // no repo ships it any more: the repo with the most alien packages
+        assert_eq!(src(&d, "gone-1.0-x86_64-1alien").as_deref(), Some("alienbob"));
+        assert_eq!(d.repo_for_tag("alien"), Some("alienbob"));
+        // a tag nobody ships
+        assert_eq!(src(&d, "x-1.0-x86_64-1_nobody"), None);
+    }
+
+    #[test]
+    fn installed_attribution_tie_uses_pin_then_priority() {
+        // the same file in two repos: priority decides ...
+        assert_eq!(src(&alien_extras_db(&[]), "same-1.0-x86_64-1alien").as_deref(), Some("extras"));
+        // ... unless the name is pinned to one of them
+        let d = alien_extras_db(&[("same", "alienbob")]);
+        assert_eq!(src(&d, "same-1.0-x86_64-1alien").as_deref(), Some("alienbob"));
+        // a pin to a repo that does not ship the installed build is ignored
+        let d = alien_extras_db(&[("chromium-ungoogled", "lngn"), ("gone", "extras")]);
+        assert_eq!(src(&d, "chromium-ungoogled-156.0-x86_64-1alien").as_deref(), Some("alienbob"));
+        // tag-only fallback: a pin's repo that ships the tag wins
+        assert_eq!(src(&d, "gone-1.0-x86_64-1alien").as_deref(), Some("extras"));
     }
 
     #[test]

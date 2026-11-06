@@ -231,16 +231,55 @@ fn first_nonempty_line(buf: &[u8]) -> Result<String, String> {
     }
 }
 
+/// Bytes of one download so far, written by the downloading thread and read by
+/// another one that shows progress. `total` is 0 while unknown.
+#[derive(Default)]
+pub struct Meter {
+    pub started: std::sync::atomic::AtomicBool,
+    pub done: std::sync::atomic::AtomicU64,
+    pub total: std::sync::atomic::AtomicU64,
+}
+
+/// A writer that forwards to `inner` and adds what it wrote to a `Meter`.
+struct MeterWriter<'a, W> {
+    inner: W,
+    meter: &'a Meter,
+}
+
+impl<W: std::io::Write> std::io::Write for MeterWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.meter.done.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Download a (potentially large) package to `dest`.
 pub fn download_to(url: &str, dest: &Path) -> Result<(), String> {
+    download_to_metered(url, dest, None)
+}
+
+/// download_to, counting the bytes into `meter` when one is given.
+pub fn download_to_metered(url: &str, dest: &Path, meter: Option<&Meter>) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    if let Some(m) = meter {
+        m.started.store(true, Ordering::Relaxed);
+    }
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
     // Local file:// — just copy from the filesystem.
     if let Some(src) = file_url_to_path(url) {
-        std::fs::copy(&src, dest)
+        let n = std::fs::copy(&src, dest)
             .map_err(|e| format!("copy {} -> {}: {e}", src.display(), dest.display()))?;
+        if let Some(m) = meter {
+            m.total.store(n, Ordering::Relaxed);
+            m.done.store(n, Ordering::Relaxed);
+        }
         return Ok(());
     }
 
@@ -255,13 +294,32 @@ pub fn download_to(url: &str, dest: &Path) -> Result<(), String> {
     let resp = with_auth(agent.get(url).set("Accept-Encoding", "identity"), url)
         .call()
         .map_err(|e| e.to_string())?;
+    if let Some(m) = meter {
+        // Same rule as download_to_progress: Content-Length is the size of
+        // what we write only when the body is not transfer-encoded.
+        let encoded = resp
+            .header("Content-Encoding")
+            .is_some_and(|e| !e.trim().is_empty() && !e.eq_ignore_ascii_case("identity"));
+        if let Some(t) = resp.header("Content-Length").and_then(|s| s.parse().ok()).filter(|_| !encoded) {
+            m.total.store(t, Ordering::Relaxed);
+        }
+    }
     let tmp = dest.with_extension("part");
     {
         let mut reader = resp.into_reader();
-        let mut file = std::fs::File::create(&tmp)
+        let file = std::fs::File::create(&tmp)
             .map_err(|e| format!("create {}: {e}", tmp.display()))?;
-        if let Err(e) = capped_copy(&mut reader, &mut file, MAX_DOWNLOAD) {
-            drop(file);
+        let copied = match meter {
+            Some(m) => {
+                let mut w = MeterWriter { inner: file, meter: m };
+                capped_copy(&mut reader, &mut w, MAX_DOWNLOAD)
+            }
+            None => {
+                let mut f = file;
+                capped_copy(&mut reader, &mut f, MAX_DOWNLOAD)
+            }
+        };
+        if let Err(e) = copied {
             let _ = std::fs::remove_file(&tmp);
             return Err(format!("write {}: {e}", tmp.display()));
         }

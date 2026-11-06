@@ -1,4 +1,4 @@
-.TH SLACKER 8 "October 2026" "slacker 0.12.5" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.13.0" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -126,7 +126,18 @@ system reads
 .TP
 .BI info " PACKAGE"
 Show the installed version and the available candidates per repository
-(highest priority first), with sizes and description.
+(highest priority first), with sizes and description. For a candidate that
+declares dependencies (its
+.I .dep
+file, else
+.I PACKAGE REQUIRED
+in
+.IR PACKAGES.TXT ,
+read the same way installing reads them), a
+.I requires:
+line lists them and marks each one that is not pulled in, by a
+.B nodep
+rule or because it is frozen.
 .TP
 .B history \fR[\fINAME\fR]
 Print a chronological log of package changes \(em installed, upgraded,
@@ -330,8 +341,9 @@ rule; its build tag is listed in
 .BR IGNORE_TAGS ;
 or it is attributed to an
 .B immutable
-repository (for a tagged package, the repo that owns its build tag; for a
-tagless one, any immutable repo that provides its name). Use these to protect
+repository (for a tagged package, the repo it came from: the one shipping that
+exact build, or the same name with the same build tag; for a tagless one, any
+immutable repo that provides its name). Use these to protect
 SBo/local builds and packages from
 .IR extra/ ", " testing/ ", " patches/
 that you keep installed. As a safety guard slacker refuses to run if a baseline
@@ -346,8 +358,8 @@ A
 by itself does not protect a package here (unlike a freeze). Instead, any foreign
 package that is pinned
 .I and
-was actually installed from the repo it is pinned to (the pin's repo owns its
-build tag) is presented in a separate step before the main list, offering
+was actually installed from the repo it is pinned to (the pin's repo ships that
+build) is presented in a separate step before the main list, offering
 .RB ( R )emove
 all,
 .RB ( K )eep
@@ -487,6 +499,57 @@ Remove a package's pin, returning it to normal priority\-based resolution \(em
 the counterpart to
 .BR pin .
 Run with no argument to list the current pins.
+.TP
+.BI nodep " PACKAGE:DEPENDENCY..."
+Never pull
+.I DEPENDENCY
+in as a dependency of
+.IR PACKAGE .
+After
+.RB ` "nodep python\-sqlalchemy:python\-psycopg2" `
+installing or upgrading
+.I python\-sqlalchemy
+leaves
+.I python\-psycopg2
+(and whatever only it would have pulled in) out, while its other dependencies
+still come in, and any other package that requires
+.I python\-psycopg2
+still gets it. Use
+.RB ` "nodep \(aq*:cargo\-auditable\(aq" `
+(quote the
+.RB ` * `)
+to keep a dependency out for every package. Each argument names one
+dependency, with exact names (never patterns) and no spaces; give several
+arguments to exclude several:
+.IP
+.EX
+slacker nodep python\-sqlalchemy:python\-psycopg2 \e
+              python\-sqlalchemy:python\-mysqlclient
+.EE
+.IP
+Every argument is checked before anything is written, and all problems are
+reported together. Each rule is stored in the blacklist file as its own line,
+e.g.
+.RB ` "!python\-sqlalchemy:python\-psycopg2" `.
+.B info
+shows a package's dependencies and which of them are not pulled in. A rule acts
+only on what
+.I PACKAGE
+requires itself; when it does not require
+.IR DEPENDENCY ,
+.B nodep
+says so before writing the rule, and names the dependency of
+.I PACKAGE
+that does, when there is one, so the rule can be written for it instead.
+Unlike freezing the dependency, it does not stop the dependency being installed
+for another package or by name. Run with no argument to list the current
+dependency exclusions.
+.TP
+.BI undep " PACKAGE:DEPENDENCY..."
+Remove dependency exclusions \(em the counterpart to
+.BR nodep ,
+written as it lists them. Rules that are not found are reported and left alone.
+Run with no argument to list the current ones.
 .SS Repositories
 .TP
 .B list-repos
@@ -631,11 +694,23 @@ and
 .BR download ,
 every package available in that repo, e.g.
 .I @gnome
-to install a whole desktop repo. For commands acting on installed packages
-.RB ( upgrade ", " reinstall ", " remove )
-it means every installed package whose build tag belongs to that repo \(em the
-packages actually built from it \(em so a same\-named package installed from
-another source is left untouched.
+to install a whole desktop repo. For
+.B upgrade
+and
+.B reinstall
+it means every installed package whose build tag that repo ships and that the
+repo still offers \(em the packages actually built from it \(em so a
+same\-named package installed from another source is left untouched. For
+.B remove
+it means exactly the packages
+.B list-repos
+counts for that repo: a tagless package belongs to the official repo, a tagged
+one to the repo shipping that build (or the same name with the same build tag).
+A build tag shared by two repos, such as the
+.I alien
+tag of the slackpkg+ that Slackware ships in
+.IR extra/ ,
+does not pull in the other repo's packages.
 .TP
 .BI @ _tag
 Every package carrying that build tag, e.g.
@@ -746,6 +821,15 @@ is the cumulative \-current archive it fetches superseded official packages from
 \(em a revert\-only source, never consulted by
 .BR update ", " upgrade ", " install " or " check-updates ,
 so its historical packages never enter the priority model.
+.B BANNER
+(default
+.IR on )
+shows the labyrinth header at the top of every command and the SLACKWARE art
+after an upgrade that touched the official tree and at
+.BR upgrade-dist ;
+set it to
+.I off
+to hide both. They are printed only on a terminal, never into a pipe or a file.
 .PP
 The
 .I repos
@@ -967,6 +1051,23 @@ to be taken only from
 .IR repo ,
 ignoring priority, for every command. A freeze on a package always wins over a
 pin on it.
+.PP
+A line of the form
+.RI ! package : dependency
+(written by
+.BR nodep )
+is a dependency exclusion: when
+.I package
+requires
+.IR dependency ,
+it is not pulled in.
+.RI !* : dependency
+does the same for every package. Both names are exact, with no spaces, and
+each line excludes one dependency. Any other package that
+requires
+.I dependency
+still pulls it in, and it can still be installed by name. See
+.BR DEPENDENCIES .
 .TP
 .I /etc/slacker/distro-upgrade.conf
 Optional. Sets
@@ -1031,6 +1132,18 @@ or, per run, with
 This applies to every command that installs packages
 .RB ( install ", " upgrade ", " reinstall ", " upgrade-all ", " install-new ", "
 .BR install-template ).
+.PP
+A packager may list a dependency you do not want, such as a build tool or the
+driver for a database you do not use. Leave it out for that one package with
+.BR nodep ,
+or for every package with
+.RB ` "nodep \(aq*:dependency\(aq" `.
+A frozen dependency is never pulled in either, but a freeze applies to every
+package and also blocks installing it by name. Whenever a dependency is left out
+for one of these reasons and is not otherwise installed or being installed, the
+plan says so with a
+.I note
+line, so a package is never installed without one of its dependencies unnoticed.
 .SH SECURITY
 When a repository GPG key has been imported with
 .BR "update gpg" ,

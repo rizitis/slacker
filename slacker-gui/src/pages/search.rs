@@ -222,8 +222,16 @@ pub fn show_info(ctx: &Ctx, name: &str) {
     inner.add_css_class("dialog-body");
     inner.append(&scroller);
 
+    // What this package pulls in, each dependency on or off.
+    let deps = gtk::Button::with_label("Dependencies\u{2026}");
+    {
+        let (ctx, name) = (ctx.clone(), name.to_string());
+        deps.connect_clicked(move |_| crate::deps::dialog(&ctx, &name));
+    }
+    let header = adw::HeaderBar::new();
+    header.pack_start(&deps);
     let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
+    view.add_top_bar(&header);
     view.set_content(Some(&inner));
     let dialog = adw::Dialog::builder()
         .title(name)

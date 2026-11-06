@@ -8,6 +8,7 @@
 mod commands;
 mod confirm;
 mod ctx;
+mod deps;
 mod edit;
 mod output;
 mod pages;

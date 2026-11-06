@@ -416,6 +416,22 @@ impl Config {
             .collect()
     }
 
+    /// The dependency exclusion that stops `dep` being pulled in as a dependency
+    /// of `parent` (`!parent:dep`, or `!*:dep` for any package), written as a
+    /// rule, if there is one. Exact names on both sides.
+    pub fn nodep_rule(&self, parent: &str, dep: &str) -> Option<String> {
+        self.blacklist
+            .iter()
+            .filter_map(|r| r.nodep())
+            .find(|(p, d)| *d == dep && (*p == "*" || *p == parent))
+            .map(|(p, d)| format!("!{p}:{d}"))
+    }
+
+    /// All dependency exclusions as (parent, dep), for display.
+    pub fn nodeps(&self) -> Vec<(&str, &str)> {
+        self.blacklist.iter().filter_map(|r| r.nodep()).collect()
+    }
+
     /// Name of the official repository, if one is configured.
     pub fn official_repo_name(&self) -> Option<&str> {
         self.repos.iter().find(|r| r.official).map(|r| r.name.as_str())
@@ -556,6 +572,16 @@ fn read_optional(path: &Path) -> Result<String, String> {
     }
 }
 
+/// Whether to print the decorative banners: the labyrinth header at the top of
+/// every command and the SLACKWARE art (`BANNER` in slacker.conf, same on/off
+/// rule as `REVERT`: on unless explicitly off/no/false/0). Read on its own, like
+/// `system_arch`, because the header is printed before the full config is
+/// loaded and must not depend on it being valid; an unreadable file means on.
+pub fn banner_enabled(dir: &Path) -> bool {
+    let text = read_optional(&dir.join("slacker.conf")).unwrap_or_default();
+    parse_revert_enabled(parse_keyvals(&text).get("BANNER").map(String::as_str))
+}
+
 /// Architecture tokens we recognise in Slackware package names / os-release.
 const KNOWN_ARCHES: &[&str] = &["x86_64", "aarch64", "i586", "i686", "arm", "noarch"];
 
@@ -686,6 +712,11 @@ pub struct BlacklistRule {
     /// NOT match in the freeze path (`matches` early-returns false on it); it is
     /// consulted only by `pinned_repo`.
     pin: bool,
+    /// For a dependency exclusion (`!parent:dep`, or `!*:dep` for any parent):
+    /// (parent, dep), both EXACT names. Neither a freeze nor a pin: it only
+    /// stops `dep` being pulled in as a dependency of `parent`, so `matches`
+    /// early-returns false on it; it is consulted only by `nodep_rule`.
+    nodep: Option<(String, String)>,
 }
 
 impl BlacklistRule {
@@ -693,8 +724,9 @@ impl BlacklistRule {
     /// may be None (then series/`@repo` rules simply do not match).
     pub fn matches(&self, id: &str, series: Option<&str>, repo: Option<&str>) -> bool {
         // A pin is a positive rule ("only from this repo"), never a freeze, so it
-        // must never make a package look blacklisted. The freeze path stops here.
-        if self.pin {
+        // must never make a package look blacklisted; nor does a dependency
+        // exclusion (`!parent:dep`). The freeze path stops here.
+        if self.pin || self.nodep.is_some() {
             return false;
         }
         if let Some(want) = &self.repo {
@@ -718,6 +750,11 @@ impl BlacklistRule {
         }
     }
 
+    /// (parent, dep) for a dependency exclusion `!parent:dep`, else None.
+    pub fn nodep(&self) -> Option<(&str, &str)> {
+        self.nodep.as_ref().map(|(p, d)| (p.as_str(), d.as_str()))
+    }
+
     /// The `@repo` scope of this rule, if any.
     pub fn repo(&self) -> Option<&str> {
         self.repo.as_deref()
@@ -736,6 +773,10 @@ impl BlacklistRule {
             let repo = self.repo.as_deref().unwrap_or("?");
             let name = self.pin_name.as_deref().unwrap_or("?");
             return format!("pins '{name}' to repo '{repo}' (not a freeze)");
+        }
+        if let Some((parent, dep)) = &self.nodep {
+            let of = if parent == "*" { "any package".to_string() } else { format!("'{parent}'") };
+            return format!("never pulls '{dep}' in as a dependency of {of} (not a freeze)");
         }
         let scope = match &self.repo {
             Some(r) => format!("in repo '{r}' only"),
@@ -812,6 +853,12 @@ fn glob_to_regex(glob: &str) -> String {
 
 pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
     let raw = line.trim().to_string();
+    // Dependency exclusion: `!parent:dep` never pulls `dep` in as a dependency
+    // of `parent` (`!*:dep`: of any package). Checked first: `!` starts no
+    // freeze pattern or pin.
+    if let Some(body) = raw.strip_prefix('!') {
+        return parse_nodep(&raw, body);
+    }
     let mut rest = raw.as_str();
     let mut repo = None;
     if let Some(after) = rest.strip_prefix('@') {
@@ -877,6 +924,7 @@ pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
             name: None,
             pin_name: Some(rest.to_string()),
             pin: true,
+            nodep: None,
         });
     }
     if let Some(series) = rest.strip_suffix('/') {
@@ -890,10 +938,64 @@ pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
             name: None,
             pin_name: None,
             pin: false,
+            nodep: None,
         });
     }
     let re = compile_pattern(rest).map_err(|e| format!("'{raw}': {e}"))?;
-    Ok(BlacklistRule { repo, series: None, name: Some(re), pin_name: None, pin: false })
+    Ok(BlacklistRule { repo, series: None, name: Some(re), pin_name: None, pin: false, nodep: None })
+}
+
+/// Parse the body of a dependency exclusion `!parent:dep` (`raw` is the whole
+/// rule, for messages). Both are EXACT package names; the parent may be `*`
+/// ("a dependency of any package"). One dependency per rule, written with no
+/// spaces, so every rule is one line that `undep` removes on its own. No
+/// `@repo` scope: the rule is about which package asks for the dependency, not
+/// where either comes from.
+fn parse_nodep(raw: &str, body: &str) -> Result<BlacklistRule, String> {
+    let usage = "a dependency rule is '!package:dependency' (or '!*:dependency' for any package)";
+    if body.contains(',') {
+        return Err(format!(
+            "'{raw}': one dependency per rule — write a '!package:dependency' line for each"
+        ));
+    }
+    if body.contains(char::is_whitespace) {
+        return Err(format!("'{raw}': no spaces in a dependency rule; {usage}"));
+    }
+    let (parent, dep) = body.split_once(':').ok_or_else(|| format!("'{raw}': {usage}"))?;
+    if parent.is_empty() || dep.is_empty() {
+        return Err(format!("'{raw}': {usage}"));
+    }
+    if parent != "*" {
+        check_exact_name(raw, parent)?;
+    }
+    check_exact_name(raw, dep)?;
+    Ok(BlacklistRule {
+        repo: None,
+        series: None,
+        name: None,
+        pin_name: None,
+        pin: false,
+        nodep: Some((parent.to_string(), dep.to_string())),
+    })
+}
+
+/// A name in a dependency rule must be one exact package name: letters,
+/// digits and `.` `_` `+` `-` (`slackpkg+`, `python3.11`, `gtk+3`), not
+/// starting or ending with `-`.
+fn check_exact_name(raw: &str, name: &str) -> Result<(), String> {
+    if name_has_pattern_chars(name) {
+        return Err(format!(
+            "'{raw}': '{name}' is a pattern; a dependency rule takes EXACT package names"
+        ));
+    }
+    if name.contains(':') {
+        return Err(format!("'{raw}': one ':' only; {}", "write it as '!package:dependency'"));
+    }
+    let valid = name.chars().all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c));
+    if !valid || name.starts_with('-') || name.ends_with('-') {
+        return Err(format!("'{raw}': '{name}' is not a valid package name"));
+    }
+    Ok(())
 }
 
 /// Parse the whole `blacklist` file, warning about and skipping any malformed
@@ -1166,6 +1268,20 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("slacker.conf"), "ARCH=i586\n").unwrap();
         assert_eq!(system_arch(&dir), "i586");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn banner_on_unless_conf_says_off() {
+        let dir = std::env::temp_dir().join(format!("slacker-banner-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(banner_enabled(&dir)); // no slacker.conf
+        std::fs::write(dir.join("slacker.conf"), "MAX_PARALLEL=4\n").unwrap();
+        assert!(banner_enabled(&dir)); // key absent
+        std::fs::write(dir.join("slacker.conf"), "BANNER=on\n").unwrap();
+        assert!(banner_enabled(&dir));
+        std::fs::write(dir.join("slacker.conf"), "BANNER=\"off\"  # quiet\n").unwrap();
+        assert!(!banner_enabled(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1708,6 +1824,59 @@ mod tests {
         assert!(cfg.blacklist_hit("firefox-1-x86_64-1", Some("xap"), Some("slackware")));
         // ...and the pinned packages are NOT frozen.
         assert!(!cfg.blacklist_hit("vlc-3-x86_64-1", Some("xap"), Some("alienbob")));
+    }
+
+    #[test]
+    fn nodep_rules_parse_and_never_freeze_or_pin() {
+        let r = parse_blacklist_rule("!python-sqlalchemy:python-psycopg2").unwrap();
+        assert_eq!(r.nodep(), Some(("python-sqlalchemy", "python-psycopg2")));
+        assert!(!r.matches("python-psycopg2-2.9-x86_64-1cf", Some("l"), Some("conraid")));
+        assert!(parse_blacklist_rule("!*:cargo-auditable").is_ok());
+        assert!(parse_blacklist_rule("!slackpkg+:gtk+3").is_ok());
+        assert!(parse_blacklist_rule("!python3.11:py_lib-2").is_ok());
+        for bad in [
+            "!", "!a", "!a:", "!:b", "!a:*", "!py*:b", "!a:b:c", "!a b:c", "!@x:b", "!a:kde/",
+            "!a:b,c", "!a:b c", "!a :b", "!a: b", "! a:b", "!-a:b", "!a:b-", "!a:b;c", "!a:b=1",
+            "!!a:b", "!*x:b",
+        ] {
+            assert!(parse_blacklist_rule(bad).is_err(), "{bad} should be rejected");
+        }
+        let bl = parse_blacklist("!python-sqlalchemy:python-psycopg2\n!*:cargo-auditable\nfirefox\n@alienbob 100% vlc\n");
+        let cfg = Config {
+            arch: "x86_64".into(),
+            cache_dir: std::path::PathBuf::new(),
+            state_dir: std::path::PathBuf::new(),
+            pkg_db_dir: std::path::PathBuf::new(),
+            adm_dir: std::path::PathBuf::new(),
+            blacklist: bl,
+            repos: vec![],
+            resolve_deps: true,
+            resolve_stock: false,
+            stock_db_url: String::new(),
+            ignore_tags: vec![],
+            tag_priorities: vec![],
+            config_dir: std::path::PathBuf::new(),
+            verify: VerifyPolicy::All,
+            max_parallel: 1,
+            revert_enabled: true,
+            cumulative_url: String::new(),
+            distro_upgrade_mirror: None,
+        };
+        // only for the package it names ...
+        assert_eq!(
+            cfg.nodep_rule("python-sqlalchemy", "python-psycopg2").as_deref(),
+            Some("!python-sqlalchemy:python-psycopg2")
+        );
+        assert_eq!(cfg.nodep_rule("pgadmin", "python-psycopg2"), None);
+        // ... or for any package with `*`
+        assert_eq!(cfg.nodep_rule("ripgrep", "cargo-auditable").as_deref(), Some("!*:cargo-auditable"));
+        assert_eq!(cfg.nodeps().len(), 2);
+        // neither is a freeze or a pin; the freeze and the pin still work
+        assert!(!cfg.blacklist_hit("python-psycopg2-2.9-x86_64-1cf", Some("l"), Some("conraid")));
+        assert!(!cfg.blacklist_hit("cargo-auditable-0.7-x86_64-1cf", Some("d"), Some("conraid")));
+        assert!(cfg.blacklist_hit("firefox-1-x86_64-1", Some("xap"), Some("slackware")));
+        assert_eq!(cfg.pinned_repo("vlc"), Some("alienbob"));
+        assert_eq!(cfg.pins().len(), 1);
     }
 
     #[test]

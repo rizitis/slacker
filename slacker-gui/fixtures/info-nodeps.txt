@@ -1,0 +1,5 @@
+Installed: bash-5.3-x86_64-1
+Available candidates (highest priority first):
+  [slackware] bash-5.3-x86_64-1  [blacklisted]
+        series: x   compressed: ?   uncompressed: ?   md5 ok
+        bash (test)

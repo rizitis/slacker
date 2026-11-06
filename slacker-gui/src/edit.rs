@@ -1,5 +1,6 @@
-//! Adding and removing frozen rules and pins. Every change goes through
-//! slacker (`frozen`, `unfrozen`, `pin`, `unpin`). Additions show slacker's
+//! Adding and removing frozen rules, pins and dependency exclusions. Every
+//! change goes through slacker (`frozen`, `unfrozen`, `pin`, `unpin`,
+//! `nodep`, `undep`). Additions show slacker's
 //! own description and question in the GUI and are written only when the
 //! user answers yes; removals ask first in the GUI, since slacker does not.
 
@@ -231,6 +232,108 @@ pub fn unpin(ctx: &Ctx, package: &str) {
             spec: commands::unpin(package),
             title: format!("Remove the pin on {package}"),
             verb: "Unpin".into(),
+            destructive: false,
+        },
+        after_change(ctx),
+    );
+}
+
+/// Asks for a dependency, and optionally the one package it is left out for
+/// (blank: any package), then lets slacker show and confirm the exclusion.
+pub fn nodep_dialog(ctx: &Ctx) {
+    let package = gtk::Entry::builder()
+        .placeholder_text("Any package")
+        .activates_default(true)
+        .hexpand(true)
+        .build();
+    let dependency = gtk::Entry::builder()
+        .placeholder_text("Dependency, e.g. cargo-auditable")
+        .activates_default(true)
+        .hexpand(true)
+        .build();
+    let error = hint_label("");
+    error.add_css_class("error");
+    error.set_visible(false);
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.append(&dependency);
+    let for_ = gtk::Label::new(Some("for"));
+    for_.add_css_class("dim-label");
+    row.append(&for_);
+    row.append(&package);
+
+    let extra = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    extra.append(&row);
+    extra.append(&hint_label(
+        "Exact package names, without version. Leave the package blank to leave the dependency out for every package. \
+         A rule for one package acts only if that package itself requires the dependency; \
+         its Dependencies\u{2026} window, under Installed or in the package details, shows which one does.",
+    ));
+    extra.append(&error);
+
+    let dialog = adw::AlertDialog::builder()
+        .heading("Leave out a dependency")
+        .body("slacker will not pull the dependency in for that package. Other packages that require it still pull it in, and nothing installed is removed.")
+        .extra_child(&extra)
+        .close_response("cancel")
+        .default_response("check")
+        .build();
+    dialog.add_responses(&[("cancel", "Cancel"), ("check", "Check")]);
+    dialog.set_response_appearance("check", adw::ResponseAppearance::Suggested);
+
+    let validate: Rc<dyn Fn()> = {
+        let (d, e, p, dep) = (dialog.clone(), error.clone(), package.clone(), dependency.clone());
+        Rc::new(move || {
+            let r = commands::dep_rule(&p.text(), &dep.text());
+            d.set_response_enabled("check", r.is_ok());
+            match (&r, dep.text().trim().is_empty() && p.text().trim().is_empty()) {
+                (Err(msg), false) => {
+                    e.set_text(msg);
+                    e.set_visible(true);
+                }
+                _ => e.set_visible(false),
+            }
+        })
+    };
+    validate();
+    for en in [&package, &dependency] {
+        let v = validate.clone();
+        en.connect_changed(move |_| v());
+    }
+
+    let ctx2 = ctx.clone();
+    let focus = dependency.clone();
+    confirm::after_choice(&dialog, "check", &ctx.window, move || {
+        let ctx = ctx2;
+        let Ok(rule) = commands::dep_rule(&package.text(), &dependency.text()) else { return };
+        let (p, d) = rule.split_once(':').unwrap_or(("*", &rule));
+        let whom = if p == "*" { "any package".to_string() } else { p.to_string() };
+        confirm::run_as_root(
+            &ctx,
+            Action {
+                spec: commands::nodep(std::slice::from_ref(&rule)),
+                title: format!("Stop pulling in \u{201c}{d}\u{201d} for {whom}"),
+                verb: "Write".into(),
+                destructive: false,
+            },
+            after_change(&ctx),
+        );
+    });
+    glib::idle_add_local_once(move || {
+        focus.grab_focus();
+    });
+}
+
+/// `rule` is `package:dependency` as listed (package `*` for any).
+pub fn undep(ctx: &Ctx, rule: &str) {
+    let (p, d) = rule.split_once(':').unwrap_or(("*", rule));
+    let whom = if p == "*" { "any package".to_string() } else { p.to_string() };
+    confirm::run_as_root(
+        ctx,
+        Action {
+            spec: commands::undep(&[rule.to_string()]),
+            title: format!("Pull \u{201c}{d}\u{201d} in again for {whom}"),
+            verb: "Remove Rule".into(),
             destructive: false,
         },
         after_change(ctx),

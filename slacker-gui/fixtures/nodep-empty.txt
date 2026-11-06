@@ -1,0 +1,2 @@
+No dependency exclusions set.
+  to add: `nodep package:dependency...`, e.g. `nodep python-sqlalchemy:python-psycopg2`, or `nodep '*:cargo-auditable'` for any package

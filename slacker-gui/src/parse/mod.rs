@@ -5,6 +5,7 @@
 //! recognise is never guessed at: it is kept verbatim in `unrecognized`, and
 //! the page shows it as-is next to whatever was understood.
 
+pub mod deps;
 pub mod history;
 pub mod mirrors;
 pub mod prompt;
@@ -77,6 +78,8 @@ mod adversarial {
             "  \u{2713} Repo release all match this system (-current)",
             "  slackware  updates pending",
             "  vlc -> alienbob",
+            "        requires: gtk4, cargo-auditable (not pulled in: !ghostty:cargo-auditable)   (RESOLVE_DEPS=no: none are pulled in)",
+            "  !ghostty:cargo-auditable  ('cargo-auditable' is not pulled in for 'ghostty')",
         ] {
             for i in 0..=line.len() {
                 if line.is_char_boundary(i) {
@@ -101,6 +104,8 @@ mod adversarial {
             let _ = super::prompt::detect(before, last.first().copied().unwrap_or(""));
             let _ = super::rules::parse_frozen(&s);
             let _ = super::rules::parse_pins(&s);
+            let _ = super::rules::parse_nodeps(&s);
+            let _ = super::deps::parse(&s);
             let f = super::mirrors::parse(&s);
             let _ = super::mirrors::suggestions(&f, 3);
             let _ = super::split_columns(&s);
