@@ -597,6 +597,47 @@ pub fn banner_enabled(dir: &Path) -> bool {
     parse_revert_enabled(parse_keyvals(&text).get("BANNER").map(String::as_str))
 }
 
+/// What `new-config` does on its own with some `.new` files, from slacker.conf:
+/// NEWCONFIG_OVERWRITE / NEWCONFIG_REMOVE / NEWCONFIG_KEEP, each a list of
+/// paths or globs of the installed file (without `.new`). A key may be repeated
+/// on several lines and its lines add up, unlike every other key.
+#[derive(Debug, Default, PartialEq)]
+pub struct NewConfigRules {
+    pub overwrite: Vec<String>,
+    pub remove: Vec<String>,
+    pub keep: Vec<String>,
+}
+
+/// Read the NEWCONFIG_* rules leniently, like `banner_enabled`: new-config runs
+/// without the full config load (it must work while repos/mirrors are broken),
+/// so a missing or unreadable slacker.conf just means no rules.
+pub fn newconfig_rules(dir: &Path) -> NewConfigRules {
+    parse_newconfig_rules(&read_optional(&dir.join("slacker.conf")).unwrap_or_default())
+}
+
+fn parse_newconfig_rules(text: &str) -> NewConfigRules {
+    let mut out = NewConfigRules::default();
+    for raw in text.lines() {
+        let line = strip_comment(raw);
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let list = match k.trim() {
+            "NEWCONFIG_OVERWRITE" => &mut out.overwrite,
+            "NEWCONFIG_REMOVE" => &mut out.remove,
+            "NEWCONFIG_KEEP" => &mut out.keep,
+            _ => continue,
+        };
+        let v = v.trim().trim_matches('"').trim_matches('\'');
+        // A path copied from slackpkg's post-functions.conf still names the
+        // .new file; it means the same installed file.
+        list.extend(
+            v.split_whitespace()
+                .map(|p| p.strip_suffix(".new").unwrap_or(p).to_string())
+                .filter(|p| !p.is_empty()),
+        );
+    }
+    out
+}
+
 /// Architecture tokens we recognise in Slackware package names / os-release.
 const KNOWN_ARCHES: &[&str] = &["x86_64", "aarch64", "i586", "i686", "arm", "noarch"];
 
@@ -1344,6 +1385,22 @@ mod tests {
         assert_eq!(parse_max_parallel(Some("999")), 16); // ceiling
         assert_eq!(parse_max_parallel(Some("abc")), 4); // garbage -> default
         assert_eq!(parse_max_parallel(Some("")), 4); // empty -> default
+    }
+
+    #[test]
+    fn newconfig_rules_add_up_across_lines() {
+        let text = "\
+            # NEWCONFIG_KEEP=/etc/ignored\n\
+            NEWCONFIG_OVERWRITE=/etc/rc.d/rc.*\n\
+            NEWCONFIG_KEEP=/etc/rc.d/rc.modules.local\n\
+            NEWCONFIG_KEEP=\"/etc/ssh/sshd_config /etc/slacker/mirrors\"  # two at once\n\
+            NEWCONFIG_REMOVE=/etc/ntp.conf.new\n\
+            TERSE=on\n";
+        let r = parse_newconfig_rules(text);
+        assert_eq!(r.overwrite, vec!["/etc/rc.d/rc.*"]);
+        assert_eq!(r.keep, vec!["/etc/rc.d/rc.modules.local", "/etc/ssh/sshd_config", "/etc/slacker/mirrors"]);
+        assert_eq!(r.remove, vec!["/etc/ntp.conf"]); // a slackpkg-style .new path is accepted
+        assert_eq!(parse_newconfig_rules(""), NewConfigRules::default());
     }
 
     #[test]

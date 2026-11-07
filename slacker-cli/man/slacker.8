@@ -1,4 +1,4 @@
-.TH SLACKER 8 "November 2026" "slacker 0.13.1" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.14.0" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -407,6 +407,13 @@ by default and may be overridden with the
 environment variable. With
 .B \-\-yes
 the current configs are kept and the \fI.new\fR files removed, non-interactively.
+Files named in
+.BR NEWCONFIG_OVERWRITE ", " NEWCONFIG_REMOVE " or " NEWCONFIG_KEEP
+in
+.I slacker.conf
+are handled first, as set there, with or without
+.BR \-\-yes ;
+only the rest are listed and asked about.
 After
 .B upgrade-all
 any pending \fI.new\fR files \(em both newly installed and pre-existing \(em are
@@ -845,6 +852,24 @@ is terse already.
 When several packages are installed, each one is preceded by its place in the
 run, e.g.
 .BR "[ 37/245 ] upgrading glibc\-2.44\-x86_64\-5" .
+.BR NEWCONFIG_OVERWRITE ,
+.BR NEWCONFIG_REMOVE " and " NEWCONFIG_KEEP
+decide in advance what
+.B new-config
+does with some \fI.new\fR files: install the new version (the old one saved as
+\fI.orig\fR), delete the \fI.new\fR, or keep the installed file and rename the
+\fI.new\fR to \fI.new.kept\fR, so nothing is left pending and nothing is lost. Each takes paths
+or globs of the installed file, without the \fI.new\fR suffix (\fB*\fR and
+\fB?\fR do not cross a \fB/\fR), and may be repeated on several lines, which add
+up. When a file matches more than one, KEEP wins over REMOVE, and REMOVE over
+OVERWRITE. A glob in
+.B NEWCONFIG_OVERWRITE
+never replaces
+.IR /etc/passwd ", " shadow ", " group ", " rc.inet1.conf ", " rc.local " or " rc.local_shutdown ;
+only their exact path does. These keys are read even when the rest of the
+configuration is broken, like
+.B new-config
+itself.
 .PP
 The
 .I repos

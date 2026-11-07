@@ -725,7 +725,43 @@ fn expand_with_deps(
             )?;
         }
     }
-    Ok(plan)
+    Ok(upgrade_order(plan))
+}
+
+/// Installed first, in this order, when they are in a plan: steps 2 and 3 of
+/// UPGRADE.TXT (the C runtime, then the tools upgradepkg itself relies on, and
+/// mkinitrd so the kernel finds the new one).
+const UPGRADE_FIRST: &[&str] = &["aaa_glibc-solibs", "pkgtools", "tar", "xz", "findutils", "mkinitrd"];
+
+/// The kernel goes last: its doinst runs geninitrd, which copies mkinitrd (or
+/// dracut), kmod, udev, lvm2 and their libraries into the initrd, so they must
+/// already be upgraded. Same as slackpkg's upgrade-all. kernel_armvN is ARM.
+pub(crate) fn upgrade_last(name: &str) -> bool {
+    name == "kernel-generic"
+        || name
+            .strip_prefix("kernel_armv")
+            .is_some_and(|n| n.len() == 1 && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Reorder a plan for installing: UPGRADE_FIRST in front, the kernel at the
+/// end, everything else in between in the order the resolver gave (each
+/// dependency before what needs it). The plan table shows this same order.
+fn upgrade_order(plan: Vec<PlanItem>) -> Vec<PlanItem> {
+    let mut first: Vec<(usize, PlanItem)> = Vec::new();
+    let mut middle: Vec<PlanItem> = Vec::new();
+    let mut last: Vec<PlanItem> = Vec::new();
+    for it in plan {
+        let name = it.pkg.id.name.as_str();
+        if let Some(rank) = UPGRADE_FIRST.iter().position(|n| *n == name) {
+            first.push((rank, it));
+        } else if upgrade_last(name) {
+            last.push(it);
+        } else {
+            middle.push(it);
+        }
+    }
+    first.sort_by_key(|(rank, _)| *rank);
+    first.into_iter().map(|(_, it)| it).chain(middle).chain(last).collect()
 }
 
 const MAX_DEP_DEPTH: usize = 512;
@@ -3637,6 +3673,28 @@ mod collect_tests {
     }
 
     #[test]
+    fn dist_puts_the_kernel_after_the_rest_but_before_the_gpg_chain() {
+        let db = PkgDb::for_test(
+            vec![
+                av("gnupg-2.4-x86_64-1", "slackware"),
+                av("kernel-generic-7.2.15-x86_64-1", "slackware"),
+                av("kmod-34-x86_64-1", "slackware"),
+                av("zlib-1.3-x86_64-1", "slackware"),
+            ],
+            &[("slackware", 100)],
+            Some(100),
+        );
+        let installed: Vec<pkg::PkgId> =
+            ["gnupg-2.2-x86_64-1", "kernel-generic-7.1-x86_64-1", "kmod-33-x86_64-1", "zlib-1.2-x86_64-1"]
+                .iter()
+                .map(|t| pkg::PkgId::parse(t).unwrap())
+                .collect();
+        let (_critical, rest) = dist_upgrade_sets(&db, &installed);
+        let order: Vec<&str> = rest.iter().map(|p| p.pkg.id.name.as_str()).collect();
+        assert_eq!(order, vec!["kmod", "zlib", "kernel-generic", "gnupg"]);
+    }
+
+    #[test]
     fn dist_defers_gpg_chain_to_the_end() {
         // A normal package plus gnupg + a gpg lib, all upgradeable; the GnuPG
         // verification chain (DIST_GPG_LAST) must come LAST in the rest order so
@@ -3710,6 +3768,41 @@ mod collect_tests {
         assert_eq!(version_of_triple("2.4-r1-x86_64-1"), Some("2.4-r1"));
         assert_eq!(version_of_triple("nonsense"), None);
         assert_eq!(version_of_triple("-x86_64-1"), None);
+    }
+
+    #[test]
+    fn plan_follows_upgrade_txt_and_puts_the_kernel_last() {
+        let item = |nv: &str| PlanItem {
+            pkg: av(nv, "slackware"),
+            action: InstallAction::Upgrade,
+            dep_for: None,
+            from: None,
+        };
+        let plan: Vec<PlanItem> = [
+            "bash-5.3-x86_64-1",
+            "findutils-4.10-x86_64-1",
+            "kernel-generic-7.2.15-x86_64-1",
+            "kernel-source-7.2.15-noarch-1",
+            "kmod-34-x86_64-1",
+            "mkinitrd-1.4.11-x86_64-81",
+            "pkgtools-16.0-noarch-1",
+            "tar-1.35-x86_64-1",
+            "aaa_glibc-solibs-2.44-x86_64-5",
+            "xz-5.8-x86_64-1",
+        ]
+        .iter()
+        .map(|nv| item(nv))
+        .collect();
+        let names: Vec<String> = upgrade_order(plan).into_iter().map(|it| it.pkg.id.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "aaa_glibc-solibs", "pkgtools", "tar", "xz", "findutils", "mkinitrd",
+                "bash", "kernel-source", "kmod",
+                "kernel-generic",
+            ]
+        );
+        assert!(upgrade_last("kernel_armv8") && !upgrade_last("kernel_armv") && !upgrade_last("kernel-headers"));
     }
 
     #[test]

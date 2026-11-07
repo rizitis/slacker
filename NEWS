@@ -1,18 +1,29 @@
+Version Beta 0.14.0
+=====
+SEMANTIC CHANGES (slacker.conf need update)
 - Update: slacker-cli
-    - Add csb repo for current x86_64
+    - packages are installed in the order UPGRADE.TXT gives: aaa_glibc-solibs,
+  pkgtools, tar, xz, findutils and mkinitrd first, kernel-generic last, so its
+  initrd is built with everything else already upgraded (as slackpkg does).
+  upgrade-dist also installs the kernel last, before the GnuPG chain.
     - new slacker.conf option TERSE=on passes --terse to installpkg and
-      upgradepkg, so each package prints a single line. Default is off.
-      removepkg is terse already.
+  upgradepkg, so each package prints a single line. Default is off.
+  removepkg is terse already.
     - when several packages are installed, each one is preceded by its
-      place in the run, e.g. `[ 37/245 ] upgrading glibc-2.44-x86_64-5`.
+  place in the run, e.g. `[ 37/245 ] upgrading glibc-2.44-x86_64-5`.
     - "Preparing the plan for N package(s)..." is shown while the plan is
-      built, with a counter on a terminal. The .dep files are now read in
-      parallel (MAX_PARALLEL), so with hundreds of packages the wait before
-      the table drops from about a minute to a few seconds.
-      The official tree and its subtrees are no longer asked for .dep files
-      (they ship none), so for them the plan is ready at once.
+  built, with a counter on a terminal. The .dep files are read in parallel
+  (MAX_PARALLEL), and the official tree and its subtrees are no longer asked
+  for .dep files (they ship none), so the wait before the table drops from
+  about a minute to a few seconds.
+    - new slacker.conf keys NEWCONFIG_OVERWRITE, NEWCONFIG_REMOVE and
+  NEWCONFIG_KEEP decide in advance what new-config does with some .new
+  files; only the rest are asked about. OVERWRITE saves your file as .orig,
+  REMOVE deletes the .new, KEEP keeps your file and renames the .new to
+  .new.kept, so nothing is left pending and nothing is lost.
+    - Add csb repo for current x86_64
 - Update: man pages
-Thanks @gegechris99 for the requests.
+Thanks @gegechris99 for the requests. #17 #18
 ---
 
 Version Beta 0.13.0

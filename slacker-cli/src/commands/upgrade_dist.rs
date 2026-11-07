@@ -8,8 +8,8 @@ use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{
     collect, in_graphical_session, install_counter, package_dest, parallel_fetch, report_batch_failures,
-    slackware_dir, summarize_outcomes, update_one_repo, DlItem, InstallAction, Outcome, PlanItem,
-    UpdateOutcomes,
+    slackware_dir, summarize_outcomes, update_one_repo, upgrade_last, DlItem, InstallAction, Outcome,
+    PlanItem, UpdateOutcomes,
 };
 use crate::{banner, changelog, config, dist, download, pkg, system, template, ui};
 use std::collections::{HashMap, HashSet};
@@ -88,9 +88,15 @@ pub(crate) fn dist_upgrade_sets(db: &PkgDb, installed: &[pkg::PkgId]) -> (Vec<Pl
     // Defer the GnuPG verification toolchain (DIST_GPG_LAST) to the very end, so
     // the working gpg keeps verifying every other package and is only replaced
     // once nothing else remains to install.
-    let (mut others, gpg_last): (Vec<PlanItem>, Vec<PlanItem>) = rest
+    let (others, gpg_last): (Vec<PlanItem>, Vec<PlanItem>) = rest
         .into_iter()
         .partition(|it| !DIST_GPG_LAST.contains(&it.pkg.id.name.as_str()));
+    // The kernel goes after everything else but the GnuPG tail: its doinst runs
+    // geninitrd, which copies kmod, udev, lvm2 and the like into the initrd, so
+    // they must already be upgraded (see upgrade_last).
+    let (mut others, kernel): (Vec<PlanItem>, Vec<PlanItem>) =
+        others.into_iter().partition(|it| !upgrade_last(&it.pkg.id.name));
+    others.extend(kernel);
     others.extend(gpg_last);
     (critical, others)
 }
