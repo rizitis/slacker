@@ -692,6 +692,14 @@ name
 or a
 .I repo:name
 pin that forces a specific repository regardless of priority.
+A series name matches exactly that series, never every package whose name
+contains those letters: a directory of the official tree is always a series
+(\fBk\fR holds only kernel\-source), and in other repositories a directory counts
+as one when it holds at least two packages, so a repository's per\-package
+directory (e.g.\& \fIvlc/\fR) never hides the package name. A trailing
+.B /
+.RB ( k/ ", " kde/ )
+means the series and nothing else: if there is no such series, nothing matches.
 .PP
 Two explicit set selectors are also accepted (the @ is required, so a bare word
 is never treated as a repo):

@@ -820,7 +820,9 @@ pub(crate) fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Res
     if !confirm_conflicts("Proceed with reinstall?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
+    let before_cfgs = pending_configs();
     execute_plan(cfg, &plan, cli.yes)?;
+    report_pending_configs(&before_cfgs);
     Ok(Outcome::Ok)
 }
 
@@ -1248,7 +1250,9 @@ pub(crate) fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Resu
     if !confirm_conflicts("Install new packages?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
+    let before_cfgs = pending_configs();
     execute_plan(cfg, &plan, cli.yes)?;
+    report_pending_configs(&before_cfgs);
     Ok(Outcome::Ok)
 }
 
@@ -1391,11 +1395,20 @@ fn note_selected(chosen: &[&repo::AvailPkg]) {
     println!("  {}", ui::dim(&format!("-> selected: {}", names.join(", "))));
 }
 
+/// The *.new config files on disk now: taken before packages are applied, so
+/// `report_pending_configs` can tell this run's from older ones.
+pub(crate) fn pending_configs() -> HashSet<PathBuf> {
+    newconfig::find_new_configs(&newconfig::default_roots())
+        .into_iter()
+        .map(|nc| nc.new_file)
+        .collect()
+}
+
 /// After packages are applied, report pending *.new config files, separating
 /// ones created by this run from leftovers already on disk, and point at
 /// `slacker new-config`. Silent when there are none. `before` is the set of
 /// .new paths that existed prior to the operation.
-fn report_pending_configs(before: &HashSet<PathBuf>) {
+pub(crate) fn report_pending_configs(before: &HashSet<PathBuf>) {
     let current = newconfig::find_new_configs(&newconfig::default_roots());
     if current.is_empty() {
         return;

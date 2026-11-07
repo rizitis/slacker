@@ -282,11 +282,21 @@ impl PkgDb {
     /// and must NOT shadow a name or `repo:name` query for that package. So a
     /// term counts as a series only if at least two *distinct* package names
     /// share it. Stops at the second distinct name.
+    ///
+    /// A directory of the official tree is always a series, however few
+    /// packages it holds: Slackware's `k/` holds only kernel-source, and without
+    /// this `k` matched every package with a "k" in its name, in every repo.
     fn is_real_series(&self, term: &str) -> bool {
+        if term.is_empty() {
+            return false;
+        }
         let mut first: Option<&str> = None;
         for p in &self.all {
             if p.series != term {
                 continue;
+            }
+            if self.is_official_repo(&p.repo) {
+                return true;
             }
             match first {
                 None => first = Some(p.id.name.as_str()),
@@ -295,6 +305,12 @@ impl PkgDb {
             }
         }
         false
+    }
+
+    /// The official repo (the one with the `official` flag); repo priorities
+    /// are distinct, so its priority identifies it.
+    fn is_official_repo(&self, repo: &str) -> bool {
+        self.official_priority.is_some() && self.priority.get(repo).copied() == self.official_priority
     }
 
     /// Expand a slackpkg-style PATTERN into winning packages.
@@ -333,7 +349,15 @@ impl PkgDb {
         }
 
         let (pinned, term) = split_pin(pattern);
-        let is_series = self.is_real_series(term);
+        // `k/`, `kde/`: that series and nothing else, never a name search.
+        let (term, series_only) = match term.strip_suffix('/') {
+            Some(t) => (t, true),
+            None => (term, false),
+        };
+        if term.is_empty() {
+            return Vec::new();
+        }
+        let is_series = series_only || self.is_real_series(term);
 
         let mut winners: HashMap<&str, &AvailPkg> = HashMap::new();
         for p in &self.all {
@@ -404,7 +428,15 @@ impl PkgDb {
         if pattern.starts_with('@') || pattern.contains(':') {
             return Vec::new();
         }
-        let is_series = self.is_real_series(pattern);
+        // Read the pattern exactly as match_pattern does.
+        let (pattern, series_only) = match pattern.strip_suffix('/') {
+            Some(t) => (t, true),
+            None => (pattern, false),
+        };
+        if pattern.is_empty() {
+            return Vec::new();
+        }
+        let is_series = series_only || self.is_real_series(pattern);
         let mut out = Vec::new();
         for inst in installed {
             let Some(pin) = self.pins.get(&inst.name) else {
@@ -1063,6 +1095,92 @@ mod upgrade_tests {
         let mut names: Vec<&str> = m.iter().map(|p| p.id.name.as_str()).collect();
         names.sort();
         assert_eq!(names, vec!["gnugo", "nethack"], "series y must not pull *y* names");
+    }
+
+    /// The case that went wrong: Slackware's `k/` holds one package, so `k`
+    /// was not taken for a series and matched every name with a "k" in it,
+    /// third-party ones included.
+    fn k_fixture() -> PkgDb {
+        let mut ks = avail("kernel-source-7.3.3-noarch-1", "slackware");
+        ks.series = "k".into();
+        let mut kh = avail("kernel-headers-7.3.3-x86-1", "slackware");
+        kh.series = "d".into();
+        let mut ark = avail("ark-26.08.3-x86_64-1", "slackware");
+        ark.series = "kde".into();
+        let mut konsole = avail("konsole-26.08.3-x86_64-1", "slackware");
+        konsole.series = "kde".into();
+        let mut mako = avail("Mako-1.3.5-x86_64-3", "slackware");
+        mako.series = "d".into();
+        // conraid: one directory per package
+        let mut fp = avail("flatpak-1.18.4-x86_64-1cf", "conraid");
+        fp.series = "flatpak".into();
+        let mut vlc = avail("vlc-3.0.21-x86_64-1cf", "conraid");
+        vlc.series = "vlc".into();
+        // a third-party repo whose directories group several packages
+        let mut g1 = avail("gtklock-5.0.0-x86_64-1_lngn", "lngn");
+        g1.series = "k".into();
+        let mut g2 = avail("gtk-session-lock-0.2.0-x86_64-1_lngn", "lngn");
+        g2.series = "k".into();
+        db(
+            vec![ks, kh, ark, konsole, mako, fp, vlc, g1, g2],
+            &[("slackware", 100), ("conraid", 99), ("lngn", 79)],
+            Some(100),
+        )
+    }
+
+    fn names(m: Vec<&AvailPkg>) -> Vec<String> {
+        let mut v: Vec<String> = m.iter().map(|p| format!("{}@{}", p.id.name, p.repo)).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn an_official_series_with_one_package_is_a_series() {
+        let db = k_fixture();
+        assert!(db.is_real_series("k"));
+        // k is a series: the packages in a `k` directory, in any repo, and no
+        // package merely because its name has a "k" (Mako, flatpak, ark, ...).
+        assert_eq!(
+            names(db.match_pattern("k")),
+            vec!["gtk-session-lock@lngn", "gtklock@lngn", "kernel-source@slackware"]
+        );
+        assert_eq!(names(db.match_pattern("slackware:k")), vec!["kernel-source@slackware"]);
+    }
+
+    #[test]
+    fn third_party_and_names_are_unchanged() {
+        let db = k_fixture();
+        // a per-package directory of a third-party repo is still a name
+        assert!(!db.is_real_series("vlc"));
+        assert_eq!(names(db.match_pattern("vlc")), vec!["vlc@conraid"]);
+        assert_eq!(names(db.match_pattern("flat")), vec!["flatpak@conraid"]);
+        // a series with several packages is a series, as before
+        assert_eq!(names(db.match_pattern("kde")), vec!["ark@slackware", "konsole@slackware"]);
+        // a word that is no series is still a name search
+        assert_eq!(names(db.match_pattern("kernel")), vec!["kernel-headers@slackware", "kernel-source@slackware"]);
+        // without an official repo, the old two-names rule alone decides
+        let mut solo = avail("kernel-source-7.3.3-noarch-1", "slackware");
+        solo.series = "k".into();
+        let no_official = db_no_official(vec![solo]);
+        assert!(!no_official.is_real_series("k"));
+    }
+
+    #[test]
+    fn a_trailing_slash_means_the_series_only() {
+        let db = k_fixture();
+        assert_eq!(names(db.match_pattern("k/")), names(db.match_pattern("k")));
+        assert_eq!(names(db.match_pattern("kde/")), vec!["ark@slackware", "konsole@slackware"]);
+        assert_eq!(names(db.match_pattern("slackware:k/")), vec!["kernel-source@slackware"]);
+        // an explicit directory, even a per-package one
+        assert_eq!(names(db.match_pattern("vlc/")), vec!["vlc@conraid"]);
+        // no such series: nothing, never a name search
+        assert!(db.match_pattern("kern/").is_empty());
+        assert!(db.match_pattern("/").is_empty());
+        assert!(db.match_pattern("").is_empty());
+    }
+
+    fn db_no_official(pkgs: Vec<AvailPkg>) -> PkgDb {
+        db(pkgs, &[("slackware", 100)], None)
     }
 
     #[test]

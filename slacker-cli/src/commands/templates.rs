@@ -1,6 +1,7 @@
 //! `generate-template`, `install-template`, `remove-template`, `delete-template`.
 
 use crate::cli::Cli;
+use crate::commands::install::{pending_configs, report_pending_configs};
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{system, template, ui};
@@ -67,7 +68,9 @@ pub(crate) fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Resul
     if !confirm_conflicts("Install template packages?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
+    let before_cfgs = pending_configs();
     execute_plan(cfg, &plan, cli.yes)?;
+    report_pending_configs(&before_cfgs);
     Ok(Outcome::Ok)
 }
 

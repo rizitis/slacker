@@ -21,6 +21,11 @@ SEMANTIC CHANGES (slacker.conf need update)
   files; only the rest are asked about. OVERWRITE saves your file as .orig,
   REMOVE deletes the .new, KEEP keeps your file and renames the .new to
   .new.kept, so nothing is left pending and nothing is lost.
+    - Fix bug a Slackware series name (k, kde, ...) now matches only that series:
+  `k` matched every package with a "k" in its name, from every repo, because
+  k/ holds a single package. A trailing / (k/, kde/) means the series only.
+    - revert-pkg, reinstall, install-new and install-template now say when
+  new .new configuration files were installed, like install and upgrade-all.
     - Add csb repo for current x86_64
 - Update: man pages
 - Update: wiki

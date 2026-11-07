@@ -3,6 +3,7 @@
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::commands::blacklist::cmd_frozen;
+use crate::commands::install::{pending_configs, report_pending_configs};
 use crate::{
     confirm, hilite_keys, in_graphical_session, is_foundational, package_dest, Outcome,
 };
@@ -337,6 +338,7 @@ pub(crate) fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outc
 
     // Downgrade.
     println!("{} {}", ui::blue("Reverting to"), ui::white(&target.tag()));
+    let before_cfgs = pending_configs();
     system::reinstall(&dest, cfg.terse)?;
 
     // Offer to freeze so a later upgrade-all won't pull it forward again.
@@ -352,5 +354,6 @@ pub(crate) fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outc
             ui::dim("Not frozen — a later upgrade-all may pull this package forward again.")
         );
     }
+    report_pending_configs(&before_cfgs);
     Ok(Outcome::Ok)
 }
