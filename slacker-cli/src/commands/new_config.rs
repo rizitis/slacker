@@ -465,7 +465,20 @@ pub(crate) fn cmd_new_config(cli: &Cli, dist_mode: bool) -> Result<Outcome, Stri
 
     // Files the user decided about in advance (NEWCONFIG_* in slacker.conf)
     // are handled here; only the rest reach the list and the menu.
-    let rules = config::newconfig_rules(&cli.config_dir);
+    // Not in a distribution upgrade: like the blacklist, these rules are for
+    // ordinary updates, and a release jump is when every config should be seen.
+    let rules = if dist_mode {
+        let r = config::newconfig_rules(&cli.config_dir);
+        if r != NewConfigRules::default() {
+            println!(
+                "{}",
+                ui::dim("NEWCONFIG_* rules in slacker.conf are not applied in a distribution upgrade.")
+            );
+        }
+        NewConfigRules::default()
+    } else {
+        config::newconfig_rules(&cli.config_dir)
+    };
     let had = conflicts.len();
     let conflicts = apply_presets(&rules, conflicts, cli.dry_run)?;
 

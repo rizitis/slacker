@@ -23,6 +23,7 @@ SEMANTIC CHANGES (slacker.conf need update)
   .new.kept, so nothing is left pending and nothing is lost.
     - Add csb repo for current x86_64
 - Update: man pages
+- Update: wiki
 Thanks @gegechris99 for the requests. #17 #18
 ---
 

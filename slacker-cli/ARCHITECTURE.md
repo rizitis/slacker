@@ -1,6 +1,6 @@
 # slacker: code structure, rules and refactor history
 
-Last updated: 5 Nov 2026. Covers `slacker-cli` 0.13.0, the refactored code (steps 1–14). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
+Last updated: 7 Nov 2026. Covers `slacker-cli` 0.14.0, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
 
 This document is for anyone, human or AI, opening the code for the first time. It says **what lives where, why it lives there, and what must not change**. If anything here disagrees with the code, the code wins and this document gets fixed.
 
@@ -61,7 +61,7 @@ slacker/
 Order inside `run()` (in `main.rs`):
 
 0. **The labyrinth header** (`banner2::show()`), on a terminal only, unless `BANNER=off` in slacker.conf. That one key is read on its own (`config::banner_enabled`, like `system_arch`) because the header prints before the config is loaded and must not depend on it being valid. The same key hides the SLACKWARE art (`banner::show()`) after an upgrade-all that touched the official tree and at upgrade-dist.
-1. **Commands that run before the config is loaded:** `status`, `find-mirror`, `new-config`. They must work even when the config is broken: `status` is what diagnoses it, and `new-config` is what repairs it. `new-config` still checks privileges and takes the lock.
+1. **Commands that run before the config is loaded:** `status`, `find-mirror`, `new-config`. They must work even when the config is broken: `status` is what diagnoses it, and `new-config` is what repairs it. `new-config` still checks privileges and takes the lock. It reads only its own `NEWCONFIG_*` keys from slacker.conf, leniently (`config::newconfig_rules`), like `BANNER`: a missing or broken slacker.conf just means no rules.
 2. `Config::load_dir()`. Strict: an error in `repos`/`mirrors` stops here.
 3. `migrate_state()`: moves old trust anchors from the cache to STATE_DIR, once, never overwriting existing ones.
 4. `download::set_auth(credentials::build_registry(...))`: HTTP Basic credentials, sent over https only.
@@ -80,8 +80,8 @@ Global flags (all commands): `--config-dir`, `-y/--yes`, `--dry-run`, `--no-deps
 
 | file | lines | contents |
 |---|---|---|
-| `main.rs` | 3,922 | entry point (`main`, `run`, `Outcome`, lock, privilege checks, `migrate_state`) **and the shared core** (see 5.3), with its tests |
-| `cli.rs` | 255 | `Cli`, `Cmd` (every command, clap derive), `HELP_STYLES`. The first paragraph of each doc comment is the short help line; the whole doc comment is `<cmd> --help`. |
+| `main.rs` | 4,334 | entry point (`main`, `run`, `Outcome`, lock, privilege checks, `migrate_state`) **and the shared core** (see 5.3), with its tests |
+| `cli.rs` | 271 | `Cli`, `Cmd` (every command, clap derive), `HELP_STYLES`. The first paragraph of each doc comment is the short help line; the whole doc comment is `<cmd> --help`. |
 | `commands.rs` | 15 | declares the `commands/` modules |
 
 ### 5.2 Commands (`src/commands/`)
@@ -98,7 +98,7 @@ Each file holds the `pub(crate) fn cmd_*` of one group of commands, plus the hel
 | `find_mirror.rs` | find-mirror | not named `mirrors.rs`, which already exists |
 | `revert_pkg.rs` | revert-pkg | dangerous: GPG verify -> `upgradepkg --reinstall` -> offer to freeze |
 | `clean.rs` | clean-system, clean-cache | dangerous: removes packages |
-| `new_config.rs` | new-config | writes into `/etc`. `PROTECTED_CONFIGS` (passwd, shadow, group, rc.inet1.conf, rc.local, rc.local_shutdown) are never replaced. |
+| `new_config.rs` | new-config | writes into `/etc`. `PROTECTED_CONFIGS` (passwd, shadow, group, rc.inet1.conf, rc.local, rc.local_shutdown) are never replaced by the menu or by a glob. The `NEWCONFIG_*` rules (`preset_for`, `apply_presets`, `glob_match`) run before the menu. |
 | `update.rs` | update, update gpg | the per-repo processing (`update_one_repo`) is in the core |
 | `status.rs` | status, list-repos, check-updates | `status` is the setup doctor |
 | `upgrade_dist.rs` | upgrade-dist | the most dangerous one. Phases: escape kit -> transform -> update -> core (serial, with a package-database check) -> install-new -> the rest in batches -> clean-system -> second pass -> new-config -> status. |
@@ -109,8 +109,9 @@ Each file holds the `pub(crate) fn cmd_*` of one group of commands, plus the hel
 Used by several groups at once (package commands, upgrade-dist, install-template, vet, update), so it belongs to no single command file. **It was decided not to move it** (see 8.4).
 
 - **Dependency resolver:** `expand_with_deps`, `add_with_deps`, `resolve_protected_deps`, `ask_dep_conflict`, `ask_protected_dep`, `quarantine_deep_repo`, **`MAX_DEP_DEPTH = 512`**, `DEEP_CHAIN_ERR`. The DoS fix lives here (see 7).
+- **Install order:** `upgrade_order` (called at the end of `expand_with_deps`, so the plan table shows the order packages are installed in), `UPGRADE_FIRST`, `upgrade_last` (also used by upgrade-dist).
 - **Plans and tables:** `PlanItem`, `InstallAction`, `PlanRow`, `print_table`, `show_plan`, `print_plan`, `report_pinned_in_plan`, `hint_freeze_pin`, `note_optional_suggests`, conflicts (`detect_conflicts`, `report_conflicts`, `confirm_conflicts`).
-- **Execution:** `execute_plan`, `parallel_fetch`, `fetch_and_verify`, `package_dest`, `DlItem`, `summarize_outcomes`, `report_batch_failures`, `enforce_release_match`, `enforce_arch_match`, kernel and perl reminders.
+- **Execution:** `execute_plan`, `install_counter` (`[ 37/245 ] upgrading ...`), `parallel_fetch` (with the live download line: `live_line`, `DlLive`, `term_width`, `DL_TICK`, `DL_STALL`, `DL_ANNOUNCE`), `fetch_and_verify`/`fetch_and_verify_metered`, `package_dest`, `DlItem`, `summarize_outcomes`, `report_batch_failures`, `enforce_release_match`, `enforce_arch_match`, kernel and perl reminders.
 - **Package selection:** `collect`, `collect_prefers`, `validate_selector`, `reject_mixed_selectors`, `guard_shell_expansion`, `closest`, `edit_distance`, `at_prefix_hint`, `parse_selection`, `bl_installed`, `priority_display`, `installed_source_label`.
 - **Repos:** `update_one_repo`, `UpdateOutcomes`, `malicious_filename_count`, `vet_repo`, `apply_vet`, `reload_repo`, `warn_unverified_repos`, `unverified_repo_names`.
 - **Release/arch/mirrors:** `slackware_dir`, `is_current_codename`, `repo_release_token`, `system_release`, `arch_family`, `arch_compatible`, `is_x86_arch`, `osuosl_tree_prefix`, `parse_packages_date`, `mirror_is_stale`, `humanize_lag`, `FRESHNESS_*`.
@@ -122,12 +123,12 @@ Mostly pure logic and system integration. They know nothing about commands.
 
 | file | contents |
 |---|---|
-| `config.rs` | loading/validating `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`; blacklist rules and pins (`@repo 100% name`) |
+| `config.rs` | loading/validating `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`; blacklist rules, pins (`@repo 100% name`) and dependency exclusions (`!package:dependency`); the lenient readers `banner_enabled`, `system_arch`, `newconfig_rules` |
 | `pkgdb.rs` | unified database of available packages, priority resolution, freeze/pin, matching |
-| `repo.rs` | fetch/parse PACKAGES.TXT, CHECKSUMS, `.dep`; per-repo quarantine/trust; safe-filename checks |
+| `repo.rs` | fetch/parse PACKAGES.TXT, CHECKSUMS, `.dep` (read once per run and cached; `prefetch_deps` reads many in parallel before the resolver); per-repo quarantine/trust; safe-filename checks |
 | `pkg.rs` | package identity (`name-version-arch-build`), build tags |
-| `system.rs` | the live system: installed packages, os-release, pkgtools calls (argv only, never `sh -c`) |
-| `download.rs` | downloads (http/https/file), size limits, md5/sha256, HTTP auth |
+| `system.rs` | the live system: installed packages, os-release, pkgtools calls (argv only, never `sh -c`; `--terse` first when `TERSE=on`) |
+| `download.rs` | downloads (http/https/file), size limits, md5/sha256, HTTP auth; `Meter`, the byte count of a running download that `parallel_fetch` shows |
 | `gpg.rs` | private keyring, TOFU pinning of every fingerprint, signature checks |
 | `credentials.rs` | HTTP Basic (zypper-style): `credentials.d/`, `credentials.cat`, root:0600 only, https only |
 | `changelog.rs` | ChangeLog.txt, check-updates |
@@ -159,7 +160,7 @@ Mostly pure logic and system integration. They know nothing about commands.
 
 ### Security
 
-- **pkgtools exactly as Patrick ships them.** We do not modify them or parse their output. The safety net is feeding them only verified packages and, in upgrade-dist, checking the result (the package-database record) for the core packages.
+- **pkgtools exactly as Patrick ships them.** We do not modify them or parse their output. The only option slacker ever adds of its own is `--terse`, when the user sets `TERSE=on`. The safety net is feeding them only verified packages and, in upgrade-dist, checking the result (the package-database record) for the core packages.
 - **Dependency depth cap `MAX_DEP_DEPTH = 512`.** A repo that exceeds it is quarantined and the run (e.g. upgrade-all) carries on with the rest. Under `--dry-run` it only warns. Dependency cycles are cut via `visiting`. Confirmed in real use.
 - **GPG TOFU:** every update re-fetches GPG-KEY and pins every fingerprint (subkeys included). A changed key -> hard quarantine. Deliberately strict.
 - **Trust anchors in STATE_DIR**, never in the cache.
@@ -180,12 +181,16 @@ Mostly pure logic and system integration. They know nothing about commands.
 - **`remove @repo` removes exactly what list-repos counts for that repo.** Never "every installed package carrying a tag the repo ships": that took every alien package for `@extras`, and every official package for any repo that ships a tagless build. `upgrade @repo` and `reinstall @repo` still select by the repo's tags, but they only act where that repo offers the package itself, and the priority check applies.
 - **Dependency exclusion** (`!package:dependency`, `!*:dependency` for any package, in the `blacklist`; commands `nodep`/`undep`): `add_with_deps` does not pull that dependency in for that package; any other package that requires it still does, and it can be installed by name. One dependency per line, exact names, no spaces (anything else is rejected, never guessed); the commands take several at once and check them all before writing. `info` prints each candidate's `requires:` line, read as the resolver reads it (`.dep`, else `PACKAGE REQUIRED`), marking what is not pulled in. A rule acts only on what the package requires itself: `nodep` warns (and still writes the rule) when it does not, naming the dependency one level down that does (`nodep_reach_note` in `commands/blacklist.rs`). Freezing the dependency is not a substitute: a freeze applies to every package, silently, and blocks installing it by name (feature request by gegechris99, Nov 2026).
 - **A dependency left out is always said.** When a frozen or excluded dependency is not installed, not asked for and not planned for another package, the plan prints `note: not pulling in '<dep>' for '<package>' (<rule or frozen>)`, so nothing is installed without one of its dependencies unnoticed.
+- **Install order follows UPGRADE.TXT.** Every plan (`expand_with_deps` -> `upgrade_order`) puts `aaa_glibc-solibs`, `pkgtools`, `tar`, `xz`, `findutils`, `mkinitrd` first, in that order, and `kernel-generic` (or `kernel_armvN`) last; everything else keeps the resolver's order (alphabetical, each dependency before what needs it). The kernel is last because its doinst runs `geninitrd` (mkinitrd or dracut) and DKMS builds its modules then, so kmod, udev, lvm2 and the rest must already be upgraded; slackpkg 16.0.1 does the same. `kernel-source` is **not** moved: installed before `kernel-generic`, its tree is there when DKMS builds for the new kernel, so the build succeeds the first time (checked on a real upgrade with NVIDIA, Nov 2026).
+- **The official tree and its subtrees are not asked for `.dep` files.** They ship none, and asking meant one 404 per package. `PACKAGE REQUIRED` from PACKAGES.TXT is still read for every repo. Third-party repos are asked as before.
 - **Freeze:** installed + rule -> FROZEN. Not installed + rule -> hidden from install-new/upgrades/check-updates, visible in search/info. A frozen candidate is treated as absent and resolution continues with the remaining candidates.
 - **Pin:** `@repo 100% name`, exact name, never freezes. A real freeze on the same name wins.
 - **install-new:** `cmd_install_new` and `dist_install_new` are intentionally different (normal: official + subtrees ranked above official; dist: official + patches only, regardless of priority).
-- **upgrade-dist:** requires an explicit target; deliberately bypasses the blacklist and priority; empties the blacklist and keeps `blacklist.bak` (never overwritten on a re-run); disables third-party repos; installs the GnuPG chain last; clean-system stays in Phase 3, after the upgrade.
+- **upgrade-dist:** requires an explicit target; deliberately bypasses the blacklist and priority; empties the blacklist and keeps `blacklist.bak` (never overwritten on a re-run); disables third-party repos; installs `kernel-generic` after everything else and the GnuPG chain last of all; clean-system stays in Phase 3, after the upgrade.
 - **clean-system:** pinned packages installed from the pin's repo get a separate R/K/P prompt (default Keep). With `-y` they are kept. It never proposes removing slacker itself.
-- **new-config:** protected files are never replaced, whatever the user answers. Only a manual merge.
+- **new-config:** protected files are never replaced, whatever the user answers in the menu. Only a manual merge, or the user naming the exact path in `NEWCONFIG_OVERWRITE`; a glob there never matches them.
+- **new-config rules** (`NEWCONFIG_OVERWRITE` / `_REMOVE` / `_KEEP` in slacker.conf, paths or globs of the installed file, `*` and `?` not crossing `/`): applied before the menu, with or without `--yes`; **not** in upgrade-dist, which, as with the blacklist, shows every file (it prints a note when rules exist). These keys add up when repeated (every other key keeps its last line). When several match, the safer wins: KEEP over REMOVE over OVERWRITE. OVERWRITE keeps the old file as `.orig`; KEEP renames the `.new` to `.new.kept`, so nothing is left pending and nothing is lost (issue by gegechris99, Nov 2026).
+- **Download progress:** on a terminal, `parallel_fetch` redraws one line with every running download and says `no data for Ns` after 15 s without a byte; the width is read from the terminal (TIOCGWINSZ) on every redraw. Off a terminal (pipe, log, slacker-gui) there is no `\r`: only a plain `↓ name (size)` line for a download still running after 1 s, so logs do not depend on timing for small packages (issue #14).
 - **Output:** exit codes and output format do not change without a reason. `slacker-gui` and scripts may depend on them.
 
 ### Rejected (do not propose again)
@@ -263,14 +268,16 @@ The scripts were written for this refactor and ran only in the environment where
 
 The 0.12.x line is no longer maintained, so there is no normal branch to keep in sync. Changes go straight into this code. The "identical to the normal branch" result in 8.3 is historical: it held for the refactor as delivered.
 
-The first change after the refactor was the plan label (see 7). The second was issue #11 (source attribution and `remove @repo`, see 7), with 2 tests. The third was `BANNER` (issue #12, see 4), with 1 test. The fourth was the dependency exclusion (see 7), with 4 tests. After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
+The first change after the refactor was the plan label (see 7). The second was issue #11 (source attribution and `remove @repo`, see 7), with 2 tests. The third was `BANNER` (issue #12, see 4), with 1 test. The fourth was the dependency exclusion (see 7), with 4 tests. The fifth was the download progress line (issue #14, see 7), with 2 tests. These five are 0.13.0.
+
+0.14.0 added, each with its tests: "Preparing the plan" with the parallel, cached `.dep` reading, and the official tree no longer asked for `.dep`; `TERSE` and the install counter; the install order of UPGRADE.TXT with the kernel last, in every plan and in upgrade-dist; and the `NEWCONFIG_*` rules of new-config (all see 7). After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **226 passed, 1 ignored** (227 in total).
-- Per file: `main.rs` 45, `config.rs` 32, `pkgdb.rs` 31, `repo.rs` 12, `revert.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `commands/blacklist.rs` 11, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `download.rs` 4, `system.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, and one each in `newconfig.rs`, `commands/clean.rs`, `commands/new_config.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **238 passed, 1 ignored** (239 in total).
+- Per file: `main.rs` 50, `config.rs` 36, `pkgdb.rs` 31, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `system.rs` 5, `download.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `commands/new_config.rs` 3, `manifest.rs` 2, `ui.rs` 2, and one each in `newconfig.rs`, `commands/clean.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Test modules in `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (with the `av()` and `fixture()` fixtures), `freshness_tests`, `foundational_tests`.
 
 ---

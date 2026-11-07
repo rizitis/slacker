@@ -413,7 +413,9 @@ in
 .I slacker.conf
 are handled first, as set there, with or without
 .BR \-\-yes ;
-only the rest are listed and asked about.
+only the rest are listed and asked about. These rules are not applied when
+.B upgrade-dist
+runs new-config: a release jump shows every file.
 After
 .B upgrade-all
 any pending \fI.new\fR files \(em both newly installed and pre-existing \(em are
@@ -866,8 +868,10 @@ OVERWRITE. A glob in
 .B NEWCONFIG_OVERWRITE
 never replaces
 .IR /etc/passwd ", " shadow ", " group ", " rc.inet1.conf ", " rc.local " or " rc.local_shutdown ;
-only their exact path does. These keys are read even when the rest of the
-configuration is broken, like
+only their exact path does. They are not applied in
+.BR upgrade-dist ,
+which, as with the blacklist, shows every file. These keys are read even when
+the rest of the configuration is broken, like
 .B new-config
 itself.
 .PP
