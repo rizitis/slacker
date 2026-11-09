@@ -134,6 +134,10 @@ fn clap_error_exit(e: clap::Error) -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<Outcome, String> {
+    // PROXY / NO_PROXY from slacker.conf, before anything can download
+    // (status and find-mirror included).
+    let (proxy, no_proxy) = config::proxy_settings(&cli.config_dir);
+    download::set_proxy(proxy, no_proxy);
     // Banner No. 2 (the labyrinth masthead) heads every command, on a terminal
     // only (show() no-ops when stdout is piped, so scripts/pipes stay clean).
     // BANNER=off in slacker.conf hides it.

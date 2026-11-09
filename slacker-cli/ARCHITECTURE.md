@@ -1,6 +1,6 @@
 # slacker: code structure, rules and refactor history
 
-Last updated: 7 Nov 2026. Covers `slacker-cli` 0.14.0, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
+Last updated: 10 Nov 2026. Covers `slacker-cli` 0.14.0, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
 
 This document is for anyone, human or AI, opening the code for the first time. It says **what lives where, why it lives there, and what must not change**. If anything here disagrees with the code, the code wins and this document gets fixed.
 
@@ -60,13 +60,14 @@ slacker/
 
 Order inside `run()` (in `main.rs`):
 
-0. **The labyrinth header** (`banner2::show()`), on a terminal only, unless `BANNER=off` in slacker.conf. That one key is read on its own (`config::banner_enabled`, like `system_arch`) because the header prints before the config is loaded and must not depend on it being valid. The same key hides the SLACKWARE art (`banner::show()`) after an upgrade-all that touched the official tree and at upgrade-dist.
-1. **Commands that run before the config is loaded:** `status`, `find-mirror`, `new-config`. They must work even when the config is broken: `status` is what diagnoses it, and `new-config` is what repairs it. `new-config` still checks privileges and takes the lock. It reads only its own `NEWCONFIG_*` keys from slacker.conf, leniently (`config::newconfig_rules`), like `BANNER`: a missing or broken slacker.conf just means no rules.
-2. `Config::load_dir()`. Strict: an error in `repos`/`mirrors` stops here.
-3. `migrate_state()`: moves old trust anchors from the cache to STATE_DIR, once, never overwriting existing ones.
-4. `download::set_auth(credentials::build_registry(...))`: HTTP Basic credentials, sent over https only.
-5. For commands that modify the system or the cache (`requires_privilege`): root is required (membership in `wheel` only changes the error message), plus the exclusive lock. Read-only commands also run as a normal user.
-6. Dispatch: one `match` that calls the command's `cmd_*`.
+0. **Proxy settings**, before anything can download (`status` and `find-mirror` included): `PROXY` and `NO_PROXY` are read leniently from slacker.conf (`config::proxy_settings`) and handed to `download::set_proxy`.
+1. **The labyrinth header** (`banner2::show()`), on a terminal only, unless `BANNER=off` in slacker.conf. That one key is read on its own (`config::banner_enabled`, like `system_arch`) because the header prints before the config is loaded and must not depend on it being valid. The same key hides the SLACKWARE art (`banner::show()`) after an upgrade-all that touched the official tree and at upgrade-dist.
+2. **Commands that run before the config is loaded:** `status`, `find-mirror`, `new-config`. They must work even when the config is broken: `status` is what diagnoses it, and `new-config` is what repairs it. `new-config` still checks privileges and takes the lock. It reads only its own `NEWCONFIG_*` keys from slacker.conf, leniently (`config::newconfig_rules`), like `BANNER`: a missing or broken slacker.conf just means no rules.
+3. `Config::load_dir()`. Strict: an error in `repos`/`mirrors` stops here.
+4. `migrate_state()`: moves old trust anchors from the cache to STATE_DIR, once, never overwriting existing ones.
+5. `download::set_auth(credentials::build_registry(...))`: HTTP Basic credentials, sent over https only.
+6. For commands that modify the system or the cache (`requires_privilege`): root is required (membership in `wheel` only changes the error message), plus the exclusive lock. Read-only commands also run as a normal user.
+7. Dispatch: one `match` that calls the command's `cmd_*`.
 
 **Exit codes** (`enum Outcome`): `0` Ok, `20` NothingFound, `50` SelfUpgrade (slacker upgraded itself, run it again), `100` Pending (check-updates found updates), `1` error. `slacker-gui` and scripts may depend on these: **they do not change**.
 
@@ -80,7 +81,7 @@ Global flags (all commands): `--config-dir`, `-y/--yes`, `--dry-run`, `--no-deps
 
 | file | lines | contents |
 |---|---|---|
-| `main.rs` | 4,334 | entry point (`main`, `run`, `Outcome`, lock, privilege checks, `migrate_state`) **and the shared core** (see 5.3), with its tests |
+| `main.rs` | 4,338 | entry point (`main`, `run`, `Outcome`, lock, privilege checks, `migrate_state`) **and the shared core** (see 5.3), with its tests |
 | `cli.rs` | 271 | `Cli`, `Cmd` (every command, clap derive), `HELP_STYLES`. The first paragraph of each doc comment is the short help line; the whole doc comment is `<cmd> --help`. |
 | `commands.rs` | 15 | declares the `commands/` modules |
 
@@ -98,11 +99,11 @@ Each file holds the `pub(crate) fn cmd_*` of one group of commands, plus the hel
 | `find_mirror.rs` | find-mirror | not named `mirrors.rs`, which already exists |
 | `revert_pkg.rs` | revert-pkg | dangerous: GPG verify -> `upgradepkg --reinstall` -> offer to freeze |
 | `clean.rs` | clean-system, clean-cache | dangerous: removes packages |
-| `new_config.rs` | new-config | writes into `/etc`. `PROTECTED_CONFIGS` (passwd, shadow, group, rc.inet1.conf, rc.local, rc.local_shutdown) are never replaced by the menu or by a glob. The `NEWCONFIG_*` rules (`preset_for`, `apply_presets`, `glob_match`) run before the menu. |
+| `new_config.rs` | new-config | writes into `/etc`. `PROTECTED_CONFIGS` (passwd, shadow, group, rc.inet1.conf, rc.local, rc.local_shutdown) are never replaced by the menu or by a glob. The `NEWCONFIG_*` rules (`preset_for`, `apply_presets`, `glob_match`) run before the menu; `preset_key` names the rule for a file, for the list the package commands print. |
 | `update.rs` | update, update gpg | the per-repo processing (`update_one_repo`) is in the core |
 | `status.rs` | status, list-repos, check-updates | `status` is the setup doctor |
 | `upgrade_dist.rs` | upgrade-dist | the most dangerous one. Phases: escape kit -> transform -> update -> core (serial, with a package-database check) -> install-new -> the rest in batches -> clean-system -> second pass -> new-config -> status. |
-| `install.rs` | install, upgrade, reinstall, remove, download, upgrade-all, install-new | the resolver they use is in the core |
+| `install.rs` | install, upgrade, reinstall, remove, download, upgrade-all, install-new | the resolver they use is in the core. `report_pending_configs` (also called by install-template and revert-pkg) lists the `.new` files a run left and, with `NEWCONFIG_AFTER`, asks to run new-config or runs it (`after_configs`). |
 
 ### 5.3 The shared core (stays in `main.rs`, on purpose)
 
@@ -123,12 +124,12 @@ Mostly pure logic and system integration. They know nothing about commands.
 
 | file | contents |
 |---|---|
-| `config.rs` | loading/validating `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`; blacklist rules, pins (`@repo 100% name`) and dependency exclusions (`!package:dependency`); the lenient readers `banner_enabled`, `system_arch`, `newconfig_rules` |
+| `config.rs` | loading/validating `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`; blacklist rules, pins (`@repo 100% name`) and dependency exclusions (`!package:dependency`); the lenient readers `banner_enabled`, `system_arch`, `newconfig_rules`, `proxy_settings`; `NEWCONFIG_AFTER` (`parse_newconfig_after`) |
 | `pkgdb.rs` | unified database of available packages, priority resolution, freeze/pin, matching |
 | `repo.rs` | fetch/parse PACKAGES.TXT, CHECKSUMS, `.dep` (read once per run and cached; `prefetch_deps` reads many in parallel before the resolver); per-repo quarantine/trust; safe-filename checks |
 | `pkg.rs` | package identity (`name-version-arch-build`), build tags |
 | `system.rs` | the live system: installed packages, os-release, pkgtools calls (argv only, never `sh -c`; `--terse` first when `TERSE=on`) |
-| `download.rs` | downloads (http/https/file), size limits, md5/sha256, HTTP auth; `Meter`, the byte count of a running download that `parallel_fetch` shows |
+| `download.rs` | downloads (http/https/file), size limits, md5/sha256, HTTP auth; `Meter`, the byte count of a running download that `parallel_fetch` shows; the proxy (`set_proxy`, `proxy_var`, `proxy_for`, `no_proxy_matches`, `describe_proxy` for `status`) |
 | `gpg.rs` | private keyring, TOFU pinning of every fingerprint, signature checks |
 | `credentials.rs` | HTTP Basic (zypper-style): `credentials.d/`, `credentials.cat`, root:0600 only, https only |
 | `changelog.rs` | ChangeLog.txt, check-updates |
@@ -169,6 +170,8 @@ Mostly pure logic and system integration. They know nothing about commands.
 - **Never `sh -c`.** Every external call uses argv.
 - **Never write through a symlink** for config files and download destinations.
 - **Credentials over https only**, files root:0600 only.
+- **Proxy, off by default.** Unset or `PROXY=off`: direct, and the environment's proxy variables are ignored, so an environment kept through sudo cannot route root's downloads. `PROXY=http://...` uses that proxy for every http and https download; `PROXY=env` takes `https_proxy`/`http_proxy`/`all_proxy`/`no_proxy` from the environment (lowercase, then uppercase, as wget and curl). `NO_PROXY` replaces the environment's `no_proxy`. Only http:// proxies: https goes through them as a CONNECT tunnel, so TLS and the certificate check still run end to end with the mirror. A proxy of another kind is an error, never a silent direct connection. ureq's own `try_proxy_from_env` is not used: one variable for every scheme and no `no_proxy`.
+- **The proxy password goes only to the proxy**, in the CONNECT that ureq sends for an https URL. **Never add a `Proxy-Authorization` header to a request:** ureq keeps custom headers across redirects (it drops only `Authorization`, `Cookie` and `Content-Length`), so a mirror, or anyone on a plain-http path, could redirect to a host of its choosing and receive the password inside the tunnel. An earlier draft did this for http mirrors; it was removed before release. Consequence: an http mirror behind a proxy that asks for a password fails (407); use https. Passwords never appear in messages or in `status` (`hide_password`).
 
 ### Semantics (settled, do not reopen)
 
@@ -189,7 +192,8 @@ Mostly pure logic and system integration. They know nothing about commands.
 - **upgrade-dist:** requires an explicit target; deliberately bypasses the blacklist and priority; empties the blacklist and keeps `blacklist.bak` (never overwritten on a re-run); disables third-party repos; installs `kernel-generic` after everything else and the GnuPG chain last of all; clean-system stays in Phase 3, after the upgrade.
 - **clean-system:** pinned packages installed from the pin's repo get a separate R/K/P prompt (default Keep). With `-y` they are kept. It never proposes removing slacker itself.
 - **new-config:** protected files are never replaced, whatever the user answers in the menu. Only a manual merge, or the user naming the exact path in `NEWCONFIG_OVERWRITE`; a glob there never matches them.
-- **new-config rules** (`NEWCONFIG_OVERWRITE` / `_REMOVE` / `_KEEP` in slacker.conf, paths or globs of the installed file, `*` and `?` not crossing `/`): applied before the menu, with or without `--yes`; **not** in upgrade-dist, which, as with the blacklist, shows every file (it prints a note when rules exist). These keys add up when repeated (every other key keeps its last line). When several match, the safer wins: KEEP over REMOVE over OVERWRITE. OVERWRITE keeps the old file as `.orig`; KEEP renames the `.new` to `.new.kept`, so nothing is left pending and nothing is lost (issue by gegechris99, Nov 2026).
+- **new-config rules** (`NEWCONFIG_OVERWRITE` / `_REMOVE` / `_KEEP` in slacker.conf, paths or globs of the installed file, `*` and `?` not crossing `/`): applied before the menu, with or without `--yes`. In upgrade-dist **only `NEWCONFIG_KEEP`** applies, so a file the user keeps is never replaced there, not even by "[A]ll new"; OVERWRITE and REMOVE are not applied there: as with the blacklist, upgrade-dist shows every other file (it prints a note when such rules exist). These keys add up when repeated (every other key keeps its last line). When several match, the safer wins: KEEP over REMOVE over OVERWRITE. OVERWRITE keeps the old file as `.orig`; KEEP renames the `.new` to `.new.kept`, so nothing is left pending and nothing is lost (issue by gegechris99, Nov 2026).
+- **new-config after a package command** (`NEWCONFIG_AFTER`, default `off`): after install, reinstall, upgrade, upgrade-all, install-new, install-template and revert-pkg, the `.new` files are listed (fresh ones apart from older pending ones, each with its `NEWCONFIG_*` key if a rule covers it) and the reminder is printed, as before. `ask` asks "Run new-config now? [Y/n]" and `run` runs it, but only when stdin and stdout are both a terminal, without `--yes` or `--dry-run`, and only if this run left new `.new` files; otherwise the reminder. End of input at the question means no. cron, scripts, slacker-gui and `docker build` therefore never have `.new` files touched. The `NEWCONFIG_*` rules still apply first (request by gegechris99, Nov 2026).
 - **Download progress:** on a terminal, `parallel_fetch` redraws one line with every running download and says `no data for Ns` after 15 s without a byte; the width is read from the terminal (TIOCGWINSZ) on every redraw. Off a terminal (pipe, log, slacker-gui) there is no `\r`: only a plain `↓ name (size)` line for a download still running after 1 s, so logs do not depend on timing for small packages (issue #14).
 - **Output:** exit codes and output format do not change without a reason. `slacker-gui` and scripts may depend on them.
 
@@ -270,14 +274,14 @@ The 0.12.x line is no longer maintained, so there is no normal branch to keep in
 
 The first change after the refactor was the plan label (see 7). The second was issue #11 (source attribution and `remove @repo`, see 7), with 2 tests. The third was `BANNER` (issue #12, see 4), with 1 test. The fourth was the dependency exclusion (see 7), with 4 tests. The fifth was the download progress line (issue #14, see 7), with 2 tests. These five are 0.13.0.
 
-0.14.0 added, each with its tests: "Preparing the plan" with the parallel, cached `.dep` reading, and the official tree no longer asked for `.dep`; `TERSE` and the install counter; the install order of UPGRADE.TXT with the kernel last, in every plan and in upgrade-dist; and the `NEWCONFIG_*` rules of new-config (all see 7). After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
+0.14.0 added, each with its tests: "Preparing the plan" with the parallel, cached `.dep` reading, and the official tree no longer asked for `.dep`; `TERSE` and the install counter; the install order of UPGRADE.TXT with the kernel last, in every plan and in upgrade-dist; the `NEWCONFIG_*` rules of new-config; `NEWCONFIG_AFTER`, and `NEWCONFIG_KEEP` in upgrade-dist; and the proxy (`PROXY`/`NO_PROXY`, off by default, with a `Proxy` line in `status`) (all see 7). Every new key defaults to the behaviour from before it existed. After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **238 passed, 1 ignored** (239 in total).
-- Per file: `main.rs` 50, `config.rs` 36, `pkgdb.rs` 31, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `system.rs` 5, `download.rs` 4, `commands/install.rs` 4, `commands/upgrade_dist.rs` 4, `template.rs` 3, `commands/new_config.rs` 3, `manifest.rs` 2, `ui.rs` 2, and one each in `newconfig.rs`, `commands/clean.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **248 passed, 1 ignored** (249 in total).
+- Per file: `main.rs` 50, `config.rs` 37, `pkgdb.rs` 34, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (one ignored: a live TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `system.rs` 5, `commands/install.rs` 5, `commands/upgrade_dist.rs` 4, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, and one each in `newconfig.rs`, `commands/clean.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Test modules in `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (with the `av()` and `fixture()` fixtures), `freshness_tests`, `foundational_tests`.
 
 ---
@@ -287,6 +291,8 @@ The first change after the refactor was the plan label (see 7). The second was i
 - **Two `arch_compatible` functions with opposite argument order:** `main.rs` `(sys_arch, pkg_arch)` and `repo.rs` `(pkg_arch, arch)`. They do the same thing. Not a bug today, but a trap. Worth unifying as a separate change.
 - **`history` dates after a restore (NOT fixed, on purpose):** the timezone is derived by comparing the time in the `-upgraded-<T>` name with the file's ctime. ctime is lost when restoring from a backup, and then the dates shift. A simple "ignore unrealistic timezones" does NOT fix it. Display only, and only on restored systems. Needs its own design if it is ever done.
 - **Misplaced doc comments** (rustdoc only, no functional effect): a paragraph belonging to `warn_unverified_repos` above `unverified_repo_names` (`main.rs`); the `cmd_status` doc above `MLOCATE_DB` (`commands/status.rs`); a "Parse a keep-selection" above `select_packages_pkgid` (`commands/install.rs`); a "GATE ONLY for now" above `DIST_CRITICAL` (`commands/upgrade_dist.rs`). Left as they were to keep the "verbatim text" proof. Fix them as a separate cosmetic change.
+- **The proxy and redirects:** `no_proxy` is checked for the URL slacker asks for, not again for a redirect target; a redirect takes the same route (proxy or direct). Nothing leaks; at worst the redirect fails.
+- **slacker-gui and the proxy:** pkexec clears the environment, so with `PROXY=env` the GUI downloads directly. A URL in `PROXY` works there.
 - **Package `.asc` files stay in the cache** after install/upgrade-dist (the package is deleted, the signature is not). Seen in testing. They are small and `clean-cache` removes them. Whether this should change has not been evaluated.
 
 ---

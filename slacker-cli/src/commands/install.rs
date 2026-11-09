@@ -1,7 +1,8 @@
 //! install, upgrade, reinstall, remove, download, upgrade-all, install-new.
 
 use crate::cli::Cli;
-use crate::config::Config;
+use crate::commands::new_config::{cmd_new_config, preset_key};
+use crate::config::{Config, NewConfigAfter};
 use crate::pkgdb::PkgDb;
 use crate::{
     at_prefix_hint, bl_installed, closest, collect, confirm, confirm_conflicts, detect_conflicts,
@@ -681,7 +682,7 @@ pub(crate) fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Resul
         .map(|nc| nc.new_file)
         .collect();
     execute_plan(cfg, &plan, cli.yes)?;
-    report_pending_configs(&before_cfgs);
+    report_pending_configs(cli, cfg, &before_cfgs);
     Ok(Outcome::Ok)
 }
 
@@ -762,7 +763,7 @@ pub(crate) fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Resul
         .map(|nc| nc.new_file)
         .collect();
     execute_plan(cfg, &plan, cli.yes)?;
-    report_pending_configs(&before_cfgs);
+    report_pending_configs(cli, cfg, &before_cfgs);
     Ok(Outcome::Ok)
 }
 
@@ -822,7 +823,7 @@ pub(crate) fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Res
     }
     let before_cfgs = pending_configs();
     execute_plan(cfg, &plan, cli.yes)?;
-    report_pending_configs(&before_cfgs);
+    report_pending_configs(cli, cfg, &before_cfgs);
     Ok(Outcome::Ok)
 }
 
@@ -1126,7 +1127,7 @@ pub(crate) fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String
         .map(|nc| nc.new_file)
         .collect();
     execute_plan(cfg, &plan, cli.yes)?;
-    report_pending_configs(&before_cfgs);
+    report_pending_configs(cli, cfg, &before_cfgs);
     // A nod to the official tree when this upgrade actually touched it (a package
     // from the main slackware repo or one of its subtrees: patches/extra/...).
     if plan
@@ -1252,7 +1253,7 @@ pub(crate) fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Resu
     }
     let before_cfgs = pending_configs();
     execute_plan(cfg, &plan, cli.yes)?;
-    report_pending_configs(&before_cfgs);
+    report_pending_configs(cli, cfg, &before_cfgs);
     Ok(Outcome::Ok)
 }
 
@@ -1404,31 +1405,113 @@ pub(crate) fn pending_configs() -> HashSet<PathBuf> {
         .collect()
 }
 
+/// What to do about the .new files a command just left behind.
+#[derive(Debug, PartialEq)]
+enum AfterConfigs {
+    /// Print the reminder to run `slacker new-config`.
+    Remind,
+    /// Ask "Run new-config now? [Y/n]".
+    Ask,
+    /// Run new-config right away.
+    Run,
+}
+
+/// new-config is chained only when someone is there to answer it: input and
+/// output both a terminal, no --yes (cron, scripts, a Dockerfile `RUN ... -y`,
+/// which must never have .new files removed behind their back) and not a dry
+/// run, and only when this run left new .new files (older pending ones keep
+/// the reminder, so they do not bring the menu back after every command).
+fn after_configs(mode: NewConfigAfter, yes: bool, dry_run: bool, interactive: bool, fresh: bool) -> AfterConfigs {
+    if yes || dry_run || !interactive || !fresh {
+        return AfterConfigs::Remind;
+    }
+    match mode {
+        NewConfigAfter::Ask => AfterConfigs::Ask,
+        NewConfigAfter::Run => AfterConfigs::Run,
+        NewConfigAfter::Off => AfterConfigs::Remind,
+    }
+}
+
+/// "Run new-config now? [Y/n]". Enter or y runs it; n, anything else, or a
+/// closed input (end of file: no one is typing, e.g. `docker run -t` without
+/// `-i`) does not.
+fn ask_run_new_config() -> bool {
+    print!(
+        "\n{} {}{}{}{}{} ",
+        ui::blue("Run new-config now?"),
+        ui::blue("["),
+        ui::white("Y"),
+        ui::blue("/"),
+        ui::white("n"),
+        ui::blue("]")
+    );
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) | Err(_) => {
+            println!();
+            false
+        }
+        Ok(_) => matches!(line.trim().to_ascii_lowercase().as_str(), "" | "y" | "yes"),
+    }
+}
+
+/// Run new-config inside this command. The packages are already installed, so
+/// a failure here is reported but does not turn the command into an error.
+fn run_new_config(cli: &Cli) {
+    println!();
+    if let Err(e) = cmd_new_config(cli, false) {
+        eprintln!("{}", ui::red(&format!("new-config: {e}")));
+    }
+}
+
 /// After packages are applied, report pending *.new config files, separating
-/// ones created by this run from leftovers already on disk, and point at
-/// `slacker new-config`. Silent when there are none. `before` is the set of
+/// ones created by this run from leftovers already on disk, and then either
+/// point at `slacker new-config`, ask to run it, or run it (NEWCONFIG_AFTER,
+/// see `after_configs`). Silent when there are none. `before` is the set of
 /// .new paths that existed prior to the operation.
-pub(crate) fn report_pending_configs(before: &HashSet<PathBuf>) {
+pub(crate) fn report_pending_configs(cli: &Cli, cfg: &Config, before: &HashSet<PathBuf>) {
+    use std::io::IsTerminal;
     let current = newconfig::find_new_configs(&newconfig::default_roots());
     if current.is_empty() {
         return;
     }
     let (old, fresh): (Vec<_>, Vec<_>) =
         current.iter().partition(|nc| before.contains(&nc.new_file));
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let next = after_configs(cfg.newconfig_after, cli.yes, cli.dry_run, interactive, !fresh.is_empty());
+    if next == AfterConfigs::Run {
+        // new-config lists the files itself.
+        println!("\n{}", ui::blue("New configuration files were installed; running new-config:"));
+        run_new_config(cli);
+        return;
+    }
+    // A file with a NEWCONFIG_* rule is marked with it: new-config applies the
+    // rule before anything else (NEWCONFIG_KEEP first of all), so such a file
+    // never reaches the menu.
+    let rules = config::newconfig_rules(&cli.config_dir);
+    let line = |nc: &newconfig::NewConfig| match preset_key(&nc.target, &rules) {
+        Some(key) => format!("  {}  {}", ui::white(&nc.new_file.display().to_string()), ui::dim(&format!("({key})"))),
+        None => format!("  {}", ui::white(&nc.new_file.display().to_string())),
+    };
     if !fresh.is_empty() {
         println!(
             "\n{}",
             ui::blue("New configuration files were installed (your current ones were kept):")
         );
         for nc in &fresh {
-            println!("  {}", ui::white(&nc.new_file.display().to_string()));
+            println!("{}", line(nc));
         }
     }
     if !old.is_empty() {
         println!("\n{}", ui::blue("Configuration files still pending from before:"));
         for nc in &old {
-            println!("  {}", ui::white(&nc.new_file.display().to_string()));
+            println!("{}", line(nc));
         }
+    }
+    if next == AfterConfigs::Ask && ask_run_new_config() {
+        run_new_config(cli);
+        return;
     }
     println!(
         "\n{}",
@@ -1439,6 +1522,25 @@ pub(crate) fn report_pending_configs(before: &HashSet<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_config_is_chained_only_with_someone_at_a_terminal() {
+        use AfterConfigs::*;
+        use NewConfigAfter as M;
+        // (mode, yes, dry_run, interactive, fresh) -> what happens
+        assert_eq!(after_configs(M::Ask, false, false, true, true), Ask);
+        assert_eq!(after_configs(M::Run, false, false, true, true), Run);
+        assert_eq!(after_configs(M::Off, false, false, true, true), Remind);
+        for mode in [M::Ask, M::Run, M::Off] {
+            // --yes: cron, scripts, Dockerfile RUN ... -y
+            assert_eq!(after_configs(mode, true, false, true, true), Remind);
+            assert_eq!(after_configs(mode, false, true, true, true), Remind);
+            // no terminal: GUI, pipes, docker without -it, ssh without -t
+            assert_eq!(after_configs(mode, false, false, false, true), Remind);
+            // only older pending .new files
+            assert_eq!(after_configs(mode, false, false, true, false), Remind);
+        }
+    }
 
     #[test]
     fn fix_pin_repo_catches_mistyped_repo() {

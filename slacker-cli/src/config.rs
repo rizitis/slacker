@@ -130,6 +130,9 @@ pub struct Config {
     /// Pass `--terse` to installpkg/upgradepkg: one line per package
     /// (TERSE, default off).
     pub terse: bool,
+    /// What happens when a command leaves new .new config files behind
+    /// (NEWCONFIG_AFTER, default ask).
+    pub newconfig_after: NewConfigAfter,
     /// resolve-stock: also pull a stock package's stock deps from the
     /// local depgraph.db (RESOLVE_STOCK, default off).
     pub resolve_stock: bool,
@@ -276,6 +279,7 @@ impl Config {
         // TERSE defaults off; on/yes/true/1 passes --terse to installpkg and
         // upgradepkg (removepkg is terse already).
         let terse = parse_terse(conf.get("TERSE").map(String::as_str));
+        let newconfig_after = parse_newconfig_after(conf.get("NEWCONFIG_AFTER").map(String::as_str));
 
         // RESOLVE_STOCK defaults OFF. yes/on/true/1 turns it on. The user's
         // explicit declaration that this is a container/minimal system.
@@ -361,6 +365,7 @@ impl Config {
             repos,
             resolve_deps,
             terse,
+            newconfig_after,
             resolve_stock,
             stock_db_url,
             ignore_tags,
@@ -595,6 +600,16 @@ fn read_optional(path: &Path) -> Result<String, String> {
 pub fn banner_enabled(dir: &Path) -> bool {
     let text = read_optional(&dir.join("slacker.conf")).unwrap_or_default();
     parse_revert_enabled(parse_keyvals(&text).get("BANNER").map(String::as_str))
+}
+
+/// PROXY and NO_PROXY from slacker.conf (None when unset or empty), read
+/// leniently like `banner_enabled`: downloads happen in `status` and
+/// `find-mirror` too, which run before (and without) the full config load.
+pub fn proxy_settings(dir: &Path) -> (Option<String>, Option<String>) {
+    let text = read_optional(&dir.join("slacker.conf")).unwrap_or_default();
+    let conf = parse_keyvals(&text);
+    let get = |k: &str| conf.get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    (get("PROXY"), get("NO_PROXY"))
 }
 
 /// What `new-config` does on its own with some `.new` files, from slacker.conf:
@@ -1283,6 +1298,29 @@ fn parse_max_parallel(raw: Option<&str>) -> usize {
     }
 }
 
+/// What an install, upgrade, reinstall, install-new, install-template or
+/// revert-pkg does when it leaves new .new config files behind. Only ever acted
+/// on at an interactive terminal without --yes; otherwise the reminder is
+/// printed whatever this says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewConfigAfter {
+    /// Ask "Run new-config now? [Y/n]".
+    Ask,
+    /// Run new-config right away, like slackpkg.
+    Run,
+    /// Only print the reminder (the default, as before this key existed).
+    Off,
+}
+
+/// NEWCONFIG_AFTER: ask or run; anything else (or nothing) is off.
+fn parse_newconfig_after(v: Option<&str>) -> NewConfigAfter {
+    match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("ask") => NewConfigAfter::Ask,
+        Some("run") => NewConfigAfter::Run,
+        _ => NewConfigAfter::Off,
+    }
+}
+
 /// TERSE: off unless explicitly on/yes/true/1.
 fn parse_terse(v: Option<&str>) -> bool {
     matches!(
@@ -1401,6 +1439,15 @@ mod tests {
         assert_eq!(r.keep, vec!["/etc/rc.d/rc.modules.local", "/etc/ssh/sshd_config", "/etc/slacker/mirrors"]);
         assert_eq!(r.remove, vec!["/etc/ntp.conf"]); // a slackpkg-style .new path is accepted
         assert_eq!(parse_newconfig_rules(""), NewConfigRules::default());
+    }
+
+    #[test]
+    fn newconfig_after_defaults_to_off() {
+        assert_eq!(parse_newconfig_after(None), NewConfigAfter::Off);
+        assert_eq!(parse_newconfig_after(Some("typo")), NewConfigAfter::Off);
+        assert_eq!(parse_newconfig_after(Some("Ask")), NewConfigAfter::Ask);
+        assert_eq!(parse_newconfig_after(Some(" RUN ")), NewConfigAfter::Run);
+        assert_eq!(parse_newconfig_after(Some("off")), NewConfigAfter::Off);
     }
 
     #[test]
@@ -1883,6 +1930,7 @@ mod tests {
             repos: vec![],
             resolve_deps: true,
             terse: false,
+            newconfig_after: NewConfigAfter::Off,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1931,6 +1979,7 @@ mod tests {
             repos: vec![],
             resolve_deps: true,
             terse: false,
+            newconfig_after: NewConfigAfter::Off,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1981,6 +2030,7 @@ mod tests {
             repos: vec![],
             resolve_deps: true,
             terse: false,
+            newconfig_after: NewConfigAfter::Off,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -2031,6 +2081,7 @@ mod tests {
             repos,
             resolve_deps: true,
             terse: false,
+            newconfig_after: NewConfigAfter::Off,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],

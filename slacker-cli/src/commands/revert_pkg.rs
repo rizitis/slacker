@@ -354,6 +354,6 @@ pub(crate) fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outc
             ui::dim("Not frozen — a later upgrade-all may pull this package forward again.")
         );
     }
-    report_pending_configs(&before_cfgs);
+    report_pending_configs(cli, cfg, &before_cfgs);
     Ok(Outcome::Ok)
 }

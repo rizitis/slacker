@@ -13,11 +13,11 @@ docker run --rm -it ghcr.io/rizitis/slackware64-current-ci:slacker-very_mini-tes
 docker pull rizitis/slackware-slacker:slacker-very_mini-testing
 ```
 
-If you feal brave:
+If you feel brave:
 ```
 docker pull rizitis/slackware-slacker:sbopkg-ci_slacker-very_mini-testing
 ```
-ΝΟΤΕ: sbopkg-ci_slacker-very_mini-testing image, is [WIP: in very early testing status](https://forge.slackware.nl/rizitis/slacker/src/branch/main/containers/README) it include an mimic version of sbopkg commands under /usr/local/sbin/sbopkg-ci and using "ponce" repo for slackware64-current. Usage: `slacker update --yes && slacker install-template sbo_env --yes && sbopkg-ci -r`
+NOTE: the sbopkg-ci_slacker-very_mini-testing image is [WIP, in very early testing](https://forge.slackware.nl/rizitis/slacker/src/branch/main/containers/README). It includes a mimic version of the sbopkg commands under /usr/local/sbin/sbopkg-ci and using "ponce" repo for slackware64-current. Usage: `slacker update --yes && slacker install-template sbo_env --yes && sbopkg-ci -r`
 
 `ls /etc/slacker/templates/` list all templates, you may create your own templates there too.
 
@@ -35,5 +35,28 @@ uses rustls with bundled roots, and packages are verified in two stages:
 From there, `slacker install <anything>` works: the closure table knows what
 every stock package needs to *run* on a bare system (library-loader chains
 only - tool-only deps never cascade). Build script: [`docker/slacker-docker.sh`](docker/slacker-docker.sh).
+
+### Behind a proxy
+
+slacker connects directly by default and ignores the proxy variables of the
+environment. The images set `PROXY=env` in `/etc/slacker/slacker.conf`, so the
+usual Docker proxy settings work as they are:
+
+```
+docker run --rm -it -e HTTPS_PROXY=http://proxy.lan:3128 rizitis/slackware-slacker:slacker-very_mini-testing
+docker build --build-arg HTTPS_PROXY=http://proxy.lan:3128 .
+```
+
+The `proxies` section of `~/.docker/config.json` passes the same variables to
+every build and container. `NO_PROXY` lists hosts reached directly. Only
+http:// proxies: https mirrors go through them as a CONNECT tunnel, so TLS is
+still checked end to end with the mirror. If the proxy asks for a password,
+use an https mirror; the password is sent only to the
+proxy. `slacker status` shows the proxy in use.
+
+### Building packages
+
+`makepkg` needs `which`, which the very_mini image does not ship:
+`slacker install which`.
 
 Wiki-HowTo:  [slacker-docker](https://forge.slackware.nl/rizitis/slacker/wiki/Docker)

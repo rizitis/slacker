@@ -184,6 +184,18 @@ fn preset_for(target: &std::path::Path, rules: &NewConfigRules) -> Option<Preset
     None
 }
 
+/// The slacker.conf key that decides `target` in advance, if any. Shown next
+/// to the .new files a command leaves behind, so a file the user keeps (or has
+/// a rule for) is seen as such and not as one more decision to make.
+pub(crate) fn preset_key(target: &std::path::Path, rules: &NewConfigRules) -> Option<&'static str> {
+    match preset_for(target, rules)? {
+        Preset::Keep => Some("NEWCONFIG_KEEP"),
+        Preset::Remove => Some("NEWCONFIG_REMOVE"),
+        Preset::Overwrite => Some("NEWCONFIG_OVERWRITE"),
+        Preset::Protected => None,
+    }
+}
+
 /// Carry out the NEWCONFIG_* rules on the files that need a decision, report
 /// each one, and return those still left for the menu.
 fn apply_presets<'a>(
@@ -465,17 +477,22 @@ pub(crate) fn cmd_new_config(cli: &Cli, dist_mode: bool) -> Result<Outcome, Stri
 
     // Files the user decided about in advance (NEWCONFIG_* in slacker.conf)
     // are handled here; only the rest reach the list and the menu.
-    // Not in a distribution upgrade: like the blacklist, these rules are for
-    // ordinary updates, and a release jump is when every config should be seen.
+    // In a distribution upgrade only NEWCONFIG_KEEP applies: OVERWRITE and
+    // REMOVE are for ordinary updates, and a release jump is when every config
+    // should be seen, but a file the user said never to touch is never touched,
+    // not even by the "(A)ll new" choice (it changes nothing: the new version
+    // is still there as .new.kept).
     let rules = if dist_mode {
         let r = config::newconfig_rules(&cli.config_dir);
-        if r != NewConfigRules::default() {
+        if !r.overwrite.is_empty() || !r.remove.is_empty() {
             println!(
                 "{}",
-                ui::dim("NEWCONFIG_* rules in slacker.conf are not applied in a distribution upgrade.")
+                ui::dim(
+                    "NEWCONFIG_OVERWRITE and NEWCONFIG_REMOVE are not applied in a distribution upgrade (NEWCONFIG_KEEP is)."
+                )
             );
         }
-        NewConfigRules::default()
+        NewConfigRules { keep: r.keep, ..NewConfigRules::default() }
     } else {
         config::newconfig_rules(&cli.config_dir)
     };
@@ -725,6 +742,25 @@ mod tests {
         assert_eq!(p("/etc/rc.d/rc.local"), Some(Preset::Protected)); // a glob spares it
         assert_eq!(p("/etc/rc.d/rc.local_shutdown"), Some(Preset::Overwrite)); // named exactly
         assert_eq!(p("/etc/fstab"), None);
+    }
+
+    #[test]
+    fn keep_always_wins() {
+        use std::path::Path;
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        // The same file under all three keys, by exact path and by glob, and a
+        // protected file kept by glob: NEWCONFIG_KEEP decides every one.
+        let rules = NewConfigRules {
+            overwrite: s(&["/etc/ssh/sshd_config", "/etc/*"]),
+            remove: s(&["/etc/ssh/sshd_config"]),
+            keep: s(&["/etc/ssh/*", "/etc/passwd"]),
+        };
+        let k = |t: &str| preset_key(Path::new(t), &rules);
+        assert_eq!(k("/etc/ssh/sshd_config"), Some("NEWCONFIG_KEEP"));
+        assert_eq!(k("/etc/passwd"), Some("NEWCONFIG_KEEP"));
+        assert_eq!(k("/etc/fstab"), Some("NEWCONFIG_OVERWRITE"));
+        assert_eq!(k("/etc/shadow"), None); // protected: a glob overwrite only sends it to the menu
+        assert_eq!(k("/usr/share/vim/vimrc"), None);
     }
 
     #[test]

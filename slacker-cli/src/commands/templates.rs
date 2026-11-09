@@ -70,7 +70,7 @@ pub(crate) fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Resul
     }
     let before_cfgs = pending_configs();
     execute_plan(cfg, &plan, cli.yes)?;
-    report_pending_configs(&before_cfgs);
+    report_pending_configs(cli, cfg, &before_cfgs);
     Ok(Outcome::Ok)
 }
 
