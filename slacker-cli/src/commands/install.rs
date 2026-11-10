@@ -677,10 +677,7 @@ pub(crate) fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Resul
     if !confirm_conflicts("Proceed with installation?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
-    let before_cfgs: HashSet<PathBuf> = newconfig::find_new_configs(&newconfig::default_roots())
-        .into_iter()
-        .map(|nc| nc.new_file)
-        .collect();
+    let before_cfgs = pending_configs();
     execute_plan(cfg, &plan, cli.yes)?;
     report_pending_configs(cli, cfg, &before_cfgs);
     Ok(Outcome::Ok)
@@ -758,10 +755,7 @@ pub(crate) fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Resul
     if !confirm_conflicts("Proceed with upgrade?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
-    let before_cfgs: HashSet<PathBuf> = newconfig::find_new_configs(&newconfig::default_roots())
-        .into_iter()
-        .map(|nc| nc.new_file)
-        .collect();
+    let before_cfgs = pending_configs();
     execute_plan(cfg, &plan, cli.yes)?;
     report_pending_configs(cli, cfg, &before_cfgs);
     Ok(Outcome::Ok)
@@ -1122,10 +1116,7 @@ pub(crate) fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String
     if !confirm_conflicts("Proceed with upgrade-all?", &conflicts, cli.yes)? {
         return Ok(Outcome::Ok);
     }
-    let before_cfgs: HashSet<PathBuf> = newconfig::find_new_configs(&newconfig::default_roots())
-        .into_iter()
-        .map(|nc| nc.new_file)
-        .collect();
+    let before_cfgs = pending_configs();
     execute_plan(cfg, &plan, cli.yes)?;
     report_pending_configs(cli, cfg, &before_cfgs);
     // A nod to the official tree when this upgrade actually touched it (a package
@@ -1396,13 +1387,49 @@ fn note_selected(chosen: &[&repo::AvailPkg]) {
     println!("  {}", ui::dim(&format!("-> selected: {}", names.join(", "))));
 }
 
+/// What the filesystem says about one .new file at one moment: device, inode,
+/// change time (seconds, nanoseconds), size and modification time. installpkg
+/// unpacks with `tar --unlink-first`, so a package that ships a .new again
+/// gives it a new inode and change time even when its content, size and
+/// modification time (taken from the package) are the same as before.
+type ConfigStamp = (u64, u64, i64, i64, u64, i64);
+
+/// The .new files of one moment, each with its stamp. Held in memory for the
+/// length of one command only: nothing is written anywhere, and nothing is
+/// kept between runs.
+pub(crate) type PendingConfigs = std::collections::HashMap<PathBuf, Option<ConfigStamp>>;
+
+fn config_stamp(path: &std::path::Path) -> Option<ConfigStamp> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    Some((m.dev(), m.ino(), m.ctime(), m.ctime_nsec(), m.size(), m.mtime()))
+}
+
 /// The *.new config files on disk now: taken before packages are applied, so
 /// `report_pending_configs` can tell this run's from older ones.
-pub(crate) fn pending_configs() -> HashSet<PathBuf> {
+pub(crate) fn pending_configs() -> PendingConfigs {
     newconfig::find_new_configs(&newconfig::default_roots())
         .into_iter()
-        .map(|nc| nc.new_file)
+        .map(|nc| {
+            let stamp = config_stamp(&nc.new_file);
+            (nc.new_file, stamp)
+        })
         .collect()
+}
+
+/// Whether a .new file found after the packages were applied is this run's: it
+/// was not there before, or it was and has been written again since (a
+/// reinstall, or an upgrade that ships a newer .new over one still pending). A
+/// file whose stamp cannot be read either time is taken as unchanged, so an
+/// old pending file is never reported as new by mistake.
+fn is_fresh_config(before: &PendingConfigs, path: &std::path::Path, now: Option<ConfigStamp>) -> bool {
+    match before.get(path) {
+        None => true,
+        Some(was) => match (was, now) {
+            (Some(a), Some(b)) => *a != b,
+            _ => false,
+        },
+    }
 }
 
 /// What to do about the .new files a command just left behind.
@@ -1469,15 +1496,16 @@ fn run_new_config(cli: &Cli) {
 /// ones created by this run from leftovers already on disk, and then either
 /// point at `slacker new-config`, ask to run it, or run it (NEWCONFIG_AFTER,
 /// see `after_configs`). Silent when there are none. `before` is the set of
-/// .new paths that existed prior to the operation.
-pub(crate) fn report_pending_configs(cli: &Cli, cfg: &Config, before: &HashSet<PathBuf>) {
+/// .new files that existed prior to the operation (see `pending_configs`).
+pub(crate) fn report_pending_configs(cli: &Cli, cfg: &Config, before: &PendingConfigs) {
     use std::io::IsTerminal;
     let current = newconfig::find_new_configs(&newconfig::default_roots());
     if current.is_empty() {
         return;
     }
-    let (old, fresh): (Vec<_>, Vec<_>) =
-        current.iter().partition(|nc| before.contains(&nc.new_file));
+    let (fresh, old): (Vec<_>, Vec<_>) = current
+        .iter()
+        .partition(|nc| is_fresh_config(before, &nc.new_file, config_stamp(&nc.new_file)));
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let next = after_configs(cfg.newconfig_after, cli.yes, cli.dry_run, interactive, !fresh.is_empty());
     if next == AfterConfigs::Run {
@@ -1522,6 +1550,32 @@ pub(crate) fn report_pending_configs(cli: &Cli, cfg: &Config, before: &HashSet<P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_file_written_again_in_this_run_is_this_runs() {
+        use std::path::Path;
+        // (dev, inode, ctime s, ctime ns, size, mtime)
+        let stamp: ConfigStamp = (1, 100, 5000, 7, 42, 4000);
+        let mut before = PendingConfigs::new();
+        before.insert(PathBuf::from("/etc/a.conf.new"), Some(stamp));
+        before.insert(PathBuf::from("/etc/unreadable.conf.new"), None);
+        let fresh = |p: &str, now| is_fresh_config(&before, Path::new(p), now);
+        // not there before: this run's
+        assert!(fresh("/etc/b.conf.new", Some(stamp)));
+        assert!(fresh("/etc/b.conf.new", None));
+        // there before and untouched: pending from before
+        assert!(!fresh("/etc/a.conf.new", Some(stamp)));
+        // reinstall: tar --unlink-first gives a new inode and change time, with
+        // the same size and modification time (those come from the package)
+        assert!(fresh("/etc/a.conf.new", Some((1, 101, 6000, 0, 42, 4000))));
+        // rewritten in place: only the change time moves
+        assert!(fresh("/etc/a.conf.new", Some((1, 100, 5000, 8, 42, 4000))));
+        // a newer package's .new over the pending one
+        assert!(fresh("/etc/a.conf.new", Some((1, 102, 6000, 0, 50, 5900))));
+        // a stamp that could not be read, before or after, never makes a file new
+        assert!(!fresh("/etc/a.conf.new", None));
+        assert!(!fresh("/etc/unreadable.conf.new", Some(stamp)));
+    }
 
     #[test]
     fn new_config_is_chained_only_with_someone_at_a_terminal() {
