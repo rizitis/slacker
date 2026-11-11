@@ -3,6 +3,7 @@ Version Beta 0.14.0
 SEMANTIC CHANGES (slacker.conf need update)
 - Update: slacker-gui (Version _beta.6)
     - Added: a Sources button next to the filter shows only the packages from the repositories or build tags you tick, each listed with its package count; it combines with the name filter, and clicking a package's source tag shows only that source. The list is no longer cut at 200: "Show 200 More" and "Show All" add the rest. (Requested by @gegechris99 #20)
+    - Request for gui: dialogs take 85% of the window and follow its size (issue #23)
 - Update: slacker-cli
     - packages are installed in the order UPGRADE.TXT gives: aaa_glibc-solibs,
   pkgtools, tar, xz, findutils and mkinitrd first, kernel-generic last, so its

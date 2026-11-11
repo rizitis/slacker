@@ -511,8 +511,6 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
 
     let dialog = adw::Dialog::builder()
         .title(&action.title)
-        .content_width(1040)
-        .content_height(820)
         .can_close(false)
         .child(&view)
         .build();
@@ -522,7 +520,7 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
             d.close();
         });
     }
-    dialog.present(Some(&ctx.window));
+    crate::widgets::present_fitted(&dialog, &ctx.window, (1040, 820));
 
     let feed = Feed::new(&buffer);
     feed.line(&format!("$ {}", ctx.runner.argv(&action.spec).join(" ")));

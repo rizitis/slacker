@@ -53,8 +53,6 @@ pub fn dialog(ctx: &Ctx, package: &str) {
     view.add_bottom_bar(&bottom);
     let dialog = adw::Dialog::builder()
         .title(format!("Dependencies of {package}"))
-        .content_width(640)
-        .content_height(560)
         .child(&view)
         .build();
     {
@@ -63,7 +61,7 @@ pub fn dialog(ctx: &Ctx, package: &str) {
             d.close();
         });
     }
-    dialog.present(Some(&ctx.window));
+    crate::widgets::present_fitted(&dialog, &ctx.window, (640, 560));
 
     let choices: Rc<RefCell<Vec<Choice>>> = Rc::default();
     let pending = {

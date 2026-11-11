@@ -235,11 +235,9 @@ pub fn show_info(ctx: &Ctx, name: &str) {
     view.set_content(Some(&inner));
     let dialog = adw::Dialog::builder()
         .title(name)
-        .content_width(720)
-        .content_height(560)
         .child(&view)
         .build();
-    dialog.present(Some(&ctx.window));
+    widgets::present_fitted(&dialog, &ctx.window, (720, 560));
 
     ctx.runner.capture(commands::info(name), move |_, text| {
         widgets::clear(&content);
