@@ -31,7 +31,7 @@ SEMANTIC CHANGES (slacker.conf need update)
     - New-config can now follow install, reinstall, upgrade, upgrade-all, install-new, install-template and revert-pkg when they leave new .new files: NEWCONFIG_AFTER=ask asks "Run new-config now?", run starts it; off, the default, only prints the reminder as before. Only at a terminal, never with --yes or --dry-run. Files with a NEWCONFIG_* rule are marked with it in the list.
     - NEWCONFIG_KEEP now also applies in upgrade-dist, so a file you keep is never replaced there, not even by "[A]ll new". NEWCONFIG_OVERWRITE and NEWCONFIG_REMOVE are still not applied there.
     - Downloads can go through a proxy, off by default: PROXY=http://host:port in slacker.conf (holds under sudo, cron and slacker-gui), or PROXY=env to use https_proxy, http_proxy, all_proxy and no_proxy from the environment. NO_PROXY lists hosts reached directly. Only http:// proxies; https is tunnelled with CONNECT, so TLS still runs end to end with the mirror, and a proxy password is sent only to the proxy. `slacker status` shows the proxy in use.
-    - clean-system no longer lists the fallback kernel saved by /boot/make-kernel-backup (kernel-backup-*, or kernel-<BACKUP_NAME>-* when set in /etc/default/make-kernel-backup); before, it was removed on Enter or --yes.
+    - clean-system no longer lists a fallback kernel saved by /boot/make-kernel-backup, whatever BACKUP_NAME it was given; before, it was removed on Enter or --yes.
     - Add csb repo for current x86_64
 - Update: man pages
 - Update: wiki

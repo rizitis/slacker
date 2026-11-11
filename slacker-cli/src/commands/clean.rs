@@ -21,27 +21,38 @@ fn is_pinned_from_its_repo(pin_repo: Option<&str>, installed_tag_repo: Option<&s
     matches!((pin_repo, installed_tag_repo), (Some(p), Some(o)) if p == o)
 }
 
-/// Settings of Slackware's /boot/make-kernel-backup (pkgtools).
-const KERNEL_BACKUP_DEFAULTS: &str = "/etc/default/make-kernel-backup";
-
-/// The package names /boot/make-kernel-backup gives its backups: it records the
-/// current kernel and its modules as a package `kernel-<BACKUP_NAME>-<version>`
-/// (BACKUP_NAME is `backup` unless /etc/default/make-kernel-backup sets it), so
-/// that the fallback kernel survives upgrades of kernel-generic. No repository
-/// ever ships such a package, which made clean-system list it as foreign and
-/// remove the fallback kernel on Enter or --yes. `defaults` is the text of
-/// /etc/default/make-kernel-backup, if there is one.
-fn kernel_backup_names(defaults: Option<&str>) -> HashSet<String> {
-    let mut names = HashSet::from(["kernel-backup".to_string()]);
-    for line in defaults.unwrap_or_default().lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        let Some(value) = line.strip_prefix("BACKUP_NAME=") else { continue };
-        let value = value.trim().trim_matches('"').trim_matches('\'');
-        if !value.is_empty() {
-            names.insert(format!("kernel-{value}"));
+/// Whether `record`, the pkgtools record of the installed package `name`, was
+/// written by Slackware's /boot/make-kernel-backup (pkgtools). That script
+/// records the current kernel and its modules as a package
+/// `kernel-<BACKUP_NAME>-<version>`, so that the fallback kernel survives
+/// upgrades of kernel-generic. No repository ever ships such a package, which
+/// made clean-system list it as foreign and remove the fallback kernel on Enter
+/// or --yes. BACKUP_NAME can be anything (/etc/default/make-kernel-backup or the
+/// environment sets it), so the backup is known by the two description lines
+/// the script writes for it, not by its name.
+fn is_kernel_backup(name: &str, record: &str) -> bool {
+    if !name.starts_with("kernel-") {
+        return false;
+    }
+    let title = format!("{name}: {name} (backup of ");
+    let prefix = format!("{name}: ");
+    let (mut has_title, mut has_body) = (false, false);
+    let description = record
+        .lines()
+        .skip_while(|l| !l.starts_with("PACKAGE DESCRIPTION:"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("FILE LIST:"));
+    for line in description {
+        if line.starts_with(&title) {
+            has_title = true;
+        } else if let Some(text) = line.strip_prefix(&prefix) {
+            let text = text.trim_end();
+            if text.starts_with("This is a backup of ") && text.ends_with(" and modules.") {
+                has_body = true;
+            }
         }
     }
-    names
+    has_title && has_body
 }
 
 pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
@@ -99,7 +110,6 @@ pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, Strin
     }
 
     let baseline_names = db.names_provided_by(scope);
-    let kernel_backups = kernel_backup_names(std::fs::read_to_string(KERNEL_BACKUP_DEFAULTS).ok().as_deref());
     let orphans: Vec<&pkg::PkgId> = installed
         .iter()
         .filter(|p| {
@@ -113,7 +123,10 @@ pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, Strin
                 return false;
             }
             // Nor a fallback kernel saved by /boot/make-kernel-backup.
-            if kernel_backups.contains(&p.name) {
+            if p.name.starts_with("kernel-")
+                && std::fs::read_to_string(cfg.pkg_db_dir.join(p.tag()))
+                    .is_ok_and(|record| is_kernel_backup(&p.name, &record))
+            {
                 return false;
             }
             if bl_installed(cfg, Some(&db), p) {
@@ -440,16 +453,36 @@ mod tests {
     }
 
     #[test]
-    fn kernel_backups_are_named_as_make_kernel_backup_names_them() {
-        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<HashSet<_>>();
-        // no /etc/default/make-kernel-backup, or one that leaves the name alone
-        assert_eq!(kernel_backup_names(None), set(&["kernel-backup"]));
-        assert_eq!(kernel_backup_names(Some("# BACKUP_NAME=old\nBUILD=2\n")), set(&["kernel-backup"]));
-        // a name of its own, quoted or not, with a comment after it
-        assert_eq!(kernel_backup_names(Some("BACKUP_NAME=fallback\n")), set(&["kernel-backup", "kernel-fallback"]));
-        assert_eq!(kernel_backup_names(Some("BACKUP_NAME=\"safe\"  # mine\n")), set(&["kernel-backup", "kernel-safe"]));
-        assert_eq!(kernel_backup_names(Some("BACKUP_NAME=''\n")), set(&["kernel-backup"]));
-        // never the real kernel package
-        assert!(!kernel_backup_names(Some("BACKUP_NAME=fallback\n")).contains("kernel-generic"));
+    fn a_kernel_backup_is_known_by_what_make_kernel_backup_writes() {
+        // The record /boot/make-kernel-backup writes, for any BACKUP_NAME.
+        let record = |n: &str| {
+            format!(
+                "PACKAGE NAME:     {n}-7.3.4-x86_64-1\n\
+                 PACKAGE LOCATION: ./{n}-7.3.4-x86_64-1\n\
+                 PACKAGE DESCRIPTION:\n\
+                 {n}: {n} (backup of /boot/vmlinuz-7.3.4)\n\
+                 {n}:\n\
+                 {n}: This is a backup of /boot/vmlinuz-7.3.4 and modules.\n\
+                 {n}:\n\
+                 FILE LIST:\n./\nboot/\nboot/vmlinuz-7.3.4\n"
+            )
+        };
+        assert!(is_kernel_backup("kernel-backup", &record("kernel-backup")));
+        assert!(is_kernel_backup("kernel-old", &record("kernel-old")));
+        assert!(is_kernel_backup("kernel-my-safe-one", &record("kernel-my-safe-one")));
+        // A record that belongs to another package name.
+        assert!(!is_kernel_backup("kernel-generic", &record("kernel-backup")));
+        // Only kernel-* packages.
+        assert!(!is_kernel_backup("foo", &record("foo")));
+        // Both description lines are needed, and only in the description.
+        let only_title = "PACKAGE DESCRIPTION:\nkernel-x: kernel-x (backup of /boot/vmlinuz)\nFILE LIST:\n";
+        assert!(!is_kernel_backup("kernel-x", only_title));
+        let in_file_list = "PACKAGE DESCRIPTION:\nkernel-x: kernel-x (backup of /boot/vmlinuz)\nFILE LIST:\n\
+                            kernel-x: This is a backup of /boot/vmlinuz and modules.\n";
+        assert!(!is_kernel_backup("kernel-x", in_file_list));
+        // A real kernel-generic record.
+        let generic = "PACKAGE DESCRIPTION:\nkernel-generic: kernel-generic (a general purpose SMP Linux kernel)\n\
+                       kernel-generic:\nFILE LIST:\n";
+        assert!(!is_kernel_backup("kernel-generic", generic));
     }
 }

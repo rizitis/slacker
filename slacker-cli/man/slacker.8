@@ -348,14 +348,11 @@ SBo/local builds and packages from
 .IR extra/ ", " testing/ ", " patches/
 that you keep installed. It never lists slacker itself, nor a fallback kernel
 saved by
-.I /boot/make-kernel-backup
-.RI ( kernel-backup ,
-or
-.RI kernel- NAME
-when
+.IR /boot/make-kernel-backup ,
+whatever
 .B BACKUP_NAME
-is set in
-.IR /etc/default/make-kernel-backup ).
+it was given (slacker knows it by the description that script writes in the
+package's pkgtools record).
 As a safety guard slacker refuses to run if a baseline
 repo has no metadata loaded (run
 .B update
