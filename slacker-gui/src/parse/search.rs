@@ -108,24 +108,6 @@ mod tests {
     use crate::parse::fixture;
 
     #[test]
-    fn suggestions_of_an_exact_search_are_hits_with_the_explanation_kept() {
-        // slacker 0.14.0: an exact search that finds no such name lists the
-        // names that contain the word, between two explaining lines.
-        let s = parse(
-            "No package named 'colloid'. Packages with 'colloid' in their name:\n\
-             [lngn] uninstalled colloid-gtk-theme-2026_08_08  colloid-gtk-theme (GTK theme)\n\
-             [_SBo] installed   colloid-icon-theme-2026_08_10  \n\
-             `slacker search --partial colloid` searches this way; SEARCH=partial in slacker.conf makes it the default.\n",
-        );
-        assert_eq!(s.hits.len(), 2);
-        assert_eq!(s.hits[0].name, "colloid-gtk-theme");
-        assert!(!s.hits[0].installed);
-        assert_eq!((s.hits[1].name.as_str(), s.hits[1].summary.as_str()), ("colloid-icon-theme", ""));
-        assert!(s.hits[1].installed);
-        assert_eq!(s.messages.len(), 2);
-    }
-
-    #[test]
     fn captured_installed_hit() {
         let s = parse(&fixture("search-installed.txt"));
         assert!(s.messages.is_empty());

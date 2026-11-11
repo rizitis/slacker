@@ -1,0 +1,302 @@
+# slacker: δομή του κώδικα, κανόνες και ιστορικό του refactor
+
+Τελευταία ενημέρωση: 10 Νοε 2026. Αφορά το `slacker-cli` 0.14.0, τον κώδικα μετά το refactor (βήματα 1–14) και τις αλλαγές που έγιναν πάνω του από τότε (βλ. 8.5). Συντηρητής: Ioannis Anagnostakis (`rizitis`).
+
+Το έγγραφο απευθύνεται σε όποιον (άνθρωπο ή AI) πιάνει τον κώδικα για πρώτη φορά. Λέει **τι είναι πού, γιατί είναι εκεί, και τι δεν αλλάζει**. Αν κάτι εδώ διαφωνεί με τον κώδικα, ισχύει ο κώδικας, και διορθώνεται το έγγραφο.
+
+---
+
+## 1. Τι είναι το slacker
+
+Package manager για Slackware, γραμμένο σε Rust. Ενώνει σε ένα εργαλείο:
+
+- όσα κάνει το `slackpkg` (update, install, upgrade, upgrade-all, install-new, clean-system, new-config, κ.λπ.)
+- και την πολλαπλή υποστήριξη repos με προτεραιότητες του `slackpkg+`.
+
+Το slacker **δεν εγκαθιστά πακέτα μόνο του**. Κατεβάζει, ελέγχει (GPG, md5/sha256), αποφασίζει τι θα γίνει, και καλεί τα pkgtools του Slackware (`installpkg`, `upgradepkg`, `removepkg`) όπως τα στέλνει ο Patrick. Τη βάση των εγκατεστημένων πακέτων (`/var/adm/packages`) τη διαβάζει, δεν τη γράφει ποτέ το ίδιο.
+
+Το Slackware -current το λέμε **development branch** (όχι «rolling»).
+
+---
+
+## 2. Το repo
+
+```
+slacker/
+├── slacker-cli/          το εργαλείο γραμμής εντολών (αυτό αφορά το έγγραφο)
+│   ├── Cargo.toml
+│   ├── Cargo.lock
+│   └── src/
+├── slacker-gui/          ξεχωριστό GTK4/Rust γραφικό front-end (δικό του crate)
+├── slacker.SlackBuild    πακετάρισμα για Slackware
+├── slack-desc, doinst.sh, slacker.nfo, slacker-banner.svg
+├── README.md, NEWS, TODO, LICENSE (Apache-2.0)
+```
+
+### Build
+
+- `cargo build --release` μέσα στο `slacker-cli/`. Το release profile έχει `lto = true`, `strip = true`, `opt-level = 2`.
+- Εξαρτήσεις: `clap` (derive), `ureq` 2 (rustls, gzip), `md-5`, `regex`, `rusqlite` (bundled).
+- **MSRV:** `rust-version = "1.88"`. Τα `icu_*` (μέσω ureq -> url -> idna) το χρειάζονται από το icu 2.3.
+- Ενημέρωση εξαρτήσεων: στοχευμένα με `cargo update -p <crate>` όταν το `cargo audit` βρει κάτι, ολικά με `cargo update` στην αρχή κύκλου ανάπτυξης (όχι τη μέρα του release). Μετά πάντα `cargo build --release --locked && cargo test --locked && cargo audit`.
+
+---
+
+## 3. Αρχεία στο σύστημα (runtime)
+
+| θέση | περιεχόμενο | ποιος γράφει |
+|---|---|---|
+| `/etc/slacker/` (ή `--config-dir`) | `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`, `credentials.d/`, `credentials.cat`, `templates/`, `dist-backup-*/` | ο χρήστης, και οι εντολές που επεξεργάζονται ρυθμίσεις (add-repo, frozen, pin, upgrade-dist, ...) |
+| `CACHE_DIR` (default `/var/cache/slacker`) | `repos/<name>/` metadata (PACKAGES.TXT, CHECKSUMS.md5(.asc), ChangeLog.txt, MANIFEST), `packages/<repo>/` τα κατεβασμένα πακέτα | slacker. Είναι αναλώσιμο, το `clean-cache` σβήνει μόνο τα πακέτα. |
+| `STATE_DIR` (default `/var/lib/slacker`) | `trusted/`, `quarantine/` (κατάσταση εμπιστοσύνης ανά repo), `gpg/` (ιδιωτικό keyring και pinned fingerprints), stock-db | slacker. **Εδώ ζουν τα trust anchors, ποτέ στο cache.** |
+| `ADM_DIR`/`PKG_DB_DIR` (default `/var/adm`) | η βάση πακέτων του Slackware | **μόνο τα pkgtools**. Το slacker μόνο διαβάζει. |
+| `/run/slacker.lock` | αποκλειστικό lock (flock) | slacker, για εντολές που αλλάζουν κάτι |
+
+---
+
+## 4. Ροή εκτέλεσης
+
+`main()` -> `Cli::try_parse()` -> `run(&cli)` -> κωδικός εξόδου.
+
+Σειρά μέσα στο `run()` (στο `main.rs`):
+
+0. **Ρυθμίσεις proxy**, πριν από οποιαδήποτε λήψη (και για το `status` και το `find-mirror`): τα `PROXY` και `NO_PROXY` διαβάζονται ανεκτικά από το slacker.conf (`config::proxy_settings`) και περνάνε στο `download::set_proxy`.
+1. **Η κεφαλίδα με τον λαβύρινθο** (`banner2::show()`), μόνο σε τερματικό, εκτός αν το slacker.conf έχει `BANNER=off`. Αυτό το ένα κλειδί διαβάζεται μόνο του (`config::banner_enabled`, όπως το `system_arch`), γιατί η κεφαλίδα τυπώνεται πριν φορτωθεί το config και δεν πρέπει να εξαρτάται από το αν είναι σωστό. Το ίδιο κλειδί κρύβει και το σχέδιο SLACKWARE (`banner::show()`) μετά από upgrade-all που άγγιξε το επίσημο δέντρο, και στο upgrade-dist.
+2. **Εντολές που τρέχουν πριν φορτωθεί το config:** `status`, `find-mirror`, `new-config`. Πρέπει να δουλεύουν και όταν το config είναι χαλασμένο (το `status` το διαγνώνει, το `new-config` είναι αυτό που το διορθώνει). Το `new-config` ελέγχει δικαιώματα και παίρνει lock. Από το slacker.conf διαβάζει μόνο τα δικά του κλειδιά `NEWCONFIG_*`, ανεκτικά (`config::newconfig_rules`), όπως το `BANNER`: αν το slacker.conf λείπει ή είναι χαλασμένο, απλά δεν υπάρχουν κανόνες.
+3. `Config::load_dir()`. Αυστηρό: λάθος στο `repos`/`mirrors` σταματάει εδώ.
+4. `migrate_state()`: μεταφορά παλιών trust anchors από το cache στο STATE_DIR, μία φορά, χωρίς ποτέ να σβήσει υπάρχοντα.
+5. `download::set_auth(credentials::build_registry(...))`: HTTP Basic credentials, μόνο πάνω από https.
+6. Για όσες εντολές αλλάζουν το σύστημα ή το cache (`requires_privilege`): απαιτείται root (το `wheel` αλλάζει μόνο το μήνυμα σφάλματος), και αποκλειστικό lock. Οι read-only εντολές τρέχουν και ως απλός χρήστης.
+7. Dispatch: ένα `match` που καλεί το `cmd_*` της εντολής.
+
+**Κωδικοί εξόδου** (`enum Outcome`): `0` Ok, `20` NothingFound, `50` SelfUpgrade (το slacker αναβάθμισε τον εαυτό του, ξανατρέξε το), `100` Pending (check-updates βρήκε ενημερώσεις), `1` σφάλμα. Το `slacker-gui` και scripts μπορεί να βασίζονται σε αυτούς: **δεν αλλάζουν**.
+
+Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, `--dry-run`, `--no-deps`.
+
+---
+
+## 5. Χάρτης του κώδικα (`slacker-cli/src/`)
+
+### 5.1 Είσοδος και ορισμός CLI
+
+| αρχείο | γραμμές | τι |
+|---|---|---|
+| `main.rs` | 4.338 | είσοδος (`main`, `run`, `Outcome`, lock, δικαιώματα, `migrate_state`) **και ο κοινός πυρήνας** (βλ. 5.3), με τα tests του |
+| `cli.rs` | 271 | `Cli`, `Cmd` (όλες οι εντολές, clap derive), `HELP_STYLES`. Η πρώτη παράγραφος κάθε doc comment είναι το σύντομο help, όλο το doc comment το `<cmd> --help`. |
+| `commands.rs` | 15 | δηλώνει τα modules του `commands/` |
+
+### 5.2 Εντολές (`src/commands/`)
+
+Κάθε αρχείο έχει τις `pub(crate) fn cmd_*` μιας ομάδας εντολών, και τα helpers που χρησιμοποιεί **μόνο** αυτή η ομάδα.
+
+| αρχείο | εντολές | σημειώσεις |
+|---|---|---|
+| `templates.rs` | generate/install/remove/delete-template | |
+| `repos.rs` | add-repo, del-repo, pri-repo, add-tag, del-tag, vet-repo, trust-repo, distrust-repo | το vetting (`vet_repo`, `apply_vet`, `reload_repo`) είναι στον πυρήνα |
+| `blacklist.rs` | frozen, unfrozen, pin, unpin, nodep, undep | σέβονται το `--dry-run` (διόρθωση 0.12.5) |
+| `logs.rs` | history, show-changelog | το όνομα δεν είναι `history.rs`, γιατί υπάρχει ήδη |
+| `query.rs` | search, file-search, info | read-only. Το `search` κοιτάζει μόνο ονόματα πακέτων: ακριβές από προεπιλογή, κάθε όνομα που περιέχει τη λέξη με `--partial` ή `SEARCH=partial` (`PkgDb::search`, `search_rows`). Χωρίς αυτά δεν αλλάζει τίποτα: ίδιο ταίριασμα, ίδια μηνύματα, ίδιος κωδικός εξόδου. |
+| `find_mirror.rs` | find-mirror | δεν είναι `mirrors.rs`, γιατί υπάρχει ήδη |
+| `revert_pkg.rs` | revert-pkg | επικίνδυνο: GPG verify -> `upgradepkg --reinstall` -> προσφορά freeze |
+| `clean.rs` | clean-system, clean-cache | επικίνδυνο: σβήνει πακέτα |
+| `new_config.rs` | new-config | γράφει στο `/etc`. Τα `PROTECTED_CONFIGS` (passwd, shadow, group, rc.inet1.conf, rc.local, rc.local_shutdown) δεν αντικαθίστανται ποτέ από το μενού ούτε από glob. Οι κανόνες `NEWCONFIG_*` (`preset_for`, `apply_presets`, `glob_match`) εφαρμόζονται πριν από το μενού. Το `preset_key` δίνει τον κανόνα ενός αρχείου, για τη λίστα που τυπώνουν οι εντολές πακέτων. |
+| `update.rs` | update, update gpg | η επεξεργασία κάθε repo (`update_one_repo`) είναι στον πυρήνα |
+| `status.rs` | status, list-repos, check-updates | το `status` είναι ο «γιατρός» της εγκατάστασης |
+| `upgrade_dist.rs` | upgrade-dist | το πιο επικίνδυνο. Φάσεις: escape kit -> transform -> update -> core (σειριακά, με έλεγχο εγγραφής) -> install-new -> υπόλοιπα σε batches -> clean-system -> δεύτερο πέρασμα -> new-config -> status. |
+| `install.rs` | install, upgrade, reinstall, remove, download, upgrade-all, install-new | ο resolver που χρησιμοποιούν είναι στον πυρήνα. Το `report_pending_configs` (το καλούν και τα install-template και revert-pkg) δείχνει τα `.new` που άφησε η εκτέλεση και, με το `NEWCONFIG_AFTER`, ρωτά αν θα τρέξει το new-config ή το τρέχει (`after_configs`). Το `pending_configs` παίρνει τα `.new` και τα stamps τους πριν εφαρμοστούν τα πακέτα, και το `is_fresh_config` λέει ποια έγραψε αυτή η εκτέλεση. |
+
+### 5.3 Ο κοινός πυρήνας (μένει στο `main.rs`, σκόπιμα)
+
+Χρησιμοποιείται από πολλές ομάδες μαζί (εντολές πακέτων, upgrade-dist, install-template, vet, update), γι' αυτό δεν ανήκει σε κανένα αρχείο εντολής. **Αποφασίστηκε να μη μετακινηθεί** (βλ. 8.4).
+
+- **Resolver εξαρτήσεων:** `expand_with_deps`, `add_with_deps`, `resolve_protected_deps`, `ask_dep_conflict`, `ask_protected_dep`, `quarantine_deep_repo`, **`MAX_DEP_DEPTH = 512`**, `DEEP_CHAIN_ERR`. Εδώ είναι το fix για το DoS (βλ. 7).
+- **Σειρά εγκατάστασης:** `upgrade_order` (καλείται στο τέλος του `expand_with_deps`, ώστε ο πίνακας του πλάνου να δείχνει τη σειρά με την οποία εγκαθίστανται τα πακέτα), `UPGRADE_FIRST`, `upgrade_last` (το χρησιμοποιεί και το upgrade-dist).
+- **Σχέδιο και πίνακες:** `PlanItem`, `InstallAction`, `PlanRow`, `print_table`, `show_plan`, `print_plan`, `report_pinned_in_plan`, `hint_freeze_pin`, `note_optional_suggests`, conflicts (`detect_conflicts`, `report_conflicts`, `confirm_conflicts`).
+- **Εκτέλεση:** `execute_plan`, `install_counter` (`[ 37/245 ] upgrading ...`), `parallel_fetch` (με τη γραμμή προόδου των λήψεων: `live_line`, `DlLive`, `term_width`, `DL_TICK`, `DL_STALL`, `DL_ANNOUNCE`), `fetch_and_verify`/`fetch_and_verify_metered`, `package_dest`, `DlItem`, `summarize_outcomes`, `report_batch_failures`, `enforce_release_match`, `enforce_arch_match`, υπενθυμίσεις kernel και perl.
+- **Επιλογή πακέτων:** `collect`, `collect_prefers`, `validate_selector`, `reject_mixed_selectors`, `guard_shell_expansion`, `closest`, `edit_distance`, `at_prefix_hint`, `parse_selection`, `bl_installed`, `priority_display`, `installed_source_label`.
+- **Repos:** `update_one_repo`, `UpdateOutcomes`, `malicious_filename_count`, `vet_repo`, `apply_vet`, `reload_repo`, `warn_unverified_repos`, `unverified_repo_names`.
+- **Release/arch/mirrors:** `slackware_dir`, `is_current_codename`, `repo_release_token`, `system_release`, `arch_family`, `arch_compatible`, `is_x86_arch`, `osuosl_tree_prefix`, `parse_packages_date`, `mirror_is_stale`, `humanize_lag`, `FRESHNESS_*`.
+- **Διάφορα:** `confirm`, `hilite_keys`, `is_foundational`, `in_graphical_session`, `migrate_state`.
+
+### 5.4 Βοηθητικά modules (`src/*.rs`, εκτός `main`/`cli`/`commands`)
+
+Κυρίως καθαρή λογική και επαφή με το σύστημα. Δεν ξέρουν τίποτα για εντολές.
+
+| αρχείο | τι |
+|---|---|
+| `config.rs` | φόρτωση/έλεγχος `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`. Κανόνες blacklist, pins (`@repo 100% name`) και εξαιρέσεις εξαρτήσεων (`!πακέτο:εξάρτηση`). Οι ανεκτικοί readers `banner_enabled`, `system_arch`, `newconfig_rules`, `proxy_settings`. Το `NEWCONFIG_AFTER` (`parse_newconfig_after`), `SEARCH` (`parse_search_partial`). |
+| `pkgdb.rs` | ενιαία βάση διαθέσιμων πακέτων, επίλυση προτεραιότητας, freeze/pin, matching |
+| `repo.rs` | fetch/parse PACKAGES.TXT, CHECKSUMS, `.dep` (διαβάζεται μία φορά ανά εκτέλεση και κρατιέται στη μνήμη· το `prefetch_deps` διαβάζει πολλά παράλληλα πριν από τον resolver), quarantine/trust ανά repo, έλεγχοι ασφαλών ονομάτων |
+| `pkg.rs` | ταυτότητα πακέτου (`name-version-arch-build`), build tags |
+| `system.rs` | ζωντανό σύστημα: εγκατεστημένα πακέτα, os-release, κλήσεις pkgtools (μόνο argv, ποτέ `sh -c`· πρώτο το `--terse` όταν `TERSE=on`) |
+| `download.rs` | λήψεις (http/https/file), όρια μεγέθους, md5/sha256, HTTP auth. Το `Meter`, τα bytes μιας λήψης σε εξέλιξη, που δείχνει το `parallel_fetch`. Ο proxy (`set_proxy`, `proxy_var`, `proxy_for`, `no_proxy_matches`, και το `describe_proxy` για το `status`). |
+| `gpg.rs` | ιδιωτικό keyring, TOFU pin όλων των fingerprints, έλεγχος υπογραφών |
+| `credentials.rs` | HTTP Basic (σαν το zypper): `credentials.d/`, `credentials.cat`, μόνο root:0600, μόνο https |
+| `changelog.rs` | ChangeLog.txt, check-updates |
+| `history.rs` | το ημερολόγιο αλλαγών πακέτων (pure) |
+| `revert.rs` | pure helpers για revert-pkg |
+| `newconfig.rs` | εύρεση `*.new` στο `/etc` και `/usr/share/vim` |
+| `mirrors.rs` | ανακάλυψη και probing mirrors |
+| `dist.rs` | κατεύθυνση upgrade-dist (fail-closed whitelist: μόνο 15.0 -> -current και 15.0 -> νεότερο stable) |
+| `manifest.rs` | file-search μέσω MANIFEST |
+| `template.rs` | templates εγκατεστημένων πακέτων |
+| `stockdb.rs` | `resolve-stock`: SQLite βάση εξαρτήσεων του stock -current |
+| `ui.rs` | χρώματα ANSI, σέβεται `NO_COLOR` και μη-τερματικό |
+| `banner.rs`, `banner2.rs` | banners |
+
+---
+
+## 6. Πού μπαίνει νέος κώδικας
+
+- **Νέα εντολή:** variant στο `Cmd` (`cli.rs`), `pub(crate) fn cmd_x` στο κατάλληλο `commands/<area>.rs` (ή νέο αρχείο, δηλωμένο στο `commands.rs`), γραμμή στο dispatch του `run()`, και στο `command_name` (το ζητά ο compiler). Αν η εντολή αλλάζει το σύστημα ή το cache, και στο `requires_privilege`.
+- **Helper που τον χρειάζεται μία μόνο ομάδα εντολών:** στο αρχείο της ομάδας.
+- **Helper που τον χρειάζονται πολλές ομάδες:** στον πυρήνα του `main.rs`. Τα modules του `commands/` τον βλέπουν με `use crate::όνομα` (τα private items της ρίζας του crate είναι ορατά στα παιδιά της).
+- **Καθαρή λογική χωρίς I/O εντολής:** σε βοηθητικό module (`src/*.rs`), με unit tests εκεί.
+- **Ονόματα αρχείων:** να μη μπερδεύονται με τα βοηθητικά modules. Υπάρχουν ήδη `history.rs`, `revert.rs`, `newconfig.rs`, `mirrors.rs`, `dist.rs`, `template.rs`. Γι' αυτό οι εντολές είναι στα `logs.rs`, `revert_pkg.rs`, `new_config.rs`, `find_mirror.rs`, `upgrade_dist.rs`, `templates.rs`.
+- **Ορατότητα:** μόνο `pub(crate)`, και μόνο όπου χρειάζεται (στα `cmd_*`, και σε helpers που τα χρειάζεται test άλλου module).
+
+---
+
+## 7. Αμετάβλητοι κανόνες (δεν αλλάζουν χωρίς ρητή απόφαση του συντηρητή)
+
+### Ασφάλεια
+
+- **Pkgtools όπως τα στέλνει ο Patrick.** Δεν τα πειράζουμε, δεν αναλύουμε την έξοδό τους. Η μόνη επιλογή που προσθέτει ποτέ το slacker από μόνο του είναι το `--terse`, όταν ο χρήστης βάλει `TERSE=on`. Το δίχτυ ασφαλείας είναι ότι τους δίνουμε μόνο ελεγμένα πακέτα, και στο upgrade-dist ελέγχουμε το αποτέλεσμα (εγγραφή στη βάση) για τα core.
+- **Όριο βάθους εξαρτήσεων `MAX_DEP_DEPTH = 512`.** Repo που το ξεπερνά μπαίνει σε quarantine και η εκτέλεση (π.χ. upgrade-all) συνεχίζει με τα υπόλοιπα. Στο `--dry-run` μόνο προειδοποιεί. Κύκλοι εξαρτήσεων κόβονται με το `visiting`. Επιβεβαιωμένο σε πραγματική χρήση.
+- **GPG TOFU:** σε κάθε update ξαναφέρνει το GPG-KEY, pin όλων των fingerprints (και subkeys). Αλλαγή κλειδιού -> hard quarantine. Σκόπιμα αυστηρό.
+- **Trust anchors στο STATE_DIR**, ποτέ στο cache.
+- **Path traversal:** `is_safe_filename` / `is_safe_location`. Repo με ύποπτο όνομα πακέτου -> hard quarantine.
+- **Όρια μεγέθους:** metadata 512 MiB, πακέτο 8 GiB.
+- **Ποτέ `sh -c`.** Όλες οι εξωτερικές κλήσεις με argv.
+- **Ποτέ εγγραφή μέσα από symlink** σε αρχεία ρύθμισης και στον προορισμό λήψης.
+- **Credentials μόνο πάνω από https**, αρχεία μόνο root:0600.
+- **Proxy, κλειστός από default.** Χωρίς `PROXY` ή με `PROXY=off`: απευθείας σύνδεση, και οι μεταβλητές proxy του περιβάλλοντος αγνοούνται, ώστε ένα περιβάλλον που περνάει μέσα από το sudo να μην μπορεί να στείλει τις λήψεις του root αλλού. Το `PROXY=http://...` χρησιμοποιεί αυτόν τον proxy για κάθε λήψη http και https. Το `PROXY=env` παίρνει τα `https_proxy`/`http_proxy`/`all_proxy`/`no_proxy` από το περιβάλλον (πρώτα τα πεζά, μετά τα κεφαλαία, όπως το wget και το curl). Το `NO_PROXY` αντικαθιστά το `no_proxy` του περιβάλλοντος. Μόνο http:// proxies: το https περνάει από αυτούς ως tunnel CONNECT, οπότε το TLS και ο έλεγχος πιστοποιητικού γίνονται μέχρι το mirror. Proxy άλλου τύπου είναι σφάλμα, ποτέ σιωπηλή απευθείας σύνδεση. Το `try_proxy_from_env` του ureq δεν χρησιμοποιείται: μία μεταβλητή για όλα τα schemes και καθόλου `no_proxy`.
+- **Ο κωδικός του proxy πάει μόνο στον proxy**, στο CONNECT που στέλνει το ureq για URL https. **Ποτέ header `Proxy-Authorization` σε αίτηση:** το ureq κρατάει τα δικά μας headers στα redirects (σβήνει μόνο τα `Authorization`, `Cookie` και `Content-Length`), οπότε ένα mirror, ή όποιος είναι στη διαδρομή ενός http, θα μπορούσε να κάνει redirect σε host της επιλογής του και να πάρει τον κωδικό μέσα στο tunnel. Ένα πρώτο προσχέδιο το έκανε για τα http mirrors και αφαιρέθηκε πριν από το release. Συνέπεια: ένα http mirror πίσω από proxy που ζητά κωδικό αποτυγχάνει (407), οπότε https. Οι κωδικοί δεν εμφανίζονται ποτέ σε μηνύματα ούτε στο `status` (`hide_password`).
+
+### Σημασιολογία (λύθηκε, μην ξανανοίγει)
+
+- **Προτεραιότητα πάνω από όλα:** ποτέ σιωπηλή μεταφορά ή υποβάθμιση. Μόνο ρητό `repo:name` ή pin την παρακάμπτουν.
+- **Οι εξαρτήσεις έρχονται από το repo του γονέα.** Το `add_with_deps` επιλύει μια εξάρτηση μόνο ως `<repo του γονέα>:<dep>`, οπότε μια εξάρτηση που δεν είναι εγκατεστημένη παίρνεται από το ίδιο repo με το πακέτο που τη χρειάζεται, όχι από τον νικητή της προτεραιότητας. Αυτό είναι σκόπιμο. Μια εγκατεστημένη εξάρτηση από πηγή ίσης ή μεγαλύτερης προτεραιότητας γίνεται protected dependency (ερώτηση k/r/a/q). Αν δεν βρεθεί ούτε εγκατεστημένη ούτε στο repo του γονέα, βγαίνει μόνο προειδοποίηση.
+- **Τα επίσημα πακέτα του Slackware δεν δηλώνονται ποτέ ως εξαρτήσεις.** Το Slackware θεωρεί δεδομένη την πλήρη εγκατάσταση. Μην επινοείτε σενάρια όπου ένα third-party πακέτο δηλώνει επίσημο πακέτο ως εξάρτηση.
+- **Το upgrade-all μπορεί να μεταφέρει εγκατεστημένο πακέτο σε πηγή μεγαλύτερης προτεραιότητας** (`upgrades_for` στο `pkgdb.rs`), ακόμα και στην ίδια έκδοση. Αυτό είναι σωστό, και ελέγχθηκε με πραγματική αναφορά (ghostty, Νοε 2026). Δεν αλλάζει.
+- **Το πλάνο εγκατάστασης λέει γιατί επιλέχθηκε κάθε build.** Στο `show_plan_alternatives` (`commands/install.rs`) η γραμμή της επιλογής γράφει `installing (dependency of <parent>, from its repo | pinned | priority winner | your choice)`. Παλιότερη έκδοση έγραφε «priority winner» σε κάθε επιλογή, και ήταν λάθος για τις εξαρτήσεις και για ένα «replace» σε protected dependency.
+- **Από πού ήρθε ένα εγκατεστημένο πακέτο** (`repo_for_installed` στο `pkgdb.rs`): από το repo που έχει ακριβώς αυτό το build. Αλλιώς από αυτό που έχει το ίδιο όνομα με το ίδιο build tag. Αλλιώς, μόνο με βάση το tag, από το repo με τα περισσότερα πακέτα με αυτό το tag. Αν ταιριάζουν πολλά repo, ένα pin στο όνομα διαλέγει το repo του, αν είναι ένα από αυτά, αλλιώς κερδίζει η μεγαλύτερη προτεραιότητα. Πακέτο χωρίς tag ανήκει στο επίσημο repo. Αυτό χρησιμοποιούν τα list-repos, status, history, οι κανόνες blacklist `@repo` για εγκατεστημένα πακέτα, και το clean-system. Ένα build tag δεν ανήκει σε ένα μόνο repo: το extra/ του Slackware έχει το `slackpkg+` του alienbob με tag `alien` (issue #11, Νοε 2026, όπου όλα τα alien πακέτα μετρούσαν στο extras).
+- **Το `remove @repo` αφαιρεί ακριβώς ό,τι μετρά το list-repos για εκείνο το repo.** Ποτέ «κάθε εγκατεστημένο πακέτο με tag που έχει το repo»: αυτό έπαιρνε όλα τα alien πακέτα για το `@extras`, και όλα τα επίσημα πακέτα για κάθε repo που έχει έστω ένα build χωρίς tag. Τα `upgrade @repo` και `reinstall @repo` διαλέγουν ακόμα με βάση τα tags του repo, αλλά ενεργούν μόνο όπου το ίδιο το repo προσφέρει το πακέτο, και ισχύει ο έλεγχος προτεραιότητας.
+- **Εξαίρεση εξάρτησης** (`!πακέτο:εξάρτηση`, ή `!*:εξάρτηση` για κάθε πακέτο, στο `blacklist`. Εντολές `nodep`/`undep`): το `add_with_deps` δεν τραβά αυτή την εξάρτηση για αυτό το πακέτο. Κάθε άλλο πακέτο που τη χρειάζεται την τραβά κανονικά, και εγκαθίσταται και με το όνομά της. Μία εξάρτηση ανά γραμμή, ακριβή ονόματα, χωρίς κενά (οτιδήποτε άλλο απορρίπτεται, δεν μαντεύεται). Οι εντολές δέχονται πολλά μαζί και τα ελέγχουν όλα πριν γράψουν. Το `info` τυπώνει για κάθε υποψήφιο γραμμή `requires:`, διαβασμένη όπως τη διαβάζει ο resolver (`.dep`, αλλιώς `PACKAGE REQUIRED`), και σημειώνει ό,τι δεν τραβιέται. Ένας κανόνας ισχύει μόνο για ό,τι ζητά το ίδιο το πακέτο: όταν δεν το ζητά, το `nodep` προειδοποιεί (και γράφει πάλι τον κανόνα) και ονομάζει την εξάρτηση ένα επίπεδο πιο κάτω που το ζητά (`nodep_reach_note` στο `commands/blacklist.rs`). Το freeze της εξάρτησης δεν είναι υποκατάστατο: ισχύει για όλα τα πακέτα, σιωπηλά, και μπλοκάρει και τη ρητή εγκατάσταση (αίτημα του gegechris99, Νοε 2026).
+- **Μια εξάρτηση που μένει έξω λέγεται πάντα.** Όταν μια frozen ή εξαιρεμένη εξάρτηση δεν είναι εγκατεστημένη, δεν ζητήθηκε και δεν μπαίνει για άλλο πακέτο, το πλάνο γράφει `note: not pulling in '<dep>' for '<package>' (<κανόνας ή frozen>)`, ώστε να μην εγκατασταθεί ποτέ κάτι χωρίς εξάρτησή του χωρίς να το δεις.
+- **Η σειρά εγκατάστασης ακολουθεί το UPGRADE.TXT.** Κάθε πλάνο (`expand_with_deps` -> `upgrade_order`) βάζει πρώτα τα `aaa_glibc-solibs`, `pkgtools`, `tar`, `xz`, `findutils`, `mkinitrd`, με αυτή τη σειρά, και τελευταίο το `kernel-generic` (ή το `kernel_armvN`). Όλα τα άλλα μένουν με τη σειρά του resolver (αλφαβητικά, κάθε εξάρτηση πριν από αυτό που τη χρειάζεται). Ο kernel μπαίνει τελευταίος γιατί το doinst του τρέχει `geninitrd` (mkinitrd ή dracut) και τότε το DKMS χτίζει τα modules του, οπότε τα kmod, udev, lvm2 κτλ. πρέπει να έχουν ήδη αναβαθμιστεί. Το ίδιο κάνει και το slackpkg 16.0.1. Το `kernel-source` **δεν** μετακινείται: μπαίνει πριν από το `kernel-generic`, άρα ο κώδικας του kernel υπάρχει όταν το DKMS χτίζει για τον νέο kernel, και το χτίσιμο πετυχαίνει με την πρώτη (επιβεβαιώθηκε σε πραγματική αναβάθμιση με NVIDIA, Νοε 2026).
+- **Από το επίσημο δέντρο και τα subtrees του δεν ζητούνται αρχεία `.dep`.** Δεν έχουν, και η ερώτηση έφερνε ένα 404 ανά πακέτο. Το `PACKAGE REQUIRED` του PACKAGES.TXT διαβάζεται κανονικά για κάθε repo. Από τα third-party repos ζητούνται όπως πριν.
+- **Freeze:** εγκατεστημένο + κανόνας -> FROZEN. Μη εγκατεστημένο + κανόνας -> κρυμμένο από install-new/upgrades/check-updates, ορατό στο search/info. Ένα frozen candidate θεωρείται ότι δεν υπάρχει, και η επίλυση συνεχίζει στους υπόλοιπους.
+- **Pin:** `@repo 100% name`, ακριβές όνομα, δεν παγώνει ποτέ. Ένα πραγματικό freeze στο ίδιο όνομα κερδίζει.
+- **install-new:** το `cmd_install_new` και το `dist_install_new` είναι σκόπιμα διαφορετικά (κανονικό: official + subtrees πάνω από το official. Dist: μόνο official + patches, ανεξάρτητα από προτεραιότητα).
+- **upgrade-dist:** απαιτεί ρητό στόχο, παρακάμπτει σκόπιμα blacklist και προτεραιότητα, αδειάζει το blacklist κρατώντας `blacklist.bak` (και δεν το ξαναγράφει σε επανάληψη), απενεργοποιεί third-party repos, βάζει το `kernel-generic` μετά από όλα τα άλλα και την αλυσίδα GnuPG τελευταία απ' όλα, και το clean-system μένει στη Phase 3 (μετά το upgrade).
+- **clean-system:** pinned πακέτα από το repo του pin παίρνουν ξεχωριστή ερώτηση R/K/P (default Keep). Με `-y` δεν σβήνονται. Ποτέ δεν προτείνει να σβηστεί το ίδιο το slacker, ούτε ένας εφεδρικός kernel που κράτησε το `/boot/make-kernel-backup` του Slackware: το εργαλείο καταγράφει τον kernel και τα modules του ως πακέτο `kernel-<BACKUP_NAME>-<έκδοση>` (`kernel-backup` από προεπιλογή) που δεν το έχει κανένα repo, οπότε φαινόταν ξένο και σβηνόταν με Enter ή `-y`. Επειδή το BACKUP_NAME μπορεί να είναι οτιδήποτε, το backup αναγνωρίζεται από τις δύο γραμμές περιγραφής που γράφει το script στην εγγραφή του pkgtools, όποιο κι αν είναι το όνομά του (`is_kernel_backup` στο `commands/clean.rs`, Νοε 2026).
+- **new-config:** τα protected αρχεία δεν αντικαθίστανται ποτέ, ό,τι κι αν απαντήσει ο χρήστης στο μενού. Μόνο merge με το χέρι, ή αν ο χρήστης γράψει το ακριβές path στο `NEWCONFIG_OVERWRITE`· ένα glob εκεί δεν τα πιάνει ποτέ.
+- **Κανόνες του new-config** (`NEWCONFIG_OVERWRITE` / `_REMOVE` / `_KEEP` στο slacker.conf, paths ή globs του εγκατεστημένου αρχείου, τα `*` και `?` δεν περνάνε το `/`): εφαρμόζονται πριν από το μενού, με ή χωρίς `--yes`. Στο upgrade-dist ισχύει **μόνο το `NEWCONFIG_KEEP`**, ώστε ένα αρχείο που κρατά ο χρήστης να μην αντικαθίσταται ποτέ εκεί, ούτε από το «[A]ll new». Τα OVERWRITE και REMOVE δεν εφαρμόζονται εκεί: όπως και με το blacklist, το upgrade-dist δείχνει όλα τα υπόλοιπα αρχεία (τυπώνει σημείωση όταν υπάρχουν τέτοιοι κανόνες). Αυτά τα κλειδιά προστίθενται όταν επαναλαμβάνονται (κάθε άλλο κλειδί κρατά την τελευταία του γραμμή). Όταν ταιριάζουν πολλά, κερδίζει το πιο ασφαλές: KEEP, μετά REMOVE, μετά OVERWRITE. Το OVERWRITE κρατά το παλιό αρχείο ως `.orig`. Το KEEP μετονομάζει το `.new` σε `.new.kept`, ώστε τίποτα να μη μένει εκκρεμές και τίποτα να μη χάνεται (αίτημα του gegechris99, Νοε 2026).
+- **new-config μετά από εντολή πακέτων** (`NEWCONFIG_AFTER`, default `off`): μετά από install, reinstall, upgrade, upgrade-all, install-new, install-template και revert-pkg, τα `.new` εμφανίζονται σε λίστα (τα καινούργια χωριστά από τα παλιότερα που εκκρεμούν, το καθένα με το κλειδί `NEWCONFIG_*` αν το καλύπτει κανόνας) και τυπώνεται η υπενθύμιση, όπως πριν. Το `ask` ρωτά «Run new-config now? [Y/n]» και το `run` το τρέχει, αλλά μόνο όταν stdin και stdout είναι και τα δύο τερματικό, χωρίς `--yes` ή `--dry-run`, και μόνο αν η εκτέλεση άφησε καινούργια `.new`. Αλλιώς υπενθύμιση. Ένα `.new` ανήκει σε αυτή την εκτέλεση όταν δεν υπήρχε πριν, ή υπήρχε και γράφτηκε ξανά (reinstall, ή upgrade που φέρνει νεότερο `.new` πάνω από ένα εκκρεμές): το slacker συγκρίνει inode, χρόνο αλλαγής, μέγεθος και χρόνο τροποποίησης κάθε αρχείου πριν και μετά. Ο χρόνος τροποποίησης και το μέγεθος μόνα τους δεν αρκούν, γιατί το tar δίνει στο `.new` τον χρόνο τροποποίησης που έχει μέσα στο πακέτο, οπότε ένα reinstall το ξαναγράφει με τον ίδιο. Το `installpkg` ξεπακετάρει με `tar --unlink-first`, άρα το inode και ο χρόνος αλλαγής αλλάζουν. Ένα stamp που δεν διαβάζεται δεν κάνει ποτέ ένα αρχείο καινούργιο. Όλα αυτά μένουν στη μνήμη για τη μία εντολή: **το slacker δεν κρατά δική του κατάσταση μεταξύ εκτελέσεων** και διαβάζει την κατάσταση των πακέτων μόνο από τα pkgtools (issue #19, Νοε 2026). Τέλος εισόδου στην ερώτηση σημαίνει όχι. Έτσι το cron, τα scripts, το slacker-gui και το `docker build` δεν βλέπουν ποτέ να αγγίζονται `.new`. Οι κανόνες `NEWCONFIG_*` εφαρμόζονται πάντα πρώτοι (αίτημα του gegechris99, Νοε 2026).
+- **Πρόοδος λήψεων:** σε τερματικό, το `parallel_fetch` ξαναγράφει μία γραμμή με κάθε λήψη σε εξέλιξη και γράφει `no data for Ns` όταν μια λήψη δεν πάρει byte για 15 δευτερόλεπτα. Το πλάτος διαβάζεται από τον ίδιο τον τερματικό (TIOCGWINSZ) σε κάθε ανανέωση. Εκτός τερματικού (pipe, log, slacker-gui) δεν υπάρχει `\r`: μόνο μια απλή γραμμή `↓ name (size)` για λήψη που κρατά πάνω από 1 δευτερόλεπτο, ώστε τα logs να μην εξαρτώνται από τον χρονισμό για τα μικρά πακέτα (issue #14).
+- **Έξοδος:** οι κωδικοί εξόδου και η μορφή του output δεν αλλάζουν χωρίς λόγο. Το `slacker-gui` και scripts μπορεί να βασίζονται σε αυτά.
+
+### Απορρίφθηκαν (μην ξαναπροταθούν)
+
+- Έλεγχος φρεσκάδας του mandb στο `status`.
+- Μεταφορά του clean-system πριν από το upgrade στο upgrade-dist.
+
+---
+
+## 8. Το refactor του `main.rs` (Οκτ 2026)
+
+### 8.1 Γιατί και πώς
+
+Το `main.rs` ήταν **12.245 γραμμές** με όλες τις εντολές μαζί. Χωρίστηκε σε modules **χωρίς καμία αλλαγή συμπεριφοράς**. Μετά το refactor έμεινε **3.922 γραμμές** (είσοδος, κοινός πυρήνας, tests του).
+
+Κανόνες που τηρήθηκαν σε κάθε βήμα:
+
+1. **Αυτούσια μετακίνηση.** Το κείμενο κάθε item (κώδικας, σχόλια, doc comments) μεταφέρεται ως έχει. Οι μόνες αλλαγές: `pub(crate)` όπου χρειάζεται, και γραμμές `use`, όπως τις ζητά ο compiler.
+2. **Καμία αλλαγή λογικής**, ούτε «μικρές βελτιώσεις». Ό,τι βρέθηκε σημειώθηκε και έγινε χωριστά (π.χ. το dry-run fix).
+3. **Tests:** τα σώματα δεν αλλάζουν. Ένα test πάει μαζί με τον κώδικα που ελέγχει. Όσα χρησιμοποιούν τα κοινά fixtures του `collect_tests` (`av()`, `fixture()`) μένουν στο `main.rs` και παίρνουν μόνο import. Ο αριθμός μένει **219 passed + 1 ignored**.
+4. **Όχι rustfmt.** Το upstream δεν είναι ήδη formatted (π.χ. `banner2.rs`), και θα άλλαζε κείμενο, οπότε θα χαλούσε η σύγκριση γραμμή προς γραμμή.
+5. **Τα βοηθητικά modules δεν αγγίχτηκαν.**
+
+### 8.2 Βήματα
+
+| # | αρχείο | περιεχόμενο |
+|---|---|---|
+| 1 | `cli.rs` | `Cli`, `Cmd`, `HELP_STYLES` |
+| 2 | `commands/templates.rs` | template εντολές |
+| 3 | `commands/repos.rs` | εντολές repos, με το test `repos_text_set_priority` |
+| 4 | `commands/blacklist.rs` | frozen/unfrozen/pin/unpin, με 7 tests |
+| 5 | `commands/logs.rs` | history, show-changelog |
+| 6 | `commands/query.rs` | search, file-search, info. Το `search_display` είναι `pub(crate)` για το `collect_tests`. |
+| 7 | `commands/find_mirror.rs` | find-mirror |
+| 8 | `commands/revert_pkg.rs` | revert-pkg |
+| 9 | `commands/clean.rs` | clean-system, clean-cache, με το `is_pinned_from_its_repo` και το test του |
+| 10 | `commands/new_config.rs` | new-config, με τα `PROTECTED_CONFIGS` και το test τους |
+| 11 | `commands/update.rs` | update, `refresh_stock_db` |
+| 12 | `commands/status.rs` | status, list-repos, check-updates, με τα `attribution_tests`, `locate_db_tests` και 6 ακόμα tests |
+| 13 | `commands/upgrade_dist.rs` | upgrade-dist και 19 δικά του items, με 4 tests. Το `dist_upgrade_sets` είναι `pub(crate)` για 2 tests του `collect_tests`. |
+| 14 | `commands/install.rs` | οι 7 εντολές πακέτων και 20 δικά τους helpers, με 4 tests. Τα `abort_on_misses`, `selector_miss_hint`, `plan_alternatives` είναι `pub(crate)` για tests του `collect_tests`. |
+
+### 8.3 Πώς ελέγχθηκε
+
+Σε κάθε βήμα: build χωρίς warnings, 219/219 tests, 79 help outputs ίδια (`--help`, και για κάθε εντολή `-h` και `help <cmd>`). Κάθε ομάδα εντολών έτρεξε σε ψεύτικο σύστημα με το binary πριν και μετά, και το αποτέλεσμα συγκρίθηκε.
+
+Για τις επικίνδυνες εντολές επιπλέον:
+- σύγκριση κειμένου γραμμή προς γραμμή με το αρχικό
+- απόδειξη ότι το `main.rs` είναι ακριβώς το προηγούμενο χωρίς τα κομμάτια που βγήκαν (συν μόνο γραμμές `use`)
+- έλεγχος ότι κάθε όνομα στο νέο αρχείο επιλύεται στο ίδιο item με πριν
+
+Τα ψεύτικα συστήματα τρέχουν σε ιδιωτικό mount (και net) namespace: αντίγραφο του `/etc` με ψεύτικο os-release, τοπικά file:// mirrors με πραγματικό κλειδί GPG, ψεύτικα `installpkg`/`upgradepkg`/`removepkg` που κρατάνε ψεύτικη βάση και καταγράφουν κάθε κλήση. Το πραγματικό σύστημα δεν αγγίζεται.
+
+| ομάδα | εκτελέσεις |
+|---|---|
+| templates, repos, blacklist, history, query, find-mirror | 8, 18, 22, 13, 24, 5 |
+| revert-pkg (και πλήρες μονοπάτι GPG -> reinstall -> freeze) | 13 + 11 |
+| clean-system / clean-cache | 36 |
+| new-config (και dist mode) | 17 (+22) |
+| update | 25 |
+| status / list-repos / check-updates | 29 |
+| upgrade-dist | 31 |
+| εντολές πακέτων και DoS fix | 105 |
+
+**Τελικός έλεγχος:** το παραδοτέο χτίστηκε σε καθαρό αντίγραφο του repo. Όλα τα παραπάνω βγήκαν **ίδια με το binary του κανονικού branch** (0.12.4 με cap+quarantine, help, dry-run fix). Δηλαδή το refactor συμπεριφέρεται ακριβώς όπως ο κώδικας που τρέχει σε παραγωγή.
+
+Τα scripts γράφτηκαν για αυτό το refactor και έτρεξαν μόνο στο περιβάλλον όπου έγινε. Εκτός από root, `unshare`, `gpg` και `python3`, εξαρτώνται από καταλόγους με fixtures και από συγκεκριμένα binaries προετοιμασίας που δεν είναι μέσα στο `slacker-refactor-harness.tar.gz`, και οι διαδρομές τους είναι γραμμένες μέσα στα scripts. Ο r-tz κρατά το tarball για αρχείο. Δεν μπαίνει στο repo.
+
+### 8.4 Τι ΔΕΝ έγινε, σκόπιμα
+
+- **Ο κοινός πυρήνας δεν μετακινήθηκε** (το σχεδιαζόμενο βήμα 15: `plan.rs`, `execute.rs`, `select.rs`, `prompt.rs`). Ο resolver με το `MAX_DEP_DEPTH`, η εκτέλεση, το fetch/verify και η επιλογή πακέτων μένουν εκεί που δοκιμάστηκαν σε πραγματικό σύστημα. Το κέρδος θα ήταν μόνο οργάνωση. Το ίδιο ισχύει για το `collect_tests` (περίπου 550 γραμμές με κοινά fixtures).
+- **Η είσοδος μένει στο `main.rs`:** `main`, `run`, `Outcome`, lock, δικαιώματα.
+
+### 8.5 Μετά το refactor
+
+Η σειρά 0.12.x δεν συντηρείται πια, οπότε δεν υπάρχει κανονικό branch για συγχρονισμό. Οι αλλαγές μπαίνουν κατευθείαν σε αυτόν τον κώδικα. Το αποτέλεσμα «ίδιο με το κανονικό branch» στο 8.3 είναι ιστορικό: ίσχυε για το refactor όπως παραδόθηκε.
+
+Η πρώτη αλλαγή μετά το refactor ήταν η ετικέτα του πλάνου (βλ. 7). Η δεύτερη ήταν το issue #11 (από πού ήρθε ένα εγκατεστημένο πακέτο, και `remove @repo`, βλ. 7), με 2 tests. Η τρίτη ήταν το `BANNER` (issue #12, βλ. 4), με 1 test. Η τέταρτη ήταν η εξαίρεση εξάρτησης (βλ. 7), με 4 tests. Η πέμπτη ήταν η γραμμή προόδου των λήψεων (issue #14, βλ. 7), με 2 tests. Αυτές οι πέντε είναι η 0.13.0.
+
+Η 0.14.0 πρόσθεσε, η καθεμιά με τα tests της: το «Preparing the plan» με το παράλληλο διάβασμα των `.dep` που κρατιούνται στη μνήμη, και τη διακοπή των αιτημάτων `.dep` προς το επίσημο δέντρο· το `TERSE` και τον μετρητή εγκατάστασης· τη σειρά εγκατάστασης του UPGRADE.TXT με τον kernel τελευταίο, σε κάθε πλάνο και στο upgrade-dist· τους κανόνες `NEWCONFIG_*` του new-config· το `NEWCONFIG_AFTER` και το `NEWCONFIG_KEEP` στο upgrade-dist· και τον proxy (`PROXY`/`NO_PROXY`, κλειστός από default, με γραμμή `Proxy` στο `status`) (όλα στο 7). Κάθε νέο κλειδί έχει για default τη συμπεριφορά που υπήρχε πριν από αυτό. Μετά από κάθε αλλαγή: `cargo build --release --locked` χωρίς warnings, `cargo test --release --locked`, και οι έλεγχοι που τρέχει το SlackBuild (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Πριν από release: ένα τρέξιμο σε πραγματικό σύστημα από τον συντηρητή.
+
+---
+
+## 9. Tests
+
+- `cargo test`: **252 passed, 1 ignored** (253 συνολικά).
+- Ανά αρχείο: `main.rs` 50, `config.rs` 38, `pkgdb.rs` 35, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (το ένα ignored: πραγματικό TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 4, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, και από 1 στα `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
+- Modules tests στο `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (με τα fixtures `av()` και `fixture()`), `freshness_tests`, `foundational_tests`.
+
+---
+
+## 10. Ανοιχτά θέματα (εκτός refactor)
+
+- **Δύο `arch_compatible` με ανάποδη σειρά ορισμάτων:** `main.rs` `(sys_arch, pkg_arch)` και `repo.rs` `(pkg_arch, arch)`. Κάνουν το ίδιο πράγμα. Δεν είναι bug σήμερα, αλλά είναι παγίδα. Αξίζει ενοποίηση, ως ξεχωριστή αλλαγή.
+- **Ημερομηνίες του `history` μετά από restore (ΔΕΝ διορθώθηκε, σκόπιμα):** η ζώνη ώρας υπολογίζεται συγκρίνοντας την ώρα στο όνομα `-upgraded-<T>` με το ctime. Το ctime χάνεται σε επαναφορά από backup, και τότε μετατοπίζονται οι ημερομηνίες. Μια απλή λύση «αγνόησε μη ρεαλιστικές ζώνες ώρας» ΔΕΝ αρκεί. Αφορά μόνο εμφάνιση και μόνο επαναφερμένα συστήματα. Θέλει δικό του σχεδιασμό αν ποτέ γίνει.
+- **Doc comments σε λάθος θέση** (μόνο rustdoc, όχι λειτουργία): μια παράγραφος του `warn_unverified_repos` πάνω από το `unverified_repo_names` (`main.rs`), το doc του `cmd_status` πάνω από το `MLOCATE_DB` (`commands/status.rs`), ένα «Parse a keep-selection» πάνω από το `select_packages_pkgid` (`commands/install.rs`), και ένα «GATE ONLY for now» πάνω από το `DIST_CRITICAL` (`commands/upgrade_dist.rs`). Έμειναν ως έχουν για την απόδειξη «αυτούσιο κείμενο». Διορθώνονται ως ξεχωριστή, καλλωπιστική αλλαγή.
+- **Ο proxy και τα redirects:** το `no_proxy` ελέγχεται για το URL που ζητά το slacker, όχι ξανά για τον στόχο ενός redirect· το redirect ακολουθεί τον ίδιο δρόμο (proxy ή απευθείας). Δεν διαρρέει τίποτα· στη χειρότερη περίπτωση το redirect αποτυγχάνει.
+- **Το slacker-gui και ο proxy:** το pkexec καθαρίζει το περιβάλλον, οπότε με `PROXY=env` το GUI κατεβάζει απευθείας. Ένα URL στο `PROXY` δουλεύει κανονικά και εκεί.
+- **Τα `.asc` των πακέτων μένουν στο cache** μετά από install/upgrade-dist (το πακέτο σβήνεται, η υπογραφή όχι). Παρατηρήθηκε στις δοκιμές. Είναι μικρά αρχεία και τα σβήνει το `clean-cache`. Δεν έχει αξιολογηθεί αν πρέπει να αλλάξει.
+
+---
+
+## 11. Για patches προς το Slackware/Patrick
+
+Ό,τι πάει upstream στο Slackware πρέπει να ειναι: σκέτο `git diff`, χωρίς μεγάλα commit messages, σύντομα σχόλια στο ύφος του υπάρχοντος αρχείου.

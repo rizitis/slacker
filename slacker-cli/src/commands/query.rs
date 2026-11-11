@@ -77,9 +77,6 @@ fn search_rows<'a>(
     rows
 }
 
-/// How many names an exact search that found nothing lists as suggestions.
-const SEARCH_SUGGESTIONS: usize = 20;
-
 pub(crate) fn cmd_search(cfg: &Config, term: &str, partial: bool) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
@@ -125,38 +122,18 @@ pub(crate) fn cmd_search(cfg: &Config, term: &str, partial: bool) -> Result<Outc
             ))
         );
     } else {
-        // No such name. The names that contain the word are the useful answer
-        // (`colloid` -> colloid-gtk-theme, colloid-icon-theme); a guess at a
-        // typo only when there are none.
-        let near = search_rows(&db, &installed, term, true);
-        if near.is_empty() {
-            let mut msg = format!("No package named '{term}'.");
-            if let Some(s) = closest(term, db.available_names()) {
-                msg.push_str(&format!(" Did you mean '{s}'?"));
-            }
-            println!("{msg}");
-            println!(
-                "{}",
-                ui::dim(&format!(
-                    "search matches exact names — try `slacker file-search {term}` for a file, \
-                     or `slacker info {term}`."
-                ))
-            );
-        } else {
-            println!("No package named '{term}'. Packages with '{term}' in their name:");
-            for row in near.iter().take(SEARCH_SUGGESTIONS) {
-                print_search_row(&db, &installed, row);
-            }
-            let more = near.len().saturating_sub(SEARCH_SUGGESTIONS);
-            let more = if more > 0 { format!("and {more} more. ") } else { String::new() };
-            println!(
-                "{}",
-                ui::dim(&format!(
-                    "{more}`slacker search --partial {term}` searches this way; \
-                     SEARCH=partial in slacker.conf makes it the default."
-                ))
-            );
+        let mut msg = format!("No package named '{term}'.");
+        if let Some(s) = closest(term, db.available_names()) {
+            msg.push_str(&format!(" Did you mean '{s}'?"));
         }
+        println!("{msg}");
+        println!(
+            "{}",
+            ui::dim(&format!(
+                "search matches exact names — try `slacker file-search {term}` for a file, \
+                 or `slacker info {term}`."
+            ))
+        );
     }
     Ok(Outcome::NothingFound)
 }

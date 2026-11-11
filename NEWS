@@ -33,7 +33,7 @@ SEMANTIC CHANGES (slacker.conf need update)
     - NEWCONFIG_KEEP now also applies in upgrade-dist, so a file you keep is never replaced there, not even by "[A]ll new". NEWCONFIG_OVERWRITE and NEWCONFIG_REMOVE are still not applied there.
     - Downloads can go through a proxy, off by default: PROXY=http://host:port in slacker.conf (holds under sudo, cron and slacker-gui), or PROXY=env to use https_proxy, http_proxy, all_proxy and no_proxy from the environment. NO_PROXY lists hosts reached directly. Only http:// proxies; https is tunnelled with CONNECT, so TLS still runs end to end with the mirror, and a proxy password is sent only to the proxy. `slacker status` shows the proxy in use.
     - clean-system no longer lists a fallback kernel saved by /boot/make-kernel-backup, whatever BACKUP_NAME it was given; before, it was removed on Enter or --yes.
-    - CMD `slacker search`: --partial (or SEARCH=partial in slacker.conf) lists every package whose name contains the word; --exact forces the exact match. Names only, never descriptions. An exact search that finds no such name now lists the names that contain it (issue #22).
+    - CMD `slacker search`: --partial (or SEARCH=partial in slacker.conf) lists every package whose name contains the word; --exact forces the exact match. Names only, never descriptions. The default is unchanged (issue #22).
     - Add csb repo for current x86_64
 - Update: man pages
 - Update: wiki
