@@ -95,7 +95,7 @@ Each file holds the `pub(crate) fn cmd_*` of one group of commands, plus the hel
 | `repos.rs` | add-repo, del-repo, pri-repo, add-tag, del-tag, vet-repo, trust-repo, distrust-repo | the vetting itself (`vet_repo`, `apply_vet`, `reload_repo`) is in the core |
 | `blacklist.rs` | frozen, unfrozen, pin, unpin, nodep, undep | honour `--dry-run` (fixed in 0.12.5) |
 | `logs.rs` | history, show-changelog | not named `history.rs`, which already exists |
-| `query.rs` | search, file-search, info | read-only. `search` looks at package names only: exact by default, every name containing the word with `--partial` or `SEARCH=partial` (`PkgDb::search`, `search_rows`); an exact search with no such name lists up to 20 containing names and still exits "nothing found". |
+| `query.rs` | search, file-search, info | read-only. `search` looks at package names only: exact by default, every name containing the word with `--partial` or `SEARCH=partial` (`PkgDb::search`, `search_rows`). Without them nothing changes: same match, same messages, same exit code. |
 | `find_mirror.rs` | find-mirror | not named `mirrors.rs`, which already exists |
 | `revert_pkg.rs` | revert-pkg | dangerous: GPG verify -> `upgradepkg --reinstall` -> offer to freeze |
 | `clean.rs` | clean-system, clean-cache | dangerous: removes packages |

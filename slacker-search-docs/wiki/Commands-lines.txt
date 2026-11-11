@@ -1,7 +1,0 @@
-Replace the `search NAME` row of the table with:
-
-| `search [--partial\|--exact] NAME` | Find a package by name (case-insensitive). Exact by default; with `--partial`, or `SEARCH=partial` in `slacker.conf`, every package whose name contains the word is listed, the exact name first. Only package names are searched, never descriptions or files. `--exact` asks for the exact match whatever `SEARCH` says. When an exact search finds no such name, up to 20 packages whose name contains the word are listed as suggestions. The `[repo]` label names where the **installed** build came from - including a local/SBo source no repo offers - and `(also: ...)` lists every other repo shipping the name **with its own version**, so a repo carrying something else entirely (`(also: testing kernel-generic-7.1.7)`) is visible without running `info`. |
-
-Replace the `search` line of the --help listing with:
-
-  search             Find a package by name (case-insensitive)

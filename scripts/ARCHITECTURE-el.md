@@ -95,7 +95,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 | `repos.rs` | add-repo, del-repo, pri-repo, add-tag, del-tag, vet-repo, trust-repo, distrust-repo | το vetting (`vet_repo`, `apply_vet`, `reload_repo`) είναι στον πυρήνα |
 | `blacklist.rs` | frozen, unfrozen, pin, unpin, nodep, undep | σέβονται το `--dry-run` (διόρθωση 0.12.5) |
 | `logs.rs` | history, show-changelog | το όνομα δεν είναι `history.rs`, γιατί υπάρχει ήδη |
-| `query.rs` | search, file-search, info | read-only. Το `search` κοιτάζει μόνο ονόματα πακέτων: ακριβές από προεπιλογή, κάθε όνομα που περιέχει τη λέξη με `--partial` ή `SEARCH=partial` (`PkgDb::search`, `search_rows`)· ακριβής αναζήτηση χωρίς τέτοιο όνομα δείχνει έως 20 ονόματα που την περιέχουν και βγαίνει πάλι με «δεν βρέθηκε». |
+| `query.rs` | search, file-search, info | read-only. Το `search` κοιτάζει μόνο ονόματα πακέτων: ακριβές από προεπιλογή, κάθε όνομα που περιέχει τη λέξη με `--partial` ή `SEARCH=partial` (`PkgDb::search`, `search_rows`). Χωρίς αυτά δεν αλλάζει τίποτα: ίδιο ταίριασμα, ίδια μηνύματα, ίδιος κωδικός εξόδου. |
 | `find_mirror.rs` | find-mirror | δεν είναι `mirrors.rs`, γιατί υπάρχει ήδη |
 | `revert_pkg.rs` | revert-pkg | επικίνδυνο: GPG verify -> `upgradepkg --reinstall` -> προσφορά freeze |
 | `clean.rs` | clean-system, clean-cache | επικίνδυνο: σβήνει πακέτα |
