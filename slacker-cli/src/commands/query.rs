@@ -131,7 +131,7 @@ pub(crate) fn cmd_search(cfg: &Config, term: &str, partial: bool) -> Result<Outc
             "{}",
             ui::dim(&format!(
                 "search matches exact names — try `slacker file-search {term}` for a file, \
-                 or `slacker info {term}`."
+                 or `slacker info {term}` or `slacker search {term} --partial`."
             ))
         );
     }
