@@ -346,7 +346,17 @@ exact build, or the same name with the same build tag; for a tagless one, any
 immutable repo that provides its name). Use these to protect
 SBo/local builds and packages from
 .IR extra/ ", " testing/ ", " patches/
-that you keep installed. As a safety guard slacker refuses to run if a baseline
+that you keep installed. It never lists slacker itself, nor a fallback kernel
+saved by
+.I /boot/make-kernel-backup
+.RI ( kernel-backup ,
+or
+.RI kernel- NAME
+when
+.B BACKUP_NAME
+is set in
+.IR /etc/default/make-kernel-backup ).
+As a safety guard slacker refuses to run if a baseline
 repo has no metadata loaded (run
 .B update
 first). With
