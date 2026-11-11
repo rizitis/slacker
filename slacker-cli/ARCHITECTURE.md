@@ -1,6 +1,6 @@
 # slacker: code structure, rules and refactor history
 
-Last updated: 11 Nov 2026. Covers `slacker-cli` 0.14.0, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
+Last updated: 10 Nov 2026. Covers `slacker-cli` 0.14.0, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
 
 This document is for anyone, human or AI, opening the code for the first time. It says **what lives where, why it lives there, and what must not change**. If anything here disagrees with the code, the code wins and this document gets fixed.
 
@@ -95,7 +95,7 @@ Each file holds the `pub(crate) fn cmd_*` of one group of commands, plus the hel
 | `repos.rs` | add-repo, del-repo, pri-repo, add-tag, del-tag, vet-repo, trust-repo, distrust-repo | the vetting itself (`vet_repo`, `apply_vet`, `reload_repo`) is in the core |
 | `blacklist.rs` | frozen, unfrozen, pin, unpin, nodep, undep | honour `--dry-run` (fixed in 0.12.5) |
 | `logs.rs` | history, show-changelog | not named `history.rs`, which already exists |
-| `query.rs` | search, file-search, info | read-only |
+| `query.rs` | search, file-search, info | read-only. `search` looks at package names only: exact by default, every name containing the word with `--partial` or `SEARCH=partial` (`PkgDb::search`, `search_rows`); an exact search with no such name lists up to 20 containing names and still exits "nothing found". |
 | `find_mirror.rs` | find-mirror | not named `mirrors.rs`, which already exists |
 | `revert_pkg.rs` | revert-pkg | dangerous: GPG verify -> `upgradepkg --reinstall` -> offer to freeze |
 | `clean.rs` | clean-system, clean-cache | dangerous: removes packages |
@@ -124,7 +124,7 @@ Mostly pure logic and system integration. They know nothing about commands.
 
 | file | contents |
 |---|---|
-| `config.rs` | loading/validating `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`; blacklist rules, pins (`@repo 100% name`) and dependency exclusions (`!package:dependency`); the lenient readers `banner_enabled`, `system_arch`, `newconfig_rules`, `proxy_settings`; `NEWCONFIG_AFTER` (`parse_newconfig_after`) |
+| `config.rs` | loading/validating `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`; blacklist rules, pins (`@repo 100% name`) and dependency exclusions (`!package:dependency`); the lenient readers `banner_enabled`, `system_arch`, `newconfig_rules`, `proxy_settings`; `NEWCONFIG_AFTER` (`parse_newconfig_after`), `SEARCH` (`parse_search_partial`) |
 | `pkgdb.rs` | unified database of available packages, priority resolution, freeze/pin, matching |
 | `repo.rs` | fetch/parse PACKAGES.TXT, CHECKSUMS, `.dep` (read once per run and cached; `prefetch_deps` reads many in parallel before the resolver); per-repo quarantine/trust; safe-filename checks |
 | `pkg.rs` | package identity (`name-version-arch-build`), build tags |
@@ -280,8 +280,8 @@ The first change after the refactor was the plan label (see 7). The second was i
 
 ## 9. Tests
 
-- `cargo test`: **250 passed, 1 ignored** (251 in total).
-- Per file: `main.rs` 50, `config.rs` 37, `pkgdb.rs` 34, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (one ignored: a live TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 4, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, and one each in `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **252 passed, 1 ignored** (253 in total).
+- Per file: `main.rs` 50, `config.rs` 38, `pkgdb.rs` 35, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (one ignored: a live TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 4, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, and one each in `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Test modules in `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (with the `av()` and `fixture()` fixtures), `freshness_tests`, `foundational_tests`.
 
 ---

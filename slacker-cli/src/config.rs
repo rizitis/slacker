@@ -133,6 +133,9 @@ pub struct Config {
     /// What happens when a command leaves new .new config files behind
     /// (NEWCONFIG_AFTER, default ask).
     pub newconfig_after: NewConfigAfter,
+    /// `search` lists every package whose name contains the word (SEARCH=partial)
+    /// instead of the exact name only (the default).
+    pub search_partial: bool,
     /// resolve-stock: also pull a stock package's stock deps from the
     /// local depgraph.db (RESOLVE_STOCK, default off).
     pub resolve_stock: bool,
@@ -280,6 +283,7 @@ impl Config {
         // upgradepkg (removepkg is terse already).
         let terse = parse_terse(conf.get("TERSE").map(String::as_str));
         let newconfig_after = parse_newconfig_after(conf.get("NEWCONFIG_AFTER").map(String::as_str));
+        let search_partial = parse_search_partial(conf.get("SEARCH").map(String::as_str));
 
         // RESOLVE_STOCK defaults OFF. yes/on/true/1 turns it on. The user's
         // explicit declaration that this is a container/minimal system.
@@ -366,6 +370,7 @@ impl Config {
             resolve_deps,
             terse,
             newconfig_after,
+            search_partial,
             resolve_stock,
             stock_db_url,
             ignore_tags,
@@ -1321,6 +1326,12 @@ fn parse_newconfig_after(v: Option<&str>) -> NewConfigAfter {
     }
 }
 
+/// SEARCH: partial; anything else (or nothing) is the exact name, as before
+/// this key existed.
+fn parse_search_partial(v: Option<&str>) -> bool {
+    v.is_some_and(|s| s.trim().eq_ignore_ascii_case("partial"))
+}
+
 /// TERSE: off unless explicitly on/yes/true/1.
 fn parse_terse(v: Option<&str>) -> bool {
     matches!(
@@ -1448,6 +1459,15 @@ mod tests {
         assert_eq!(parse_newconfig_after(Some("Ask")), NewConfigAfter::Ask);
         assert_eq!(parse_newconfig_after(Some(" RUN ")), NewConfigAfter::Run);
         assert_eq!(parse_newconfig_after(Some("off")), NewConfigAfter::Off);
+    }
+
+    #[test]
+    fn search_is_exact_unless_set_to_partial() {
+        assert!(!parse_search_partial(None));
+        assert!(!parse_search_partial(Some("exact")));
+        assert!(!parse_search_partial(Some("typo")));
+        assert!(parse_search_partial(Some("partial")));
+        assert!(parse_search_partial(Some(" Partial ")));
     }
 
     #[test]
@@ -1931,6 +1951,7 @@ mod tests {
             resolve_deps: true,
             terse: false,
             newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1980,6 +2001,7 @@ mod tests {
             resolve_deps: true,
             terse: false,
             newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -2031,6 +2053,7 @@ mod tests {
             resolve_deps: true,
             terse: false,
             newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -2082,6 +2105,7 @@ mod tests {
             resolve_deps: true,
             terse: false,
             newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],

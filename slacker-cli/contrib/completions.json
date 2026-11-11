@@ -3,7 +3,7 @@
   "_global_flags": ["--config-dir", "--yes", "-y", "--dry-run", "--no-deps", "--help", "-h", "--version", "-V"],
   "commands": {
     "update":            {"selector": false, "positional": "none"},
-    "search":            {"selector": false, "positional": "none"},
+    "search":            {"selector": false, "positional": "none", "flags": ["--partial", "--exact"]},
     "file-search":       {"selector": false, "positional": "none"},
     "info":              {"selector": false, "positional": "installed"},
     "list-repos":        {"selector": false, "positional": "none"},

@@ -461,14 +461,16 @@ impl PkgDb {
         out
     }
 
-    /// Search names and summaries (one winner per name).
-    /// Find packages by exact name, case-insensitively (one entry per name, the
-    /// highest-priority repo winning). `info` is the place for substrings.
-    pub fn search(&self, term: &str) -> Vec<&AvailPkg> {
+    /// Find packages by name, case-insensitively (one entry per name, the
+    /// highest-priority repo winning): the exact name, or with `partial` every
+    /// name that contains `term`. Only names are looked at, never summaries.
+    /// Sorted by name, the exact name first.
+    pub fn search(&self, term: &str, partial: bool) -> Vec<&AvailPkg> {
         let needle = term.to_lowercase();
         let mut seen: HashMap<&str, &AvailPkg> = HashMap::new();
         for p in &self.all {
-            if p.id.name.to_lowercase() == needle {
+            let name = p.id.name.to_lowercase();
+            if name == needle || (partial && name.contains(&needle)) {
                 let better = match seen.get(p.id.name.as_str()) {
                     // Same rule as match_pattern: non-frozen first, then priority,
                     // so search shows the effective (fallback) winner and only
@@ -486,7 +488,10 @@ impl PkgDb {
             }
         }
         let mut out: Vec<&AvailPkg> = seen.into_values().collect();
-        out.sort_by(|a, b| a.id.name.cmp(&b.id.name));
+        out.sort_by(|a, b| {
+            let exact = |p: &AvailPkg| !p.id.name.eq_ignore_ascii_case(term);
+            exact(a).cmp(&exact(b)).then_with(|| a.id.name.cmp(&b.id.name))
+        });
         out
     }
 
@@ -774,6 +779,38 @@ mod upgrade_tests {
             priority.insert(n.to_string(), *p);
         }
         PkgDb { all: pkgs, priority, official_priority: official, pins: HashMap::new() }
+    }
+
+    #[test]
+    fn search_is_by_name_only_exact_or_partial() {
+        let mut described = avail("grantlee-5.3-x86_64-1", "slackware");
+        described.summary = "grantlee (a theme engine)".into();
+        let d = db(
+            vec![
+                avail("wxpython-4.2.2-x86_64-1alien", "alienbob"),
+                avail("python-wxpython-4.3.2-x86_64-1cf", "conraid"),
+                avail("xcursor-themes-1.0.7-noarch-2", "slackware"),
+                avail("Theme-1.0-noarch-1", "slackware"),
+                avail("theme-1.0-noarch-1cf", "conraid"),
+                described,
+            ],
+            &[("slackware", 100), ("conraid", 50), ("alienbob", 40)],
+            Some(100),
+        );
+        let names = |term: &str, partial: bool| -> Vec<String> {
+            d.search(term, partial).iter().map(|p| format!("{}:{}", p.repo, p.id.name)).collect()
+        };
+        // Exact, as before: the name itself and nothing else.
+        assert_eq!(names("wxpython", false), ["alienbob:wxpython"]);
+        assert_eq!(names("WXPYTHON", false), ["alienbob:wxpython"]);
+        assert!(names("wxpy", false).is_empty());
+        // Partial: every name that contains the word, the exact name first.
+        assert_eq!(names("wxpython", true), ["alienbob:wxpython", "conraid:python-wxpython"]);
+        // Names only: grantlee's summary says "theme", its name does not.
+        assert_eq!(
+            names("theme", true),
+            ["slackware:Theme", "conraid:theme", "slackware:xcursor-themes"]
+        );
     }
 
     fn tag(name: &str, t: &str, p: i32) -> TagPriority {

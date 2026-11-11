@@ -104,12 +104,26 @@ is clear what is being read. A repository that does publish its own is fetched
 from its own path, as before.
 .SS Querying
 .TP
-.BI search " NAME"
-Find a package by its exact name (case-insensitive), across all repositories,
-showing the candidate from the highest-priority repo. Unlike
-.BR file-search ,
-this does not substring-match: \fIfoo\fR matches only \fIfoo\fR, not
-\fIlibfoo\fR or \fIfoobar\fR.
+.B search \fR[\fB\-\-partial\fR|\fB\-\-exact\fR] \fINAME\fR
+Find a package by name (case-insensitive), across all repositories, showing
+for each name the candidate from the highest-priority repo. By default the
+match is exact: \fIfoo\fR finds only \fIfoo\fR, not \fIlibfoo\fR or
+\fIfoobar\fR. With
+.BR \-\-partial ,
+or
+.B SEARCH=partial
+in
+.IR slacker.conf ,
+every package whose name contains \fINAME\fR is listed, the exact name first,
+including installed packages that no repository offers.
+.B \-\-exact
+asks for the exact match whatever
+.B SEARCH
+says. Only package names are searched, never descriptions or files (see
+.BR file-search ).
+When an exact search finds no such name, up to 20 packages whose name contains
+the word are listed as suggestions and the exit status still says nothing was
+found.
 .TP
 .BI file-search " FILENAME"
 Report which package ships a given file, using the repository MANIFEST. The
@@ -882,6 +896,16 @@ is the cumulative \-current archive it fetches superseded official packages from
 \(em a revert\-only source, never consulted by
 .BR update ", " upgrade ", " install " or " check-updates ,
 so its historical packages never enter the priority model.
+.B SEARCH
+.RI ( exact " or " partial ;
+default
+.IR exact )
+decides whether
+.B search
+finds only the package with exactly the name given, or every package whose name
+contains it;
+.BR \-\-partial " and " \-\-exact
+override it for one run.
 .B BANNER
 (default
 .IR on )

@@ -1,6 +1,6 @@
 # slacker: δομή του κώδικα, κανόνες και ιστορικό του refactor
 
-Τελευταία ενημέρωση: 11 Νοε 2026. Αφορά το `slacker-cli` 0.14.0, τον κώδικα μετά το refactor (βήματα 1–14) και τις αλλαγές που έγιναν πάνω του από τότε (βλ. 8.5). Συντηρητής: Ioannis Anagnostakis (`rizitis`).
+Τελευταία ενημέρωση: 10 Νοε 2026. Αφορά το `slacker-cli` 0.14.0, τον κώδικα μετά το refactor (βήματα 1–14) και τις αλλαγές που έγιναν πάνω του από τότε (βλ. 8.5). Συντηρητής: Ioannis Anagnostakis (`rizitis`).
 
 Το έγγραφο απευθύνεται σε όποιον (άνθρωπο ή AI) πιάνει τον κώδικα για πρώτη φορά. Λέει **τι είναι πού, γιατί είναι εκεί, και τι δεν αλλάζει**. Αν κάτι εδώ διαφωνεί με τον κώδικα, ισχύει ο κώδικας, και διορθώνεται το έγγραφο.
 
@@ -95,7 +95,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 | `repos.rs` | add-repo, del-repo, pri-repo, add-tag, del-tag, vet-repo, trust-repo, distrust-repo | το vetting (`vet_repo`, `apply_vet`, `reload_repo`) είναι στον πυρήνα |
 | `blacklist.rs` | frozen, unfrozen, pin, unpin, nodep, undep | σέβονται το `--dry-run` (διόρθωση 0.12.5) |
 | `logs.rs` | history, show-changelog | το όνομα δεν είναι `history.rs`, γιατί υπάρχει ήδη |
-| `query.rs` | search, file-search, info | read-only |
+| `query.rs` | search, file-search, info | read-only. Το `search` κοιτάζει μόνο ονόματα πακέτων: ακριβές από προεπιλογή, κάθε όνομα που περιέχει τη λέξη με `--partial` ή `SEARCH=partial` (`PkgDb::search`, `search_rows`)· ακριβής αναζήτηση χωρίς τέτοιο όνομα δείχνει έως 20 ονόματα που την περιέχουν και βγαίνει πάλι με «δεν βρέθηκε». |
 | `find_mirror.rs` | find-mirror | δεν είναι `mirrors.rs`, γιατί υπάρχει ήδη |
 | `revert_pkg.rs` | revert-pkg | επικίνδυνο: GPG verify -> `upgradepkg --reinstall` -> προσφορά freeze |
 | `clean.rs` | clean-system, clean-cache | επικίνδυνο: σβήνει πακέτα |
@@ -124,7 +124,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 
 | αρχείο | τι |
 |---|---|
-| `config.rs` | φόρτωση/έλεγχος `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`. Κανόνες blacklist, pins (`@repo 100% name`) και εξαιρέσεις εξαρτήσεων (`!πακέτο:εξάρτηση`). Οι ανεκτικοί readers `banner_enabled`, `system_arch`, `newconfig_rules`, `proxy_settings`. Το `NEWCONFIG_AFTER` (`parse_newconfig_after`). |
+| `config.rs` | φόρτωση/έλεγχος `slacker.conf`, `repos`, `mirrors`, `blacklist`, `distro-upgrade.conf`. Κανόνες blacklist, pins (`@repo 100% name`) και εξαιρέσεις εξαρτήσεων (`!πακέτο:εξάρτηση`). Οι ανεκτικοί readers `banner_enabled`, `system_arch`, `newconfig_rules`, `proxy_settings`. Το `NEWCONFIG_AFTER` (`parse_newconfig_after`), `SEARCH` (`parse_search_partial`). |
 | `pkgdb.rs` | ενιαία βάση διαθέσιμων πακέτων, επίλυση προτεραιότητας, freeze/pin, matching |
 | `repo.rs` | fetch/parse PACKAGES.TXT, CHECKSUMS, `.dep` (διαβάζεται μία φορά ανά εκτέλεση και κρατιέται στη μνήμη· το `prefetch_deps` διαβάζει πολλά παράλληλα πριν από τον resolver), quarantine/trust ανά repo, έλεγχοι ασφαλών ονομάτων |
 | `pkg.rs` | ταυτότητα πακέτου (`name-version-arch-build`), build tags |
@@ -280,8 +280,8 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 
 ## 9. Tests
 
-- `cargo test`: **250 passed, 1 ignored** (251 συνολικά).
-- Ανά αρχείο: `main.rs` 50, `config.rs` 37, `pkgdb.rs` 34, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (το ένα ignored: πραγματικό TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 4, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, και από 1 στα `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **252 passed, 1 ignored** (253 συνολικά).
+- Ανά αρχείο: `main.rs` 50, `config.rs` 38, `pkgdb.rs` 35, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (το ένα ignored: πραγματικό TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 4, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, και από 1 στα `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Modules tests στο `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (με τα fixtures `av()` και `fixture()`), `freshness_tests`, `foundational_tests`.
 
 ---

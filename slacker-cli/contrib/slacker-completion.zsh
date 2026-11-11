@@ -73,6 +73,7 @@ _slacker() {
     if [[ $PREFIX == -* ]]; then
         local -a flags; flags=( $gflags )
         case $sub in
+        (search) flags+=( '--partial' '--exact' ) ;;
         (download) flags+=( '-o' '--output' ) ;;
         (history) flags+=( '--last' '--since' '--installed' '--removed' '--upgraded' ) ;;
         esac

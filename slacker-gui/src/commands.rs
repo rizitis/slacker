@@ -53,7 +53,7 @@ pub fn status() -> Spec {
     user(&["status"])
 }
 
-/// slacker's search takes exactly one exact name (case-insensitive).
+/// slacker's search takes exactly one name (case-insensitive).
 pub fn search(name: &str) -> Spec {
     user(&["search", name])
 }

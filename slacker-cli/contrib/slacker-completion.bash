@@ -76,6 +76,7 @@ _slacker_dispatch() {
     if [[ $cur == -* ]]; then
         local flags="$_slacker_global_flags"
         case $sub in
+            search) flags+=' --partial --exact' ;;
             download) flags+=' -o --output' ;;
             history) flags+=' --last --since --installed --removed --upgraded' ;;
         esac

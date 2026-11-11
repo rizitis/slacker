@@ -190,7 +190,9 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
     };
     match &cli.command {
         Cmd::Update { mode } => cmd_update(cli, &cfg, mode.as_deref()),
-        Cmd::Search { pattern } => cmd_search(&cfg, pattern),
+        Cmd::Search { partial, exact, pattern } => {
+            cmd_search(&cfg, pattern, *partial || (cfg.search_partial && !*exact))
+        }
         Cmd::FileSearch { filename } => cmd_file_search(&cfg, filename),
         Cmd::Info { name } => cmd_info(&cfg, name),
         Cmd::ListRepos => cmd_list_repos(&cfg),
@@ -3483,7 +3485,7 @@ mod selection_tests {
     fn privilege_classification() {
         use super::{requires_privilege, Cmd};
         // read-only commands are free
-        assert!(!requires_privilege(&Cmd::Search { pattern: "x".into() }));
+        assert!(!requires_privilege(&Cmd::Search { partial: false, exact: false, pattern: "x".into() }));
         assert!(!requires_privilege(&Cmd::Info { name: "x".into() }));
         assert!(!requires_privilege(&Cmd::CheckUpdates));
         assert!(!requires_privilege(&Cmd::ShowChangelog { repo: None }));
