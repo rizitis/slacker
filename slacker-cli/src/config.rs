@@ -127,6 +127,15 @@ pub struct Config {
     pub repos: Vec<Repo>,
     /// Resolve .dep files and pull in dependencies (RESOLVE_DEPS, default on).
     pub resolve_deps: bool,
+    /// Pass `--terse` to installpkg/upgradepkg: one line per package
+    /// (TERSE, default off).
+    pub terse: bool,
+    /// What happens when a command leaves new .new config files behind
+    /// (NEWCONFIG_AFTER, default ask).
+    pub newconfig_after: NewConfigAfter,
+    /// `search` lists every package whose name contains the word (SEARCH=partial)
+    /// instead of the exact name only (the default).
+    pub search_partial: bool,
     /// resolve-stock: also pull a stock package's stock deps from the
     /// local depgraph.db (RESOLVE_STOCK, default off).
     pub resolve_stock: bool,
@@ -195,6 +204,13 @@ pub struct Repo {
     /// only. Setting it is an explicit, at-your-own-risk override, since the
     /// login would then be exposed on the wire.
     pub insecure: bool,
+    /// `dep` flag on the repos line, deliberately undocumented. The official
+    /// tree and its subtrees ship no `.dep` files, so slacker does not ask for
+    /// them there (hundreds of 404s per upgrade). Should Slackware ever start
+    /// shipping `.dep` files, add `dep` to those repos lines and they are read
+    /// like any third-party repo's, with no code change. `PACKAGE REQUIRED` in
+    /// PACKAGES.TXT is read either way.
+    pub dep: bool,
 }
 
 impl Repo {
@@ -262,6 +278,12 @@ impl Config {
             Some(v) if v == "no" || v == "false" || v == "0" || v == "off" => false,
             _ => true,
         };
+
+        // TERSE defaults off; on/yes/true/1 passes --terse to installpkg and
+        // upgradepkg (removepkg is terse already).
+        let terse = parse_terse(conf.get("TERSE").map(String::as_str));
+        let newconfig_after = parse_newconfig_after(conf.get("NEWCONFIG_AFTER").map(String::as_str));
+        let search_partial = parse_search_partial(conf.get("SEARCH").map(String::as_str));
 
         // RESOLVE_STOCK defaults OFF. yes/on/true/1 turns it on. The user's
         // explicit declaration that this is a container/minimal system.
@@ -346,6 +368,9 @@ impl Config {
             blacklist,
             repos,
             resolve_deps,
+            terse,
+            newconfig_after,
+            search_partial,
             resolve_stock,
             stock_db_url,
             ignore_tags,
@@ -580,6 +605,57 @@ fn read_optional(path: &Path) -> Result<String, String> {
 pub fn banner_enabled(dir: &Path) -> bool {
     let text = read_optional(&dir.join("slacker.conf")).unwrap_or_default();
     parse_revert_enabled(parse_keyvals(&text).get("BANNER").map(String::as_str))
+}
+
+/// PROXY and NO_PROXY from slacker.conf (None when unset or empty), read
+/// leniently like `banner_enabled`: downloads happen in `status` and
+/// `find-mirror` too, which run before (and without) the full config load.
+pub fn proxy_settings(dir: &Path) -> (Option<String>, Option<String>) {
+    let text = read_optional(&dir.join("slacker.conf")).unwrap_or_default();
+    let conf = parse_keyvals(&text);
+    let get = |k: &str| conf.get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    (get("PROXY"), get("NO_PROXY"))
+}
+
+/// What `new-config` does on its own with some `.new` files, from slacker.conf:
+/// NEWCONFIG_OVERWRITE / NEWCONFIG_REMOVE / NEWCONFIG_KEEP, each a list of
+/// paths or globs of the installed file (without `.new`). A key may be repeated
+/// on several lines and its lines add up, unlike every other key.
+#[derive(Debug, Default, PartialEq)]
+pub struct NewConfigRules {
+    pub overwrite: Vec<String>,
+    pub remove: Vec<String>,
+    pub keep: Vec<String>,
+}
+
+/// Read the NEWCONFIG_* rules leniently, like `banner_enabled`: new-config runs
+/// without the full config load (it must work while repos/mirrors are broken),
+/// so a missing or unreadable slacker.conf just means no rules.
+pub fn newconfig_rules(dir: &Path) -> NewConfigRules {
+    parse_newconfig_rules(&read_optional(&dir.join("slacker.conf")).unwrap_or_default())
+}
+
+fn parse_newconfig_rules(text: &str) -> NewConfigRules {
+    let mut out = NewConfigRules::default();
+    for raw in text.lines() {
+        let line = strip_comment(raw);
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let list = match k.trim() {
+            "NEWCONFIG_OVERWRITE" => &mut out.overwrite,
+            "NEWCONFIG_REMOVE" => &mut out.remove,
+            "NEWCONFIG_KEEP" => &mut out.keep,
+            _ => continue,
+        };
+        let v = v.trim().trim_matches('"').trim_matches('\'');
+        // A path copied from slackpkg's post-functions.conf still names the
+        // .new file; it means the same installed file.
+        list.extend(
+            v.split_whitespace()
+                .map(|p| p.strip_suffix(".new").unwrap_or(p).to_string())
+                .filter(|p| !p.is_empty()),
+        );
+    }
+    out
 }
 
 /// Architecture tokens we recognise in Slackware package names / os-release.
@@ -1140,6 +1216,7 @@ fn parse_repos(
         let mut verify: Option<VerifyPolicy> = None;
         let mut credentials: Option<String> = None;
         let mut insecure = false;
+        let mut dep = false;
         for flag in fields {
             if flag == "official" {
                 official = true;
@@ -1149,6 +1226,10 @@ fn parse_repos(
                 subtree = true;
             } else if flag == "insecure" {
                 insecure = true;
+            } else if flag == "dep" {
+                // Not listed in the error below or in the docs on purpose;
+                // see Repo::dep.
+                dep = true;
             } else if let Some(v) = flag.strip_prefix("verify=") {
                 verify = Some(
                     VerifyPolicy::parse(v)
@@ -1180,6 +1261,7 @@ fn parse_repos(
             verify,
             credentials,
             insecure,
+            dep,
         });
     }
 
@@ -1219,6 +1301,43 @@ fn parse_max_parallel(raw: Option<&str>) -> usize {
         Some(Ok(n)) => n.clamp(1, 16),
         _ => 4,
     }
+}
+
+/// What an install, upgrade, reinstall, install-new, install-template or
+/// revert-pkg does when it leaves new .new config files behind. Only ever acted
+/// on at an interactive terminal without --yes; otherwise the reminder is
+/// printed whatever this says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewConfigAfter {
+    /// Ask "Run new-config now? [Y/n]".
+    Ask,
+    /// Run new-config right away, like slackpkg.
+    Run,
+    /// Only print the reminder (the default, as before this key existed).
+    Off,
+}
+
+/// NEWCONFIG_AFTER: ask or run; anything else (or nothing) is off.
+fn parse_newconfig_after(v: Option<&str>) -> NewConfigAfter {
+    match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("ask") => NewConfigAfter::Ask,
+        Some("run") => NewConfigAfter::Run,
+        _ => NewConfigAfter::Off,
+    }
+}
+
+/// SEARCH: partial; anything else (or nothing) is the exact name, as before
+/// this key existed.
+fn parse_search_partial(v: Option<&str>) -> bool {
+    v.is_some_and(|s| s.trim().eq_ignore_ascii_case("partial"))
+}
+
+/// TERSE: off unless explicitly on/yes/true/1.
+fn parse_terse(v: Option<&str>) -> bool {
+    matches!(
+        v.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("on") | Some("yes") | Some("true") | Some("1")
+    )
 }
 
 /// Parse a `REVERT` on/off value. Default is on; only an explicit
@@ -1315,6 +1434,52 @@ mod tests {
         assert_eq!(parse_max_parallel(Some("999")), 16); // ceiling
         assert_eq!(parse_max_parallel(Some("abc")), 4); // garbage -> default
         assert_eq!(parse_max_parallel(Some("")), 4); // empty -> default
+    }
+
+    #[test]
+    fn newconfig_rules_add_up_across_lines() {
+        let text = "\
+            # NEWCONFIG_KEEP=/etc/ignored\n\
+            NEWCONFIG_OVERWRITE=/etc/rc.d/rc.*\n\
+            NEWCONFIG_KEEP=/etc/rc.d/rc.modules.local\n\
+            NEWCONFIG_KEEP=\"/etc/ssh/sshd_config /etc/slacker/mirrors\"  # two at once\n\
+            NEWCONFIG_REMOVE=/etc/ntp.conf.new\n\
+            TERSE=on\n";
+        let r = parse_newconfig_rules(text);
+        assert_eq!(r.overwrite, vec!["/etc/rc.d/rc.*"]);
+        assert_eq!(r.keep, vec!["/etc/rc.d/rc.modules.local", "/etc/ssh/sshd_config", "/etc/slacker/mirrors"]);
+        assert_eq!(r.remove, vec!["/etc/ntp.conf"]); // a slackpkg-style .new path is accepted
+        assert_eq!(parse_newconfig_rules(""), NewConfigRules::default());
+    }
+
+    #[test]
+    fn newconfig_after_defaults_to_off() {
+        assert_eq!(parse_newconfig_after(None), NewConfigAfter::Off);
+        assert_eq!(parse_newconfig_after(Some("typo")), NewConfigAfter::Off);
+        assert_eq!(parse_newconfig_after(Some("Ask")), NewConfigAfter::Ask);
+        assert_eq!(parse_newconfig_after(Some(" RUN ")), NewConfigAfter::Run);
+        assert_eq!(parse_newconfig_after(Some("off")), NewConfigAfter::Off);
+    }
+
+    #[test]
+    fn search_is_exact_unless_set_to_partial() {
+        assert!(!parse_search_partial(None));
+        assert!(!parse_search_partial(Some("exact")));
+        assert!(!parse_search_partial(Some("typo")));
+        assert!(parse_search_partial(Some("partial")));
+        assert!(parse_search_partial(Some(" Partial ")));
+    }
+
+    #[test]
+    fn terse_defaults_off() {
+        assert!(!parse_terse(None));
+        assert!(!parse_terse(Some("off")));
+        assert!(!parse_terse(Some("anything")));
+        assert!(parse_terse(Some("on")));
+        assert!(parse_terse(Some(" ON ")));
+        assert!(parse_terse(Some("yes")));
+        assert!(parse_terse(Some("true")));
+        assert!(parse_terse(Some("1")));
     }
 
     #[test]
@@ -1578,6 +1743,35 @@ mod tests {
     }
 
     #[test]
+    fn repos_dep_flag_is_off_unless_given() {
+        let (repos, _t) = parse_repos(
+            "100 slackware mirror official\n\
+             200 patches https://m/slackware64-current/patches subtree dep\n",
+            Some("https://m/slackware64-current/"),
+        )
+        .unwrap();
+        assert!(!repos.iter().find(|r| r.name == "slackware").unwrap().dep);
+        assert!(repos.iter().find(|r| r.name == "patches").unwrap().dep);
+    }
+
+    #[test]
+    fn official_and_subtrees_are_not_asked_for_dep_files() {
+        let (repos, _t) = parse_repos(
+            "100 slackware mirror official\n\
+             200 patches https://m/s/patches subtree immutable\n\
+             90 extras https://m/s/extra subtree dep\n\
+             80 conraid https://slackers.it/r\n",
+            Some("https://m/s/"),
+        )
+        .unwrap();
+        let reads = |n: &str| crate::repo::reads_dep_files(repos.iter().find(|r| r.name == n).unwrap());
+        assert!(!reads("slackware"));
+        assert!(!reads("patches"));
+        assert!(reads("extras")); // the dep flag turns it back on
+        assert!(reads("conraid"));
+    }
+
+    #[test]
     fn repos_subtree_flag_parses_and_resolves_parent_base() {
         let (repos, _t) = parse_repos(
             "100 slackware mirror official\n\
@@ -1755,6 +1949,9 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            terse: false,
+            newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1802,6 +1999,9 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            terse: false,
+            newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1851,6 +2051,9 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            terse: false,
+            newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1900,6 +2103,9 @@ mod tests {
             blacklist: vec![],
             repos,
             resolve_deps: true,
+            terse: false,
+            newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],

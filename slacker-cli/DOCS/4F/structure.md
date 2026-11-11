@@ -246,8 +246,9 @@ generate-template  install-template  remove-template  delete-template
   installed package), while the same version offered by a **higher**-priority
   repo still counts (a genuine source migration, consistent with `upgrade-all`).
   `reinstall` is the command that acts on same-version packages.
-- `search` matches an **exact** package name (case-insensitive); use `info` or
-  `file-search` for broader lookups.
+- `search` matches an **exact** package name (case-insensitive) by default;
+  `--partial` or `SEARCH=partial` lists every name that contains the word.
+  Names only, never descriptions; `file-search` is for files.
 - `find-mirror` - probe the official Slackware mirror list and rank the fastest,
   fresh https mirrors for your location (one timed range request per mirror reads
   both latency and the mirror's own timestamp; stale mirrors >48h behind are

@@ -1,4 +1,4 @@
-//! Search: `slacker search NAME` (one exact name), with install/remove.
+//! Search: `slacker search NAME` (one name; exact or partial is slacker.conf's SEARCH), with install/remove.
 
 use std::rc::Rc;
 
@@ -21,7 +21,7 @@ pub fn page(ctx: &Ctx) -> Page {
         .build();
     entry.add_css_class("search-hero");
     let hint = gtk::Label::builder()
-        .label("Exact name, not case-sensitive. Press Enter to search.")
+        .label("Package name, not case-sensitive. Press Enter to search.")
         .xalign(0.0)
         .build();
     hint.add_css_class("dim-label");
@@ -76,7 +76,7 @@ pub fn page(ctx: &Ctx) -> Page {
         entry.connect_activate(move |e| match commands::single_name(&e.text()) {
             Ok(name) => {
                 hint.remove_css_class("error");
-                hint.set_text("Exact name, not case-sensitive. Press Enter to search.");
+                hint.set_text("Package name, not case-sensitive. Press Enter to search.");
                 s(name);
             }
             Err(msg) => {
@@ -235,11 +235,9 @@ pub fn show_info(ctx: &Ctx, name: &str) {
     view.set_content(Some(&inner));
     let dialog = adw::Dialog::builder()
         .title(name)
-        .content_width(720)
-        .content_height(560)
         .child(&view)
         .build();
-    dialog.present(Some(&ctx.window));
+    widgets::present_fitted(&dialog, &ctx.window, (720, 560));
 
     ctx.runner.capture(commands::info(name), move |_, text| {
         widgets::clear(&content);

@@ -32,119 +32,194 @@ pub(crate) fn search_display<'a>(
         .find(|c| c.id.build_tag() == i.build_tag())
 }
 
-pub(crate) fn cmd_search(cfg: &Config, term: &str) -> Result<Outcome, String> {
+/// A line of `search` output: a package some repo offers, or (partial search
+/// only) an installed one that no repo offers.
+enum SearchRow<'a> {
+    Offered(&'a repo::AvailPkg),
+    InstalledOnly(&'a pkg::PkgId),
+}
+
+impl SearchRow<'_> {
+    fn name(&self) -> &str {
+        match self {
+            SearchRow::Offered(p) => &p.id.name,
+            SearchRow::InstalledOnly(i) => &i.name,
+        }
+    }
+}
+
+/// What `search TERM` lists, sorted by name with the exact name first. A
+/// partial search also lists installed packages that no repo offers (local and
+/// SBo builds); the exact search reports that case in words, as it always did.
+fn search_rows<'a>(
+    db: &'a PkgDb,
+    installed: &'a [pkg::PkgId],
+    term: &str,
+    partial: bool,
+) -> Vec<SearchRow<'a>> {
+    let mut rows: Vec<SearchRow> = db.search(term, partial).into_iter().map(SearchRow::Offered).collect();
+    if partial {
+        let needle = term.to_lowercase();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for i in installed {
+            if i.name.to_lowercase().contains(&needle)
+                && db.candidates(&i.name).is_empty()
+                && seen.insert(i.name.as_str())
+            {
+                rows.push(SearchRow::InstalledOnly(i));
+            }
+        }
+        rows.sort_by(|a, b| {
+            let exact = |r: &SearchRow| !r.name().eq_ignore_ascii_case(term);
+            exact(a).cmp(&exact(b)).then_with(|| a.name().cmp(b.name()))
+        });
+    }
+    rows
+}
+
+pub(crate) fn cmd_search(cfg: &Config, term: &str, partial: bool) -> Result<Outcome, String> {
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let results = db.search(term);
-    if results.is_empty() {
-        if db.is_empty() {
-            println!("No package metadata yet — run `slacker update` first.");
-        } else if let Some(i) = system::installed_by_name_ci(&installed, term) {
-            // Nothing in any repo, but it IS on the system: a local or SBo build.
-            // Say so — sending the user to `info` without a word about it reads
-            // as "this does not exist", which is false.
-            //
-            // Matched case-insensitively, like `PkgDb::search` above: matching
-            // exactly here would apply two different rules in one command, and
-            // the builds this branch exists for (SBo/local) are the ones with
-            // capitals in their names. The lines below name the package by its
-            // real id, not by what was typed, so the suggested `info` command
-            // works as printed.
-            println!("No repo offers '{}', but it is installed: {}", i.name, i.tag());
-            println!(
-                "{}",
-                ui::dim(&format!(
-                    "it came from outside the configured repos, so nothing can upgrade it — \
-                     `slacker info {}`.",
-                    i.name
-                ))
-            );
-        } else {
-            let mut msg = format!("No package named '{term}'.");
-            if let Some(s) = closest(term, db.available_names()) {
-                msg.push_str(&format!(" Did you mean '{s}'?"));
-            }
-            println!("{msg}");
-            println!(
-                "{}",
-                ui::dim(&format!(
-                    "search matches exact names — try `slacker file-search {term}` for a file, \
-                     or `slacker info {term}`."
-                ))
-            );
+    let rows = search_rows(&db, &installed, term, partial);
+    if !rows.is_empty() {
+        for row in &rows {
+            print_search_row(&db, &installed, row);
         }
-        return Ok(Outcome::NothingFound);
+        return Ok(Outcome::Ok);
     }
-    for p in results {
-        // `p` is the priority-winner candidate that `search` returns. When the
-        // package is installed the line must describe the INSTALLED build: the
-        // candidate matching it when some repo ships that build, otherwise the
-        // installed id itself — an `_SBo`/local build that no configured repo
-        // can account for. The blacklist test stays on the winner `p`, so the
-        // frozen/blacklisted marking is unchanged.
-        let inst = system::installed_by_name(&installed, &p.id.name);
-        let cands = db.candidates(&p.id.name);
-        let shown = search_display(inst, &cands);
-
-        // Source label, name and version, taken from whichever of the three the
-        // line is really about.
-        let (label, name, version) = match (shown, inst) {
-            (Some(c), _) => (c.repo.clone(), c.id.name.as_str(), c.id.version.as_str()),
-            (None, Some(i)) => (
-                installed_source_label(i).to_string(),
-                i.name.as_str(),
-                i.version.as_str(),
-            ),
-            (None, None) => (p.repo.clone(), p.id.name.as_str(), p.id.version.as_str()),
-        };
-        let summary = shown.map_or(p.summary.as_str(), |c| c.summary.as_str());
-
-        let mark = if inst.is_some() {
-            ui::green(&format!("{:<11}", "installed"))
-        } else {
-            ui::red(&format!("{:<11}", "uninstalled"))
-        };
-        let bl = if p.frozen {
-            ui::purple(" [blacklisted]")
-        } else {
-            String::new()
-        };
-        // Surface the other repos that ship this name (search shows one winner
-        // per name); `info <name>` gives the full per-repo candidate list.
-        // Each is named as `<repo> <name>-<version>`: another repo may carry
-        // something entirely different (e.g. testing shipping a whole other
-        // kernel series), and a bare repo name would hide that until `info` is
-        // run. The package name is repeated rather than joined to the repo with
-        // a dash, so `testing kernel-generic-7.1.7` cannot be misread as a repo
-        // called "testing-7.1.7". `candidates` is priority-ordered, so the first
-        // entry seen for a repo is the one that repo would resolve to — later
-        // builds of the same name in the same repo are not listed.
-        let mut seen_repos: Vec<&str> = Vec::new();
-        let mut others: Vec<String> = Vec::new();
-        for c in &cands {
-            let r = c.repo.as_str();
-            if r != label && !seen_repos.contains(&r) {
-                seen_repos.push(r);
-                others.push(format!("{r} {}-{}", c.id.name, c.id.version));
-            }
+    if db.is_empty() {
+        println!("No package metadata yet — run `slacker update` first.");
+    } else if partial {
+        let mut msg = format!("No package with '{term}' in its name.");
+        if let Some(s) = closest(term, db.available_names()) {
+            msg.push_str(&format!(" Did you mean '{s}'?"));
         }
-        let also = if others.is_empty() {
-            String::new()
-        } else {
-            ui::dim(&format!("  (also: {})", others.join(", ")))
-        };
+        println!("{msg}");
         println!(
-            "{} {} {}{}  {}{}{}",
-            ui::cyan(&format!("[{label}]")),
-            mark,
-            ui::white(name),
-            ui::dim(&format!("-{version}")),
-            summary,
-            bl,
-            also
+            "{}",
+            ui::dim(&format!(
+                "search looks at package names only — try `slacker file-search {term}` for a file."
+            ))
+        );
+    } else if let Some(i) = system::installed_by_name_ci(&installed, term) {
+        // Nothing in any repo, but it IS on the system: a local or SBo build.
+        // Say so — sending the user to `info` without a word about it reads
+        // as "this does not exist", which is false.
+        //
+        // Matched case-insensitively, like `PkgDb::search` above: matching
+        // exactly here would apply two different rules in one command, and
+        // the builds this branch exists for (SBo/local) are the ones with
+        // capitals in their names. The lines below name the package by its
+        // real id, not by what was typed, so the suggested `info` command
+        // works as printed.
+        println!("No repo offers '{}', but it is installed: {}", i.name, i.tag());
+        println!(
+            "{}",
+            ui::dim(&format!(
+                "it came from outside the configured repos, so nothing can upgrade it — \
+                 `slacker info {}`.",
+                i.name
+            ))
+        );
+    } else {
+        let mut msg = format!("No package named '{term}'.");
+        if let Some(s) = closest(term, db.available_names()) {
+            msg.push_str(&format!(" Did you mean '{s}'?"));
+        }
+        println!("{msg}");
+        println!(
+            "{}",
+            ui::dim(&format!(
+                "search matches exact names — try `slacker file-search {term}` for a file, \
+                 or `slacker info {term}` or `slacker search {term} --partial`."
+            ))
         );
     }
-    Ok(Outcome::Ok)
+    Ok(Outcome::NothingFound)
+}
+
+/// Print one line of `search` output.
+fn print_search_row(db: &PkgDb, installed: &[pkg::PkgId], row: &SearchRow) {
+    let p = match row {
+        SearchRow::Offered(p) => *p,
+        SearchRow::InstalledOnly(i) => {
+            println!(
+                "{} {} {}{}  ",
+                ui::cyan(&format!("[{}]", installed_source_label(i))),
+                ui::green(&format!("{:<11}", "installed")),
+                ui::white(&i.name),
+                ui::dim(&format!("-{}", i.version)),
+            );
+            return;
+        }
+    };
+    // `p` is the priority-winner candidate that `search` returns. When the
+    // package is installed the line must describe the INSTALLED build: the
+    // candidate matching it when some repo ships that build, otherwise the
+    // installed id itself — an `_SBo`/local build that no configured repo
+    // can account for. The blacklist test stays on the winner `p`, so the
+    // frozen/blacklisted marking is unchanged.
+    let inst = system::installed_by_name(installed, &p.id.name);
+    let cands = db.candidates(&p.id.name);
+    let shown = search_display(inst, &cands);
+
+    // Source label, name and version, taken from whichever of the three the
+    // line is really about.
+    let (label, name, version) = match (shown, inst) {
+        (Some(c), _) => (c.repo.clone(), c.id.name.as_str(), c.id.version.as_str()),
+        (None, Some(i)) => (
+            installed_source_label(i).to_string(),
+            i.name.as_str(),
+            i.version.as_str(),
+        ),
+        (None, None) => (p.repo.clone(), p.id.name.as_str(), p.id.version.as_str()),
+    };
+    let summary = shown.map_or(p.summary.as_str(), |c| c.summary.as_str());
+
+    let mark = if inst.is_some() {
+        ui::green(&format!("{:<11}", "installed"))
+    } else {
+        ui::red(&format!("{:<11}", "uninstalled"))
+    };
+    let bl = if p.frozen {
+        ui::purple(" [blacklisted]")
+    } else {
+        String::new()
+    };
+    // Surface the other repos that ship this name (search shows one winner
+    // per name); `info <name>` gives the full per-repo candidate list.
+    // Each is named as `<repo> <name>-<version>`: another repo may carry
+    // something entirely different (e.g. testing shipping a whole other
+    // kernel series), and a bare repo name would hide that until `info` is
+    // run. The package name is repeated rather than joined to the repo with
+    // a dash, so `testing kernel-generic-7.1.7` cannot be misread as a repo
+    // called "testing-7.1.7". `candidates` is priority-ordered, so the first
+    // entry seen for a repo is the one that repo would resolve to — later
+    // builds of the same name in the same repo are not listed.
+    let mut seen_repos: Vec<&str> = Vec::new();
+    let mut others: Vec<String> = Vec::new();
+    for c in &cands {
+        let r = c.repo.as_str();
+        if r != label && !seen_repos.contains(&r) {
+            seen_repos.push(r);
+            others.push(format!("{r} {}-{}", c.id.name, c.id.version));
+        }
+    }
+    let also = if others.is_empty() {
+        String::new()
+    } else {
+        ui::dim(&format!("  (also: {})", others.join(", ")))
+    };
+    println!(
+        "{} {} {}{}  {}{}{}",
+        ui::cyan(&format!("[{label}]")),
+        mark,
+        ui::white(name),
+        ui::dim(&format!("-{version}")),
+        summary,
+        bl,
+        also
+    );
 }
 
 /// True when the package filename of a file-search hit names a build that is

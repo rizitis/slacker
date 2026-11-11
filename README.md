@@ -105,7 +105,7 @@ runs the slacker binary, reads what slacker prints, and lays it out.
 
 <!-- αυτή η γραμμή δεν φαίνεται  ![repos](./slacker-gui/dev-docs/slacker-2.png) -->
 
-<video src="/attachments/4b3ab746-b83f-4794-8765-2269bd03086f" controls></video>
+<video src="/attachments/17506fcd-1fd4-4781-a495-c5376302be2d" controls></video>
 ---
 
 ## slacker-src

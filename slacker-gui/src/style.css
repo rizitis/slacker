@@ -111,6 +111,11 @@
   font-weight: 700;
   background-color: alpha(currentColor, 0.10);
 }
+/* A tag that is a button (the source of an installed package): the tag is the
+   whole button, with no frame of its own. */
+button.tag-button { padding: 0; min-height: 0; min-width: 0; border-radius: 999px; }
+/* One line of the Sources menu on the Installed page: a check and its count. */
+.source-line { margin: 0 10px 0 4px; }
 .tag.accent { color: @accent_color; }
 .tag.purple { color: @slk_purple; }
 

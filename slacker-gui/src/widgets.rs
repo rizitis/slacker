@@ -174,6 +174,51 @@ pub fn raw_text(text: &str) -> gtk::Widget {
     frame.upcast()
 }
 
+/// How much of its window a dialog takes, in percent, and how wide it gets.
+const DIALOG_SHARE: i32 = 85;
+const DIALOG_WIDEST: i32 = 1500;
+
+/// The size of a dialog over a window of `window` pixels: most of the window,
+/// never less than `least` (libadwaita itself keeps it inside a smaller window)
+/// and never wider than text stays readable.
+fn dialog_size(window: (i32, i32), least: (i32, i32)) -> (i32, i32) {
+    let width = (window.0 * DIALOG_SHARE / 100).clamp(least.0, DIALOG_WIDEST.max(least.0));
+    let height = (window.1 * DIALOG_SHARE / 100).max(least.1);
+    (width, height)
+}
+
+/// Open `dialog` over `window`, sized to it and following it when the window
+/// is resized, so that a large window gives long lines the room they need.
+pub fn present_fitted(dialog: &adw::Dialog, window: &impl IsA<gtk::Window>, least: (i32, i32)) {
+    let window = window.as_ref().clone();
+    let fit = {
+        let dialog = dialog.downgrade();
+        move |width: i32, height: i32| {
+            let Some(dialog) = dialog.upgrade() else { return };
+            let (width, height) = dialog_size((width, height), least);
+            dialog.set_content_width(width);
+            dialog.set_content_height(height);
+        }
+    };
+    fit(window.width(), window.height());
+    if let Some(surface) = window.surface() {
+        // The surface has its new size before the window's widgets are laid out
+        // again, so the size is read from it.
+        let (on_width, on_height) = (fit.clone(), fit);
+        let handlers = [
+            surface.connect_width_notify(move |s| on_width(s.width(), s.height())),
+            surface.connect_height_notify(move |s| on_height(s.width(), s.height())),
+        ];
+        let handlers = std::cell::RefCell::new(Some(handlers));
+        dialog.connect_closed(move |_| {
+            for handler in handlers.borrow_mut().take().into_iter().flatten() {
+                surface.disconnect(handler);
+            }
+        });
+    }
+    dialog.present(Some(&window));
+}
+
 pub fn flat_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
     let b = gtk::Button::from_icon_name(icon_name);
     b.set_tooltip_text(Some(tooltip));
@@ -188,4 +233,21 @@ pub fn row_button(label: &str, class: Option<&str>) -> gtk::Button {
         b.add_css_class(c);
     }
     b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dialog_size;
+
+    #[test]
+    fn a_dialog_takes_most_of_its_window_within_limits() {
+        // The default window: wider than the old fixed 720.
+        assert_eq!(dialog_size((1180, 780), (720, 560)), (1003, 663));
+        // A large window: wide, but capped so lines stay readable.
+        assert_eq!(dialog_size((1876, 833), (720, 560)), (1500, 708));
+        // A small window: never asks for less than before.
+        assert_eq!(dialog_size((600, 400), (720, 560)), (720, 560));
+        // A dialog that was already wider than the cap keeps its size.
+        assert_eq!(dialog_size((1000, 700), (1600, 820)), (1600, 820));
+    }
 }

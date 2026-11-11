@@ -1,8 +1,9 @@
 //! new-config: review the *.new configuration files.
 
 use crate::cli::Cli;
+use crate::config::NewConfigRules;
 use crate::{confirm, Outcome};
-use crate::{newconfig, ui};
+use crate::{config, newconfig, ui};
 use std::io::Write;
 
 /// Byte-for-byte comparison. A missing/unreadable file counts as "not
@@ -126,6 +127,142 @@ fn protected_reason(target: &std::path::Path) -> Option<&'static str> {
         .iter()
         .find(|(p, _)| target == std::path::Path::new(p))
         .map(|(_, why)| *why)
+}
+
+/// What a NEWCONFIG_* rule in slacker.conf decides for one file.
+#[derive(Debug, PartialEq)]
+enum Preset {
+    Overwrite,
+    Remove,
+    /// Keep the installed file and rename the .new to .new.kept, so nothing
+    /// is left pending as .new and nothing is lost.
+    Keep,
+    /// Only a glob in NEWCONFIG_OVERWRITE matched a protected file: it goes to
+    /// the menu as usual, with a note.
+    Protected,
+}
+
+/// Shell-style match of one path: `*` is any run of characters and `?` any one
+/// character, neither crossing a `/`; everything else is literal.
+fn glob_match(pat: &str, path: &str) -> bool {
+    fn go(p: &[char], s: &[char]) -> bool {
+        match p.first() {
+            None => s.is_empty(),
+            Some('*') => (0..=s.len())
+                .take_while(|&i| i == 0 || s[i - 1] != '/')
+                .any(|i| go(&p[1..], &s[i..])),
+            Some('?') => s.first().is_some_and(|c| *c != '/') && go(&p[1..], &s[1..]),
+            Some(c) => s.first() == Some(c) && go(&p[1..], &s[1..]),
+        }
+    }
+    let (p, s): (Vec<char>, Vec<char>) = (pat.chars().collect(), path.chars().collect());
+    go(&p, &s)
+}
+
+fn is_glob(pat: &str) -> bool {
+    pat.contains(['*', '?'])
+}
+
+/// The rule for `target`, if any. The safer action wins when several match:
+/// keep, then remove, then overwrite. A glob never overwrites a protected file;
+/// only its exact path does.
+fn preset_for(target: &std::path::Path, rules: &NewConfigRules) -> Option<Preset> {
+    let t = target.to_str()?;
+    let hit = |list: &[String]| list.iter().any(|p| glob_match(p, t));
+    if hit(&rules.keep) {
+        return Some(Preset::Keep);
+    }
+    if hit(&rules.remove) {
+        return Some(Preset::Remove);
+    }
+    if rules.overwrite.iter().any(|p| !is_glob(p) && p == t) {
+        return Some(Preset::Overwrite);
+    }
+    if hit(&rules.overwrite) {
+        return Some(if is_protected_config(target) { Preset::Protected } else { Preset::Overwrite });
+    }
+    None
+}
+
+/// The slacker.conf key that decides `target` in advance, if any. Shown next
+/// to the .new files a command leaves behind, so a file the user keeps (or has
+/// a rule for) is seen as such and not as one more decision to make.
+pub(crate) fn preset_key(target: &std::path::Path, rules: &NewConfigRules) -> Option<&'static str> {
+    match preset_for(target, rules)? {
+        Preset::Keep => Some("NEWCONFIG_KEEP"),
+        Preset::Remove => Some("NEWCONFIG_REMOVE"),
+        Preset::Overwrite => Some("NEWCONFIG_OVERWRITE"),
+        Preset::Protected => None,
+    }
+}
+
+/// Carry out the NEWCONFIG_* rules on the files that need a decision, report
+/// each one, and return those still left for the menu.
+fn apply_presets<'a>(
+    rules: &NewConfigRules,
+    conflicts: Vec<&'a newconfig::NewConfig>,
+    dry_run: bool,
+) -> Result<Vec<&'a newconfig::NewConfig>, String> {
+    let mut left = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    // Padded before colouring, so the paths line up in both runs.
+    let would = |done: &str, dry: &str| format!("{:<15}", if dry_run { dry } else { done });
+    for nc in conflicts {
+        let target = nc.target.display().to_string();
+        let new_file = nc.new_file.display().to_string();
+        match preset_for(&nc.target, rules) {
+            None => left.push(nc),
+            Some(Preset::Overwrite) => {
+                if !dry_run {
+                    overwrite_with_orig(nc)?;
+                }
+                lines.push(format!(
+                    "  {}  {target}  {}",
+                    ui::green(&would("overwrote", "would overwrite")),
+                    ui::dim("(previous saved as .orig)")
+                ));
+            }
+            Some(Preset::Remove) => {
+                if !dry_run {
+                    std::fs::remove_file(&nc.new_file).map_err(|e| format!("remove {new_file}: {e}"))?;
+                }
+                lines.push(format!(
+                    "  {}  {new_file}  {}",
+                    ui::green(&would("removed", "would remove")),
+                    ui::dim("(kept your current file)")
+                ));
+            }
+            Some(Preset::Keep) => {
+                // Keep the user's file and move the .new aside as .new.kept:
+                // nothing stays pending as .new, and nothing is lost.
+                let kept = format!("{new_file}.kept");
+                if !dry_run {
+                    std::fs::rename(&nc.new_file, &kept).map_err(|e| format!("rename {new_file}: {e}"))?;
+                }
+                lines.push(format!(
+                    "  {}  {target}  {}",
+                    ui::green(&would("kept", "would keep")),
+                    ui::dim(&format!("(new version saved as {kept})"))
+                ));
+            }
+            Some(Preset::Protected) => {
+                lines.push(format!(
+                    "  {}  {new_file}  {}",
+                    ui::yellow(&would("skipped", "would skip")),
+                    ui::dim("(protected: name it exactly in NEWCONFIG_OVERWRITE to overwrite)")
+                ));
+                left.push(nc);
+            }
+        }
+    }
+    if !lines.is_empty() {
+        println!();
+        println!("{}", ui::blue("Pre-set in slacker.conf:"));
+        for l in lines {
+            println!("{l}");
+        }
+    }
+    Ok(left)
 }
 
 /// Warn about `.new` files that were deliberately left alone, naming them so the
@@ -338,8 +475,36 @@ pub(crate) fn cmd_new_config(cli: &Cli, dist_mode: bool) -> Result<Outcome, Stri
         }
     }
 
+    // Files the user decided about in advance (NEWCONFIG_* in slacker.conf)
+    // are handled here; only the rest reach the list and the menu.
+    // In a distribution upgrade only NEWCONFIG_KEEP applies: OVERWRITE and
+    // REMOVE are for ordinary updates, and a release jump is when every config
+    // should be seen, but a file the user said never to touch is never touched,
+    // not even by the "(A)ll new" choice (it changes nothing: the new version
+    // is still there as .new.kept).
+    let rules = if dist_mode {
+        let r = config::newconfig_rules(&cli.config_dir);
+        if !r.overwrite.is_empty() || !r.remove.is_empty() {
+            println!(
+                "{}",
+                ui::dim(
+                    "NEWCONFIG_OVERWRITE and NEWCONFIG_REMOVE are not applied in a distribution upgrade (NEWCONFIG_KEEP is)."
+                )
+            );
+        }
+        NewConfigRules { keep: r.keep, ..NewConfigRules::default() }
+    } else {
+        config::newconfig_rules(&cli.config_dir)
+    };
+    let had = conflicts.len();
+    let conflicts = apply_presets(&rules, conflicts, cli.dry_run)?;
+
     if conflicts.is_empty() {
-        println!("{}", ui::green("No config files need merging."));
+        if had > 0 {
+            println!("{}", ui::green("Nothing else needs a decision."));
+        } else {
+            println!("{}", ui::green("No config files need merging."));
+        }
         return Ok(Outcome::Ok);
     }
 
@@ -548,6 +713,55 @@ pub(crate) fn cmd_new_config(cli: &Cli, dist_mode: bool) -> Result<Outcome, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn globs_are_shell_like() {
+        assert!(glob_match("/etc/rc.d/rc.*", "/etc/rc.d/rc.S"));
+        assert!(glob_match("/etc/rc.d/rc.?", "/etc/rc.d/rc.M"));
+        assert!(!glob_match("/etc/rc.d/rc.?", "/etc/rc.d/rc.local"));
+        assert!(glob_match("/etc/*", "/etc/fstab"));
+        assert!(!glob_match("/etc/*", "/etc/rc.d/rc.S")); // * stops at /
+        assert!(glob_match("/etc/*/*", "/etc/rc.d/rc.S"));
+        assert!(glob_match("/etc/ntp.conf", "/etc/ntp.conf"));
+        assert!(!glob_match("/etc/ntp.conf", "/etc/ntp.conf2"));
+    }
+
+    #[test]
+    fn presets_prefer_the_safer_action_and_spare_protected_files() {
+        use std::path::Path;
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let rules = NewConfigRules {
+            overwrite: s(&["/etc/rc.d/rc.*", "/etc/rc.d/rc.local_shutdown", "/etc/ntp.conf"]),
+            remove: s(&["/etc/ntp.conf"]),
+            keep: s(&["/etc/rc.d/rc.modules.local"]),
+        };
+        let p = |t: &str| preset_for(Path::new(t), &rules);
+        assert_eq!(p("/etc/rc.d/rc.S"), Some(Preset::Overwrite));
+        assert_eq!(p("/etc/rc.d/rc.modules.local"), Some(Preset::Keep)); // keep beats overwrite
+        assert_eq!(p("/etc/ntp.conf"), Some(Preset::Remove)); // remove beats overwrite
+        assert_eq!(p("/etc/rc.d/rc.local"), Some(Preset::Protected)); // a glob spares it
+        assert_eq!(p("/etc/rc.d/rc.local_shutdown"), Some(Preset::Overwrite)); // named exactly
+        assert_eq!(p("/etc/fstab"), None);
+    }
+
+    #[test]
+    fn keep_always_wins() {
+        use std::path::Path;
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        // The same file under all three keys, by exact path and by glob, and a
+        // protected file kept by glob: NEWCONFIG_KEEP decides every one.
+        let rules = NewConfigRules {
+            overwrite: s(&["/etc/ssh/sshd_config", "/etc/*"]),
+            remove: s(&["/etc/ssh/sshd_config"]),
+            keep: s(&["/etc/ssh/*", "/etc/passwd"]),
+        };
+        let k = |t: &str| preset_key(Path::new(t), &rules);
+        assert_eq!(k("/etc/ssh/sshd_config"), Some("NEWCONFIG_KEEP"));
+        assert_eq!(k("/etc/passwd"), Some("NEWCONFIG_KEEP"));
+        assert_eq!(k("/etc/fstab"), Some("NEWCONFIG_OVERWRITE"));
+        assert_eq!(k("/etc/shadow"), None); // protected: a glob overwrite only sends it to the menu
+        assert_eq!(k("/usr/share/vim/vimrc"), None);
+    }
 
     #[test]
     fn identity_and_network_configs_are_never_auto_replaced() {

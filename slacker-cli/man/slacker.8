@@ -1,4 +1,4 @@
-.TH SLACKER 8 "November 2026" "slacker 0.13.0" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.14.0" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -104,12 +104,23 @@ is clear what is being read. A repository that does publish its own is fetched
 from its own path, as before.
 .SS Querying
 .TP
-.BI search " NAME"
-Find a package by its exact name (case-insensitive), across all repositories,
-showing the candidate from the highest-priority repo. Unlike
-.BR file-search ,
-this does not substring-match: \fIfoo\fR matches only \fIfoo\fR, not
-\fIlibfoo\fR or \fIfoobar\fR.
+.B search \fR[\fB\-\-partial\fR|\fB\-\-exact\fR] \fINAME\fR
+Find a package by name (case-insensitive), across all repositories, showing
+for each name the candidate from the highest-priority repo. By default the
+match is exact: \fIfoo\fR finds only \fIfoo\fR, not \fIlibfoo\fR or
+\fIfoobar\fR. With
+.BR \-\-partial ,
+or
+.B SEARCH=partial
+in
+.IR slacker.conf ,
+every package whose name contains \fINAME\fR is listed, the exact name first,
+including installed packages that no repository offers.
+.B \-\-exact
+asks for the exact match whatever
+.B SEARCH
+says. Only package names are searched, never descriptions or files (see
+.BR file-search ).
 .TP
 .BI file-search " FILENAME"
 Report which package ships a given file, using the repository MANIFEST. The
@@ -346,7 +357,14 @@ exact build, or the same name with the same build tag; for a tagless one, any
 immutable repo that provides its name). Use these to protect
 SBo/local builds and packages from
 .IR extra/ ", " testing/ ", " patches/
-that you keep installed. As a safety guard slacker refuses to run if a baseline
+that you keep installed. It never lists slacker itself, nor a fallback kernel
+saved by
+.IR /boot/make-kernel-backup ,
+whatever
+.B BACKUP_NAME
+it was given (slacker knows it by the description that script writes in the
+package's pkgtools record).
+As a safety guard slacker refuses to run if a baseline
 repo has no metadata loaded (run
 .B update
 first). With
@@ -407,10 +425,30 @@ by default and may be overridden with the
 environment variable. With
 .B \-\-yes
 the current configs are kept and the \fI.new\fR files removed, non-interactively.
+Files named in
+.BR NEWCONFIG_OVERWRITE ", " NEWCONFIG_REMOVE " or " NEWCONFIG_KEEP
+in
+.I slacker.conf
+are handled first, as set there, with or without
+.BR \-\-yes ;
+only the rest are listed and asked about. When
+.B upgrade-dist
+runs new-config only
+.B NEWCONFIG_KEEP
+is applied: a release jump shows every other file.
 After
-.B upgrade-all
-any pending \fI.new\fR files \(em both newly installed and pre-existing \(em are
-listed with a reminder to run this command.
+.BR install ", " reinstall ", " upgrade ", " upgrade-all ", " install-new ", " install-template " and " revert-pkg
+any pending \fI.new\fR files, both newly installed and pre-existing, are listed;
+a file with a NEWCONFIG_* rule is marked with its key, and a reminder to run
+this command follows. With
+.B NEWCONFIG_AFTER
+set to
+.I ask
+or
+.IR run ,
+a command that left new ones at a terminal, without
+.BR \-\-yes " or " \-\-dry\-run ,
+asks whether to run new-config right away, or runs it, instead.
 .SS Templates
 .TP
 .BI generate-template " NAME"
@@ -683,6 +721,14 @@ name
 or a
 .I repo:name
 pin that forces a specific repository regardless of priority.
+A series name matches exactly that series, never every package whose name
+contains those letters: a directory of the official tree is always a series
+(\fBk\fR holds only kernel\-source), and in other repositories a directory counts
+as one when it holds at least two packages, so a repository's per\-package
+directory (e.g.\& \fIvlc/\fR) never hides the package name. A trailing
+.B /
+.RB ( k/ ", " kde/ )
+means the series and nothing else: if there is no such series, nothing matches.
 .PP
 Two explicit set selectors are also accepted (the @ is required, so a bare word
 is never treated as a repo):
@@ -808,6 +854,32 @@ sets how many packages are downloaded concurrently during
 A download or verification that fails is skipped and reported rather than
 aborting the rest; a package that fails its GPG or checksum check is never
 installed.
+.B PROXY
+(default
+.IR off )
+sets a proxy for downloads. Unset or
+.IR off ,
+slacker connects directly and ignores the environment's proxy variables. A URL
+such as
+.I http://user:password@proxy.lan:3128
+(credentials %-encoded) is used for every http and https download, however
+slacker is started, including through sudo, cron and slacker-gui, which clear
+the environment.
+.I env
+takes the proxy from the environment instead (see ENVIRONMENT). Only http://
+proxies are supported; https goes through them as a CONNECT tunnel, so TLS and
+the certificate check still run end to end with the mirror. A password is sent
+only to the proxy, for https mirrors; an http mirror behind a proxy that asks
+for one fails, so use https.
+.B NO_PROXY
+lists the hosts reached directly, in the form described for
+.B no_proxy
+under ENVIRONMENT, and when set replaces the environment's
+.BR no_proxy .
+The file is readable by every user, so a password written here can be read by
+them.
+.B slacker status
+shows the proxy in use and where it comes from.
 .B REVERT
 (default
 .IR on )
@@ -821,6 +893,16 @@ is the cumulative \-current archive it fetches superseded official packages from
 \(em a revert\-only source, never consulted by
 .BR update ", " upgrade ", " install " or " check-updates ,
 so its historical packages never enter the priority model.
+.B SEARCH
+.RI ( exact " or " partial ;
+default
+.IR exact )
+decides whether
+.B search
+finds only the package with exactly the name given, or every package whose name
+contains it;
+.BR \-\-partial " and " \-\-exact
+override it for one run.
 .B BANNER
 (default
 .IR on )
@@ -830,6 +912,60 @@ after an upgrade that touched the official tree and at
 set it to
 .I off
 to hide both. They are printed only on a terminal, never into a pipe or a file.
+.B TERSE
+(default
+.IR off )
+set to
+.I on
+passes
+.B \-\-terse
+to
+.BR installpkg " and " upgradepkg ,
+so each package prints a single line;
+.B removepkg
+is terse already.
+When several packages are installed, each one is preceded by its place in the
+run, e.g.
+.BR "[ 37/245 ] upgrading glibc\-2.44\-x86_64\-5" .
+.BR NEWCONFIG_OVERWRITE ,
+.BR NEWCONFIG_REMOVE " and " NEWCONFIG_KEEP
+decide in advance what
+.B new-config
+does with some \fI.new\fR files: install the new version (the old one saved as
+\fI.orig\fR), delete the \fI.new\fR, or keep the installed file and rename the
+\fI.new\fR to \fI.new.kept\fR, so nothing is left pending and nothing is lost. Each takes paths
+or globs of the installed file, without the \fI.new\fR suffix (\fB*\fR and
+\fB?\fR do not cross a \fB/\fR), and may be repeated on several lines, which add
+up. When a file matches more than one, KEEP wins over REMOVE, and REMOVE over
+OVERWRITE. A glob in
+.B NEWCONFIG_OVERWRITE
+never replaces
+.IR /etc/passwd ", " shadow ", " group ", " rc.inet1.conf ", " rc.local " or " rc.local_shutdown ;
+only their exact path does. In
+.B upgrade-dist
+only
+.B NEWCONFIG_KEEP
+is applied; as with the blacklist, a release jump shows every other file.
+These keys are read even when the rest of the configuration is broken, like
+.B new-config
+itself.
+.sp
+.B NEWCONFIG_AFTER
+.RI ( off ", " ask " or " run ;
+default
+.IR off )
+decides what happens after a command leaves new \fI.new\fR files: only print
+the reminder, ask whether to run
+.B new-config
+now, or run it. It applies only when input and output
+are a terminal and neither
+.BR \-\-yes " nor " \-\-dry\-run
+is given, so cron jobs, scripts, slacker-gui and a Dockerfile
+.B RUN
+with
+.B \-y
+always get just the reminder, and their \fI.new\fR files are left alone. The
+other NEWCONFIG_* rules are applied first, as usual.
 .PP
 The
 .I repos
@@ -1302,6 +1438,46 @@ to
 .B NO_COLOR
 When set (to any value), all coloured output is disabled. Colour is also
 suppressed automatically when standard output is not a terminal.
+.TP
+.BR https_proxy ", " http_proxy ", " all_proxy ", " no_proxy
+Read only with
+.B PROXY=env
+in
+.IR slacker.conf ;
+otherwise slacker ignores them. A proxy for downloads, read the way wget and
+curl read them (the lowercase name first, then the uppercase one):
+.B https_proxy
+for https URLs,
+.B http_proxy
+for http URLs, and
+.B all_proxy
+for either when the specific one is unset. Only http proxies are supported,
+e.g.
+.IR http://user:password@proxy.lan:3128
+(credentials %-encoded, %40 for @); https goes through them as a CONNECT
+tunnel, so TLS and the certificate check still run end to end with the mirror.
+A password is sent only to the proxy, for https mirrors.
+.B no_proxy
+lists the hosts reached directly, separated by commas: a name (which also
+matches its subdomains; a leading dot is the same), an IP address or CIDR range,
+each with an optional :port, or
+.B *
+for every host.
+.I file://
+sources never use a proxy.
+.B NO_PROXY
+in
+.I slacker.conf
+takes the place of
+.B no_proxy
+when set there. sudo resets the environment by default, so with
+.B PROXY=env
+keep the variables through it (an
+.B env_keep
+line in
+.IR sudoers ),
+or set the proxy itself in
+.IR slacker.conf .
 .SH EXAMPLES
 .PP
 First\-time setup: choose a mirror in

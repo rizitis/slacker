@@ -134,6 +134,10 @@ fn clap_error_exit(e: clap::Error) -> ExitCode {
 }
 
 fn run(cli: &Cli) -> Result<Outcome, String> {
+    // PROXY / NO_PROXY from slacker.conf, before anything can download
+    // (status and find-mirror included).
+    let (proxy, no_proxy) = config::proxy_settings(&cli.config_dir);
+    download::set_proxy(proxy, no_proxy);
     // Banner No. 2 (the labyrinth masthead) heads every command, on a terminal
     // only (show() no-ops when stdout is piped, so scripts/pipes stay clean).
     // BANNER=off in slacker.conf hides it.
@@ -186,7 +190,9 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
     };
     match &cli.command {
         Cmd::Update { mode } => cmd_update(cli, &cfg, mode.as_deref()),
-        Cmd::Search { pattern } => cmd_search(&cfg, pattern),
+        Cmd::Search { partial, exact, pattern } => {
+            cmd_search(&cfg, pattern, *partial || (cfg.search_partial && !*exact))
+        }
         Cmd::FileSearch { filename } => cmd_file_search(&cfg, filename),
         Cmd::Info { name } => cmd_info(&cfg, name),
         Cmd::ListRepos => cmd_list_repos(&cfg),
@@ -655,6 +661,29 @@ fn expand_with_deps(
         );
         eprintln!("    run `slacker update` first. continuing without stock deps.");
     }
+    // Building the plan reads each package's `.dep` from its repo, and with
+    // hundreds of packages that is a long silence. Say what is happening, read
+    // them in parallel first, and on a terminal count them as they come in.
+    if resolve && roots.len() > 1 {
+        println!("{}", ui::blue(&format!("Preparing the plan for {} package(s)...", roots.len())));
+        let list: Vec<(&config::Repo, &repo::AvailPkg)> = roots
+            .iter()
+            .filter_map(|(p, _)| cfg.repo_by_name(&p.repo).map(|r| (r, p)))
+            .collect();
+        let tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+        let mut drawn = false;
+        repo::prefetch_deps(&list, cfg.max_parallel, |done, total| {
+            if tty {
+                print!("\r\x1b[K  {done}/{total}");
+                let _ = std::io::stdout().flush();
+                drawn = true;
+            }
+        });
+        if drawn {
+            print!("\r\x1b[K");
+            let _ = std::io::stdout().flush();
+        }
+    }
     let mut plan = Vec::new();
     let mut planned: HashSet<String> = HashSet::new();
     let mut visiting: HashSet<String> = HashSet::new();
@@ -702,7 +731,43 @@ fn expand_with_deps(
             )?;
         }
     }
-    Ok(plan)
+    Ok(upgrade_order(plan))
+}
+
+/// Installed first, in this order, when they are in a plan: steps 2 and 3 of
+/// UPGRADE.TXT (the C runtime, then the tools upgradepkg itself relies on, and
+/// mkinitrd so the kernel finds the new one).
+const UPGRADE_FIRST: &[&str] = &["aaa_glibc-solibs", "pkgtools", "tar", "xz", "findutils", "mkinitrd"];
+
+/// The kernel goes last: its doinst runs geninitrd, which copies mkinitrd (or
+/// dracut), kmod, udev, lvm2 and their libraries into the initrd, so they must
+/// already be upgraded. Same as slackpkg's upgrade-all. kernel_armvN is ARM.
+pub(crate) fn upgrade_last(name: &str) -> bool {
+    name == "kernel-generic"
+        || name
+            .strip_prefix("kernel_armv")
+            .is_some_and(|n| n.len() == 1 && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Reorder a plan for installing: UPGRADE_FIRST in front, the kernel at the
+/// end, everything else in between in the order the resolver gave (each
+/// dependency before what needs it). The plan table shows this same order.
+fn upgrade_order(plan: Vec<PlanItem>) -> Vec<PlanItem> {
+    let mut first: Vec<(usize, PlanItem)> = Vec::new();
+    let mut middle: Vec<PlanItem> = Vec::new();
+    let mut last: Vec<PlanItem> = Vec::new();
+    for it in plan {
+        let name = it.pkg.id.name.as_str();
+        if let Some(rank) = UPGRADE_FIRST.iter().position(|n| *n == name) {
+            first.push((rank, it));
+        } else if upgrade_last(name) {
+            last.push(it);
+        } else {
+            middle.push(it);
+        }
+    }
+    first.sort_by_key(|(rank, _)| *rank);
+    first.into_iter().map(|(_, it)| it).chain(middle).chain(last).collect()
 }
 
 const MAX_DEP_DEPTH: usize = 512;
@@ -2124,9 +2189,9 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
         let it = &items[0];
         fetch_and_verify(cfg, it.repo, it.pkg, &it.dest, false)?;
         match plan[0].action {
-            InstallAction::Install => system::install(&it.dest)?,
-            InstallAction::Upgrade => system::upgrade_only(&it.dest)?,
-            InstallAction::Reinstall => system::reinstall(&it.dest)?,
+            InstallAction::Install => system::install(&it.dest, cfg.terse)?,
+            InstallAction::Upgrade => system::upgrade_only(&it.dest, cfg.terse)?,
+            InstallAction::Reinstall => system::reinstall(&it.dest, cfg.terse)?,
         }
         kernel_reboot_reminder(plan);
         perl_rebuild_reminder(&cfg.pkg_db_dir, plan);
@@ -2148,19 +2213,25 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
     let mut installed = 0usize;
     // Separate each package's pkgtools output with a blank line so a multi-package
     // run is readable (the installpkg blocks otherwise butt up against each other).
+    // With TERSE each package is one line, so no blank line between them. Each
+    // package gets its place in the run, `[ 37/245 ]`, before pkgtools speaks.
     let mut printed_any = false;
+    let to_install = ready.iter().filter(|r| **r).count();
+    let mut nth = 0usize;
     for (i, it) in items.iter().enumerate() {
         if !ready[i] {
             continue;
         }
-        if printed_any {
+        if printed_any && !cfg.terse {
             println!();
         }
         printed_any = true;
+        nth += 1;
+        install_counter(nth, to_install, plan[i].action, &it.pkg.id.tag());
         let res = match plan[i].action {
-            InstallAction::Install => system::install(&it.dest),
-            InstallAction::Upgrade => system::upgrade_only(&it.dest),
-            InstallAction::Reinstall => system::reinstall(&it.dest),
+            InstallAction::Install => system::install(&it.dest, cfg.terse),
+            InstallAction::Upgrade => system::upgrade_only(&it.dest, cfg.terse),
+            InstallAction::Reinstall => system::reinstall(&it.dest, cfg.terse),
         };
         match res {
             Ok(()) => installed += 1,
@@ -2172,6 +2243,22 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
     kernel_reboot_reminder(plan);
     perl_rebuild_reminder(&cfg.pkg_db_dir, plan);
     Ok(())
+}
+
+/// `[ 37/245 ] upgrading glibc-2.44-x86_64-5`: where a batch install stands,
+/// printed before pkgtools' own output for the package.
+pub(crate) fn install_counter(nth: usize, total: usize, action: InstallAction, tag: &str) {
+    println!("{}", ui::blue(&counter_line(nth, total, action, tag)));
+}
+
+fn counter_line(nth: usize, total: usize, action: InstallAction, tag: &str) -> String {
+    let w = total.to_string().len();
+    let verb = match action {
+        InstallAction::Install => "installing",
+        InstallAction::Upgrade => "upgrading",
+        InstallAction::Reinstall => "reinstalling",
+    };
+    format!("[ {nth:>w$}/{total} ] {verb} {tag}")
 }
 
 /// Download a package (if needed) and verify md5 before use.
@@ -3247,7 +3334,18 @@ fn hilite_keys(text: &str) -> String {
 
 #[cfg(test)]
 mod parallel_download_tests {
+    use super::{counter_line, InstallAction};
     use super::{summarize_outcomes, verify_suffix, DlOutcome};
+
+    #[test]
+    fn install_counter_is_padded_to_the_total() {
+        assert_eq!(counter_line(7, 245, InstallAction::Upgrade, "glibc-2.44-x86_64-5"),
+                   "[   7/245 ] upgrading glibc-2.44-x86_64-5");
+        assert_eq!(counter_line(245, 245, InstallAction::Install, "a-1-noarch-1"),
+                   "[ 245/245 ] installing a-1-noarch-1");
+        assert_eq!(counter_line(1, 2, InstallAction::Reinstall, "b-1-x86_64-1"),
+                   "[ 1/2 ] reinstalling b-1-x86_64-1");
+    }
     use super::{fmt_mb, live_line, DlLive};
 
     fn live(name: &str, done_m: f64, total_m: Option<f64>, stalled: Option<u64>) -> DlLive {
@@ -3387,7 +3485,7 @@ mod selection_tests {
     fn privilege_classification() {
         use super::{requires_privilege, Cmd};
         // read-only commands are free
-        assert!(!requires_privilege(&Cmd::Search { pattern: "x".into() }));
+        assert!(!requires_privilege(&Cmd::Search { partial: false, exact: false, pattern: "x".into() }));
         assert!(!requires_privilege(&Cmd::Info { name: "x".into() }));
         assert!(!requires_privilege(&Cmd::CheckUpdates));
         assert!(!requires_privilege(&Cmd::ShowChangelog { repo: None }));
@@ -3581,6 +3679,28 @@ mod collect_tests {
     }
 
     #[test]
+    fn dist_puts_the_kernel_after_the_rest_but_before_the_gpg_chain() {
+        let db = PkgDb::for_test(
+            vec![
+                av("gnupg-2.4-x86_64-1", "slackware"),
+                av("kernel-generic-7.2.15-x86_64-1", "slackware"),
+                av("kmod-34-x86_64-1", "slackware"),
+                av("zlib-1.3-x86_64-1", "slackware"),
+            ],
+            &[("slackware", 100)],
+            Some(100),
+        );
+        let installed: Vec<pkg::PkgId> =
+            ["gnupg-2.2-x86_64-1", "kernel-generic-7.1-x86_64-1", "kmod-33-x86_64-1", "zlib-1.2-x86_64-1"]
+                .iter()
+                .map(|t| pkg::PkgId::parse(t).unwrap())
+                .collect();
+        let (_critical, rest) = dist_upgrade_sets(&db, &installed);
+        let order: Vec<&str> = rest.iter().map(|p| p.pkg.id.name.as_str()).collect();
+        assert_eq!(order, vec!["kmod", "zlib", "kernel-generic", "gnupg"]);
+    }
+
+    #[test]
     fn dist_defers_gpg_chain_to_the_end() {
         // A normal package plus gnupg + a gpg lib, all upgradeable; the GnuPG
         // verification chain (DIST_GPG_LAST) must come LAST in the rest order so
@@ -3654,6 +3774,41 @@ mod collect_tests {
         assert_eq!(version_of_triple("2.4-r1-x86_64-1"), Some("2.4-r1"));
         assert_eq!(version_of_triple("nonsense"), None);
         assert_eq!(version_of_triple("-x86_64-1"), None);
+    }
+
+    #[test]
+    fn plan_follows_upgrade_txt_and_puts_the_kernel_last() {
+        let item = |nv: &str| PlanItem {
+            pkg: av(nv, "slackware"),
+            action: InstallAction::Upgrade,
+            dep_for: None,
+            from: None,
+        };
+        let plan: Vec<PlanItem> = [
+            "bash-5.3-x86_64-1",
+            "findutils-4.10-x86_64-1",
+            "kernel-generic-7.2.15-x86_64-1",
+            "kernel-source-7.2.15-noarch-1",
+            "kmod-34-x86_64-1",
+            "mkinitrd-1.4.11-x86_64-81",
+            "pkgtools-16.0-noarch-1",
+            "tar-1.35-x86_64-1",
+            "aaa_glibc-solibs-2.44-x86_64-5",
+            "xz-5.8-x86_64-1",
+        ]
+        .iter()
+        .map(|nv| item(nv))
+        .collect();
+        let names: Vec<String> = upgrade_order(plan).into_iter().map(|it| it.pkg.id.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "aaa_glibc-solibs", "pkgtools", "tar", "xz", "findutils", "mkinitrd",
+                "bash", "kernel-source", "kmod",
+                "kernel-generic",
+            ]
+        );
+        assert!(upgrade_last("kernel_armv8") && !upgrade_last("kernel_armv") && !upgrade_last("kernel-headers"));
     }
 
     #[test]

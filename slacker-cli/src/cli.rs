@@ -45,8 +45,21 @@ pub(crate) struct Cli {
 pub(crate) enum Cmd {
     /// Refresh metadata from every repo. `update gpg` imports repo GPG keys.
     Update { mode: Option<String> },
-    /// Find a package by its exact name (case-insensitive).
-    Search { pattern: String },
+    /// Find a package by exact name; `--partial` lists every name containing it.
+    ///
+    /// Case-insensitive. The exact name by default; with `--partial`, or `SEARCH=partial` in
+    /// slacker.conf, every package whose name contains the word. Only package
+    /// names are searched, never descriptions or files.
+    Search {
+        /// List every package whose name contains NAME.
+        #[arg(long, conflicts_with = "exact")]
+        partial: bool,
+        /// Match the exact name only, whatever SEARCH says in slacker.conf.
+        #[arg(long)]
+        exact: bool,
+        #[arg(value_name = "NAME")]
+        pattern: String,
+    },
     /// Find which package ships a file (uses MANIFEST).
     FileSearch { filename: String },
     /// Show details and per-repo candidates for a package.

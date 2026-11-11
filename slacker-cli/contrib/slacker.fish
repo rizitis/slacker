@@ -148,6 +148,8 @@ complete -c slacker -n '__slacker_using history info reinstall remove revert-pkg
 complete -c slacker -n '__slacker_using clean-cache del-repo distrust-repo install-new pri-repo show-changelog trust-repo vet-repo' -f -a '(__slacker_repo_names)'
 complete -c slacker -n '__slacker_using delete-template install-template remove-template' -f -a '(__slacker_template_names)'
 complete -c slacker -n '__slacker_using pin' -f -a '(printf "%s:\n" (__slacker_repo_names))'
+complete -c slacker -n '__slacker_using search' -l 'partial'
+complete -c slacker -n '__slacker_using search' -l 'exact'
 complete -c slacker -n '__slacker_using download' -s 'o'
 complete -c slacker -n '__slacker_using download' -l 'output'
 complete -c slacker -n '__slacker_using history' -l 'last'
