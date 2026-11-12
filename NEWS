@@ -1,6 +1,24 @@
-Version Beta 0.14.0
+Version Beta 0.14.1
 =====
-- Update: slacker-gui
+- Update: slacker-gui (Version _beta.7)
+    - the main window now gets its title bar and the minimize, maximize and
+      close buttons from the window manager, like every other window on the
+      desktop (KWin, Xfwm4, ...). On GNOME it keeps libadwaita's own header bar.
+      To pick one yourself, set SLACKER_GUI_FRAME=system or SLACKER_GUI_FRAME=app.
+    - dialogs that the window manager shows as separate windows (package
+      details, Dependencies, Command output, the transaction window) can be
+      resized.
+    - Dependencies opens one window only. Going deeper into a package opens a
+      new page in the same window with a back button, instead of one more window
+      every time.
+    - narrow window: below ~760 px the sidebar folds away and the stat tiles on
+      the Repositories page wrap to the next line. The window has a minimum size
+      of 540x420.
+    - no more GTK layout warnings ("Allocating size ...", "exceeds
+      AdwBreakpointBin width") printed in the terminal.
+    - refactoring: the main window is a plain gtk::ApplicationWindow instead of
+      adw::ApplicationWindow, because libadwaita always draws its own frame.
+      Everything inside it is still GTK4/libadwaita.
     - Fix: correct minimum rust version in Cargo.toml (highest needed by Cargo.lock: 1.92 (pango-sys 0.22.9) )
 - Update: slacker-cli
     - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.

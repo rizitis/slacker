@@ -22,7 +22,7 @@ fn emit(handlers: &Handlers) {
 #[derive(Clone)]
 pub struct Ctx {
     pub runner: Runner,
-    pub window: adw::ApplicationWindow,
+    pub window: gtk::ApplicationWindow,
     toasts: adw::ToastOverlay,
     changed: Handlers,
     pins_changed: Handlers,
@@ -33,7 +33,7 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    pub fn new(runner: Runner, window: adw::ApplicationWindow, toasts: adw::ToastOverlay) -> Self {
+    pub fn new(runner: Runner, window: gtk::ApplicationWindow, toasts: adw::ToastOverlay) -> Self {
         Self {
             runner,
             window,

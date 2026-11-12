@@ -23,7 +23,26 @@ struct Choice {
     switch: adw::SwitchRow,
 }
 
+/// The one Dependencies window: a dependency's own list opens as a page in it
+/// (with a back arrow), never as a window of its own, however deep it goes.
+#[derive(Clone)]
+struct Window {
+    nav: adw::NavigationView,
+    dialog: adw::Dialog,
+}
+
 pub fn dialog(ctx: &Ctx, package: &str) {
+    let nav = adw::NavigationView::new();
+    let dialog = adw::Dialog::builder().title("Dependencies").child(&nav).build();
+    let win = Window { nav, dialog: dialog.clone() };
+    win.nav.push(&page(ctx, package, &win));
+    crate::widgets::present_fitted(&dialog, &ctx.window, (640, 560));
+}
+
+/// The dependencies of `package`, as one page of the window. Cancel and Apply
+/// act on this page only: on a deeper page they go back to the one before,
+/// on the first they close the window.
+fn page(ctx: &Ctx, package: &str, win: &Window) -> adw::NavigationPage {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
     content.append(&widgets::loading("Reading the dependencies\u{2026}"));
     let scroller = gtk::ScrolledWindow::builder()
@@ -51,17 +70,26 @@ pub fn dialog(ctx: &Ctx, package: &str) {
     view.add_top_bar(&adw::HeaderBar::new());
     view.set_content(Some(&inner));
     view.add_bottom_bar(&bottom);
-    let dialog = adw::Dialog::builder()
+    let page = adw::NavigationPage::builder()
         .title(format!("Dependencies of {package}"))
         .child(&view)
         .build();
+
+    // Leave this page: back to the one before, or close the window.
+    let leave = {
+        let win = win.clone();
+        move || {
+            if win.nav.navigation_stack().n_items() > 1 {
+                win.nav.pop();
+            } else {
+                win.dialog.close();
+            }
+        }
+    };
     {
-        let d = dialog.clone();
-        cancel.connect_clicked(move |_| {
-            d.close();
-        });
+        let leave = leave.clone();
+        cancel.connect_clicked(move |_| leave());
     }
-    crate::widgets::present_fitted(&dialog, &ctx.window, (640, 560));
 
     let choices: Rc<RefCell<Vec<Choice>>> = Rc::default();
     let pending = {
@@ -80,8 +108,8 @@ pub fn dialog(ctx: &Ctx, package: &str) {
     };
 
     {
-        let (ctx2, package2, apply2, choices2, pending2) =
-            (ctx.clone(), package.to_string(), apply.clone(), choices.clone(), pending.clone());
+        let (ctx2, package2, apply2, choices2, pending2, win2) =
+            (ctx.clone(), package.to_string(), apply.clone(), choices.clone(), pending.clone(), win.clone());
         ctx.runner.capture(commands::info(package), move |status, text| {
             widgets::clear(&content);
             let req = deps::parse(&text);
@@ -102,7 +130,7 @@ pub fn dialog(ctx: &Ctx, package: &str) {
                 ));
                 return;
             }
-            render(&ctx2, &content, &package2, &req, &choices2);
+            render(&ctx2, &content, &package2, &req, &choices2, &win2);
             let update = {
                 let (apply, pending) = (apply2.clone(), pending2.clone());
                 move || {
@@ -117,20 +145,28 @@ pub fn dialog(ctx: &Ctx, package: &str) {
         });
     }
 
-    let (ctx2, package2, d) = (ctx.clone(), package.to_string(), dialog.clone());
+    let (ctx2, package2) = (ctx.clone(), package.to_string());
     apply.connect_clicked(move |_| {
         let (off, on) = pending();
         if off.is_empty() && on.is_empty() {
             return;
         }
-        d.close();
+        leave();
         let (ctx, package) = (ctx2.clone(), package2.clone());
-        // After the dialog is gone, so the next one opens over the window.
+        // After the page is gone, so the next window opens over the main one.
         glib::idle_add_local_once(move || run(&ctx, &package, off, on));
     });
+    page
 }
 
-fn render(ctx: &Ctx, content: &gtk::Box, package: &str, req: &deps::Requires, choices: &Rc<RefCell<Vec<Choice>>>) {
+fn render(
+    ctx: &Ctx,
+    content: &gtk::Box,
+    package: &str,
+    req: &deps::Requires,
+    choices: &Rc<RefCell<Vec<Choice>>>,
+    win: &Window,
+) {
     if req.resolve_off {
         let r = widgets::row(
             "RESOLVE_DEPS=no",
@@ -179,7 +215,7 @@ fn render(ctx: &Ctx, content: &gtk::Box, package: &str, req: &deps::Requires, ch
                     s.set_subtitle(&notes.join("\n"));
                 }
                 s.add_prefix(&widgets::tile("package-x-generic-symbolic", None));
-                s.add_suffix(&deeper(ctx, &d.name));
+                s.add_suffix(&deeper(ctx, &d.name, win));
                 choices.borrow_mut().push(Choice { name: d.name.clone(), was_on: on, switch: s.clone() });
                 s.upcast()
             }
@@ -188,7 +224,7 @@ fn render(ctx: &Ctx, content: &gtk::Box, package: &str, req: &deps::Requires, ch
                 let r = widgets::row(&d.name, &notes.join("\n"));
                 r.add_prefix(&widgets::tile("changes-prevent-symbolic", Some("purple")));
                 r.add_suffix(&widgets::pill(tag, Tone::Purple));
-                r.add_suffix(&deeper(ctx, &d.name));
+                r.add_suffix(&deeper(ctx, &d.name, win));
                 r.upcast()
             }
         };
@@ -197,16 +233,17 @@ fn render(ctx: &Ctx, content: &gtk::Box, package: &str, req: &deps::Requires, ch
     content.append(&g);
 }
 
-/// Opens the same dialog for a dependency: a rule only acts on the package
-/// that itself requires the dependency, so this is how to find it one level
-/// down (ghostty \u{2192} blueprint-compiler \u{2192} xvfb-run).
-fn deeper(ctx: &Ctx, name: &str) -> gtk::Button {
+/// Opens a dependency's own list, as the next page of the same window: a rule
+/// only acts on the package that itself requires the dependency, so this is
+/// how to find it one level down (ghostty \u{2192} blueprint-compiler
+/// \u{2192} xvfb-run).
+fn deeper(ctx: &Ctx, name: &str, win: &Window) -> gtk::Button {
     let b = gtk::Button::from_icon_name("go-next-symbolic");
     b.set_tooltip_text(Some(&format!("Dependencies of {name}")));
     b.set_valign(gtk::Align::Center);
     b.add_css_class("flat");
-    let (ctx, name) = (ctx.clone(), name.to_string());
-    b.connect_clicked(move |_| dialog(&ctx, &name));
+    let (ctx, name, win) = (ctx.clone(), name.to_string(), win.clone());
+    b.connect_clicked(move |_| win.nav.push(&page(&ctx, &name, &win)));
     b
 }
 
