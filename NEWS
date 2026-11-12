@@ -1,5 +1,16 @@
 Version Beta 0.14.0
 =====
+- Update: slacker-gui
+    - Fix: correct minimum rust version in Cargo.toml (highest needed by Cargo.lock: 1.92 (pango-sys 0.22.9) )
+- Update: slacker-cli
+    - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.
+- Update: wiki
+- Update: scripts/
+    - Add: check-msrv.sh (SlackBuild use it now before build)
+---
+
+Version Beta 0.14.0
+=====
 SEMANTIC CHANGES (slacker.conf need update)
 - Update: slacker-gui (Version _beta.6)
     - Added: a Sources button next to the filter shows only the packages from the repositories or build tags you tick, each listed with its package count; it combines with the name filter, and clicking a package's source tag shows only that source. The list is no longer cut at 200: "Show 200 More" and "Show All" add the rest. (Requested by @gegechris99 #20)

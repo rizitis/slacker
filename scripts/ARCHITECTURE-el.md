@@ -1,6 +1,6 @@
 # slacker: δομή του κώδικα, κανόνες και ιστορικό του refactor
 
-Τελευταία ενημέρωση: 10 Νοε 2026. Αφορά το `slacker-cli` 0.14.0, τον κώδικα μετά το refactor (βήματα 1–14) και τις αλλαγές που έγιναν πάνω του από τότε (βλ. 8.5). Συντηρητής: Ioannis Anagnostakis (`rizitis`).
+Τελευταία ενημέρωση: 12 Νοε 2026. Αφορά το `slacker-cli` 0.14.1, τον κώδικα μετά το refactor (βήματα 1–14) και τις αλλαγές που έγιναν πάνω του από τότε (βλ. 8.5). Συντηρητής: Ioannis Anagnostakis (`rizitis`).
 
 Το έγγραφο απευθύνεται σε όποιον (άνθρωπο ή AI) πιάνει τον κώδικα για πρώτη φορά. Λέει **τι είναι πού, γιατί είναι εκεί, και τι δεν αλλάζει**. Αν κάτι εδώ διαφωνεί με τον κώδικα, ισχύει ο κώδικας, και διορθώνεται το έγγραφο.
 
@@ -37,7 +37,7 @@ slacker/
 
 - `cargo build --release` μέσα στο `slacker-cli/`. Το release profile έχει `lto = true`, `strip = true`, `opt-level = 2`.
 - Εξαρτήσεις: `clap` (derive), `ureq` 2 (rustls, gzip), `md-5`, `regex`, `rusqlite` (bundled).
-- **MSRV:** `rust-version = "1.88"`. Τα `icu_*` (μέσω ureq -> url -> idna) το χρειάζονται από το icu 2.3.
+- **MSRV:** `rust-version = "1.89"`, λόγω του `rusqlite` 0.42 (μπήκε στο 0.14.1 για τη διόρθωση του SQLite στο RUSTSEC-2026-0459). Τα `icu_*` (μέσω ureq -> url -> idna) θέλουν 1.88 και το `clap` 1.85, και τα δύο χαμηλότερα.
 - Ενημέρωση εξαρτήσεων: στοχευμένα με `cargo update -p <crate>` όταν το `cargo audit` βρει κάτι, ολικά με `cargo update` στην αρχή κύκλου ανάπτυξης (όχι τη μέρα του release). Μετά πάντα `cargo build --release --locked && cargo test --locked && cargo audit`.
 
 ---
@@ -95,7 +95,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 | `repos.rs` | add-repo, del-repo, pri-repo, add-tag, del-tag, vet-repo, trust-repo, distrust-repo | το vetting (`vet_repo`, `apply_vet`, `reload_repo`) είναι στον πυρήνα |
 | `blacklist.rs` | frozen, unfrozen, pin, unpin, nodep, undep | σέβονται το `--dry-run` (διόρθωση 0.12.5) |
 | `logs.rs` | history, show-changelog | το όνομα δεν είναι `history.rs`, γιατί υπάρχει ήδη |
-| `query.rs` | search, file-search, info | read-only. Το `search` κοιτάζει μόνο ονόματα πακέτων: ακριβές από προεπιλογή, κάθε όνομα που περιέχει τη λέξη με `--partial` ή `SEARCH=partial` (`PkgDb::search`, `search_rows`). Χωρίς αυτά δεν αλλάζει τίποτα: ίδιο ταίριασμα, ίδια μηνύματα, ίδιος κωδικός εξόδου. |
+| `query.rs` | search, file-search, info | read-only. Το `search` κοιτάζει μόνο ονόματα πακέτων: ακριβές από προεπιλογή, κάθε όνομα που περιέχει τη λέξη με `--partial` ή `SEARCH=partial` (`PkgDb::search`, `search_rows`). Χωρίς αυτά το ταίριασμα και ο κωδικός εξόδου μένουν ίδια· η υπόδειξη όταν δεν υπάρχει τέτοιο όνομα αναφέρει τώρα και το `search --partial`. |
 | `find_mirror.rs` | find-mirror | δεν είναι `mirrors.rs`, γιατί υπάρχει ήδη |
 | `revert_pkg.rs` | revert-pkg | επικίνδυνο: GPG verify -> `upgradepkg --reinstall` -> προσφορά freeze |
 | `clean.rs` | clean-system, clean-cache | επικίνδυνο: σβήνει πακέτα |
@@ -137,7 +137,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 | `revert.rs` | pure helpers για revert-pkg |
 | `newconfig.rs` | εύρεση `*.new` στο `/etc` και `/usr/share/vim` |
 | `mirrors.rs` | ανακάλυψη και probing mirrors |
-| `dist.rs` | κατεύθυνση upgrade-dist (fail-closed whitelist: μόνο 15.0 -> -current και 15.0 -> νεότερο stable) |
+| `dist.rs` | κατεύθυνση upgrade-dist (fail-closed whitelist: μόνο 15.0 -> -current και 15.0 -> νεότερο stable). Ο έλεγχος arch (μόνο x86) είναι το `dist_arch_supported` στο `commands/upgrade_dist.rs`. |
 | `manifest.rs` | file-search μέσω MANIFEST |
 | `template.rs` | templates εγκατεστημένων πακέτων |
 | `stockdb.rs` | `resolve-stock`: SQLite βάση εξαρτήσεων του stock -current |
@@ -189,7 +189,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 - **Freeze:** εγκατεστημένο + κανόνας -> FROZEN. Μη εγκατεστημένο + κανόνας -> κρυμμένο από install-new/upgrades/check-updates, ορατό στο search/info. Ένα frozen candidate θεωρείται ότι δεν υπάρχει, και η επίλυση συνεχίζει στους υπόλοιπους.
 - **Pin:** `@repo 100% name`, ακριβές όνομα, δεν παγώνει ποτέ. Ένα πραγματικό freeze στο ίδιο όνομα κερδίζει.
 - **install-new:** το `cmd_install_new` και το `dist_install_new` είναι σκόπιμα διαφορετικά (κανονικό: official + subtrees πάνω από το official. Dist: μόνο official + patches, ανεξάρτητα από προτεραιότητα).
-- **upgrade-dist:** απαιτεί ρητό στόχο, παρακάμπτει σκόπιμα blacklist και προτεραιότητα, αδειάζει το blacklist κρατώντας `blacklist.bak` (και δεν το ξαναγράφει σε επανάληψη), απενεργοποιεί third-party repos, βάζει το `kernel-generic` μετά από όλα τα άλλα και την αλυσίδα GnuPG τελευταία απ' όλα, και το clean-system μένει στη Phase 3 (μετά το upgrade).
+- **upgrade-dist:** μόνο σε x86 (x86_64 και 32-bit x86)· σε Slackware ARM (aarch64) αρνείται πριν διαβάσει ή αλλάξει οτιδήποτε (`dist_arch_supported`, οριστική απόφαση, Νοε 2026). Απαιτεί ρητό στόχο, παρακάμπτει σκόπιμα blacklist και προτεραιότητα, αδειάζει το blacklist κρατώντας `blacklist.bak` (και δεν το ξαναγράφει σε επανάληψη), απενεργοποιεί third-party repos, βάζει το `kernel-generic` μετά από όλα τα άλλα και την αλυσίδα GnuPG τελευταία απ' όλα, και το clean-system μένει στη Phase 3 (μετά το upgrade).
 - **clean-system:** pinned πακέτα από το repo του pin παίρνουν ξεχωριστή ερώτηση R/K/P (default Keep). Με `-y` δεν σβήνονται. Ποτέ δεν προτείνει να σβηστεί το ίδιο το slacker, ούτε ένας εφεδρικός kernel που κράτησε το `/boot/make-kernel-backup` του Slackware: το εργαλείο καταγράφει τον kernel και τα modules του ως πακέτο `kernel-<BACKUP_NAME>-<έκδοση>` (`kernel-backup` από προεπιλογή) που δεν το έχει κανένα repo, οπότε φαινόταν ξένο και σβηνόταν με Enter ή `-y`. Επειδή το BACKUP_NAME μπορεί να είναι οτιδήποτε, το backup αναγνωρίζεται από τις δύο γραμμές περιγραφής που γράφει το script στην εγγραφή του pkgtools, όποιο κι αν είναι το όνομά του (`is_kernel_backup` στο `commands/clean.rs`, Νοε 2026).
 - **new-config:** τα protected αρχεία δεν αντικαθίστανται ποτέ, ό,τι κι αν απαντήσει ο χρήστης στο μενού. Μόνο merge με το χέρι, ή αν ο χρήστης γράψει το ακριβές path στο `NEWCONFIG_OVERWRITE`· ένα glob εκεί δεν τα πιάνει ποτέ.
 - **Κανόνες του new-config** (`NEWCONFIG_OVERWRITE` / `_REMOVE` / `_KEEP` στο slacker.conf, paths ή globs του εγκατεστημένου αρχείου, τα `*` και `?` δεν περνάνε το `/`): εφαρμόζονται πριν από το μενού, με ή χωρίς `--yes`. Στο upgrade-dist ισχύει **μόνο το `NEWCONFIG_KEEP`**, ώστε ένα αρχείο που κρατά ο χρήστης να μην αντικαθίσταται ποτέ εκεί, ούτε από το «[A]ll new». Τα OVERWRITE και REMOVE δεν εφαρμόζονται εκεί: όπως και με το blacklist, το upgrade-dist δείχνει όλα τα υπόλοιπα αρχεία (τυπώνει σημείωση όταν υπάρχουν τέτοιοι κανόνες). Αυτά τα κλειδιά προστίθενται όταν επαναλαμβάνονται (κάθε άλλο κλειδί κρατά την τελευταία του γραμμή). Όταν ταιριάζουν πολλά, κερδίζει το πιο ασφαλές: KEEP, μετά REMOVE, μετά OVERWRITE. Το OVERWRITE κρατά το παλιό αρχείο ως `.orig`. Το KEEP μετονομάζει το `.new` σε `.new.kept`, ώστε τίποτα να μη μένει εκκρεμές και τίποτα να μη χάνεται (αίτημα του gegechris99, Νοε 2026).
@@ -234,7 +234,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 | 10 | `commands/new_config.rs` | new-config, με τα `PROTECTED_CONFIGS` και το test τους |
 | 11 | `commands/update.rs` | update, `refresh_stock_db` |
 | 12 | `commands/status.rs` | status, list-repos, check-updates, με τα `attribution_tests`, `locate_db_tests` και 6 ακόμα tests |
-| 13 | `commands/upgrade_dist.rs` | upgrade-dist και 19 δικά του items, με 4 tests. Το `dist_upgrade_sets` είναι `pub(crate)` για 2 tests του `collect_tests`. |
+| 13 | `commands/upgrade_dist.rs` | upgrade-dist και 19 δικά του items, με 4 tests (5 από το 0.14.1). Το `dist_upgrade_sets` είναι `pub(crate)` για 2 tests του `collect_tests`. |
 | 14 | `commands/install.rs` | οι 7 εντολές πακέτων και 20 δικά τους helpers, με 4 tests. Τα `abort_on_misses`, `selector_miss_hint`, `plan_alternatives` είναι `pub(crate)` για tests του `collect_tests`. |
 
 ### 8.3 Πώς ελέγχθηκε
@@ -274,14 +274,14 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 
 Η πρώτη αλλαγή μετά το refactor ήταν η ετικέτα του πλάνου (βλ. 7). Η δεύτερη ήταν το issue #11 (από πού ήρθε ένα εγκατεστημένο πακέτο, και `remove @repo`, βλ. 7), με 2 tests. Η τρίτη ήταν το `BANNER` (issue #12, βλ. 4), με 1 test. Η τέταρτη ήταν η εξαίρεση εξάρτησης (βλ. 7), με 4 tests. Η πέμπτη ήταν η γραμμή προόδου των λήψεων (issue #14, βλ. 7), με 2 tests. Αυτές οι πέντε είναι η 0.13.0.
 
-Η 0.14.0 πρόσθεσε, η καθεμιά με τα tests της: το «Preparing the plan» με το παράλληλο διάβασμα των `.dep` που κρατιούνται στη μνήμη, και τη διακοπή των αιτημάτων `.dep` προς το επίσημο δέντρο· το `TERSE` και τον μετρητή εγκατάστασης· τη σειρά εγκατάστασης του UPGRADE.TXT με τον kernel τελευταίο, σε κάθε πλάνο και στο upgrade-dist· τους κανόνες `NEWCONFIG_*` του new-config· το `NEWCONFIG_AFTER` και το `NEWCONFIG_KEEP` στο upgrade-dist· και τον proxy (`PROXY`/`NO_PROXY`, κλειστός από default, με γραμμή `Proxy` στο `status`) (όλα στο 7). Κάθε νέο κλειδί έχει για default τη συμπεριφορά που υπήρχε πριν από αυτό. Μετά από κάθε αλλαγή: `cargo build --release --locked` χωρίς warnings, `cargo test --release --locked`, και οι έλεγχοι που τρέχει το SlackBuild (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Πριν από release: ένα τρέξιμο σε πραγματικό σύστημα από τον συντηρητή.
+Η 0.14.0 πρόσθεσε, η καθεμιά με τα tests της: το «Preparing the plan» με το παράλληλο διάβασμα των `.dep` που κρατιούνται στη μνήμη, και τη διακοπή των αιτημάτων `.dep` προς το επίσημο δέντρο· το `TERSE` και τον μετρητή εγκατάστασης· τη σειρά εγκατάστασης του UPGRADE.TXT με τον kernel τελευταίο, σε κάθε πλάνο και στο upgrade-dist· τους κανόνες `NEWCONFIG_*` του new-config· το `NEWCONFIG_AFTER` και το `NEWCONFIG_KEEP` στο upgrade-dist· τον proxy (`PROXY`/`NO_PROXY`, κλειστός από default, με γραμμή `Proxy` στο `status`)· το `search --partial` και το `SEARCH` (issue #22)· και ότι το clean-system κρατά τον kernel του `make-kernel-backup` (όλα στο 7). Η 0.14.1: `rusqlite` 0.42 (MSRV 1.89), άρνηση του upgrade-dist σε aarch64, και η υπόδειξη του `search` όταν δεν βρίσκει όνομα αναφέρει το `--partial`. Κάθε νέο κλειδί έχει για default τη συμπεριφορά που υπήρχε πριν από αυτό. Μετά από κάθε αλλαγή: `cargo build --release --locked` χωρίς warnings, `cargo test --release --locked`, και οι έλεγχοι που τρέχει το SlackBuild (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Πριν από release: ένα τρέξιμο σε πραγματικό σύστημα από τον συντηρητή.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **252 passed, 1 ignored** (253 συνολικά).
-- Ανά αρχείο: `main.rs` 50, `config.rs` 38, `pkgdb.rs` 35, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (το ένα ignored: πραγματικό TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 4, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, και από 1 στα `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **253 passed, 1 ignored** (254 συνολικά).
+- Ανά αρχείο: `main.rs` 50, `config.rs` 38, `pkgdb.rs` 35, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (το ένα ignored: πραγματικό TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 5, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, και από 1 στα `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Modules tests στο `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (με τα fixtures `av()` και `fixture()`), `freshness_tests`, `foundational_tests`.
 
 ---

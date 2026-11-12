@@ -1,6 +1,6 @@
 # slacker: code structure, rules and refactor history
 
-Last updated: 10 Nov 2026. Covers `slacker-cli` 0.14.0, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
+Last updated: 12 Nov 2026. Covers `slacker-cli` 0.14.1, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
 
 This document is for anyone, human or AI, opening the code for the first time. It says **what lives where, why it lives there, and what must not change**. If anything here disagrees with the code, the code wins and this document gets fixed.
 
@@ -37,7 +37,7 @@ slacker/
 
 - `cargo build --release` inside `slacker-cli/`. The release profile uses `lto = true`, `strip = true`, `opt-level = 2`.
 - Dependencies: `clap` (derive), `ureq` 2 (rustls, gzip), `md-5`, `regex`, `rusqlite` (bundled).
-- **MSRV:** `rust-version = "1.88"`. The `icu_*` crates (pulled in via ureq -> url -> idna) require it since icu 2.3.
+- **MSRV:** `rust-version = "1.89"`, set by `rusqlite` 0.42 (taken in 0.14.1 for the SQLite fix in RUSTSEC-2026-0459). The `icu_*` crates (via ureq -> url -> idna) need 1.88 and `clap` 1.85, both below it.
 - Updating dependencies: targeted `cargo update -p <crate>` when `cargo audit` reports something; a full `cargo update` at the start of a development cycle, not on release day. Always follow with `cargo build --release --locked && cargo test --locked && cargo audit`.
 
 ---
@@ -95,7 +95,7 @@ Each file holds the `pub(crate) fn cmd_*` of one group of commands, plus the hel
 | `repos.rs` | add-repo, del-repo, pri-repo, add-tag, del-tag, vet-repo, trust-repo, distrust-repo | the vetting itself (`vet_repo`, `apply_vet`, `reload_repo`) is in the core |
 | `blacklist.rs` | frozen, unfrozen, pin, unpin, nodep, undep | honour `--dry-run` (fixed in 0.12.5) |
 | `logs.rs` | history, show-changelog | not named `history.rs`, which already exists |
-| `query.rs` | search, file-search, info | read-only. `search` looks at package names only: exact by default, every name containing the word with `--partial` or `SEARCH=partial` (`PkgDb::search`, `search_rows`). Without them nothing changes: same match, same messages, same exit code. |
+| `query.rs` | search, file-search, info | read-only. `search` looks at package names only: exact by default, every name containing the word with `--partial` or `SEARCH=partial` (`PkgDb::search`, `search_rows`). Without them the match and the exit code are as before; the hint printed when no such name exists now also names `search --partial`. |
 | `find_mirror.rs` | find-mirror | not named `mirrors.rs`, which already exists |
 | `revert_pkg.rs` | revert-pkg | dangerous: GPG verify -> `upgradepkg --reinstall` -> offer to freeze |
 | `clean.rs` | clean-system, clean-cache | dangerous: removes packages |
@@ -137,7 +137,7 @@ Mostly pure logic and system integration. They know nothing about commands.
 | `revert.rs` | pure helpers for revert-pkg |
 | `newconfig.rs` | finding `*.new` under `/etc` and `/usr/share/vim` |
 | `mirrors.rs` | mirror discovery and probing |
-| `dist.rs` | upgrade-dist direction gate (fail-closed whitelist: only 15.0 -> -current and 15.0 -> a newer stable) |
+| `dist.rs` | upgrade-dist direction gate (fail-closed whitelist: only 15.0 -> -current and 15.0 -> a newer stable). The arch gate (x86 only) is `dist_arch_supported` in `commands/upgrade_dist.rs`. |
 | `manifest.rs` | file-search via MANIFEST |
 | `template.rs` | templates of installed packages |
 | `stockdb.rs` | `resolve-stock`: SQLite dependency database for stock -current |
@@ -189,7 +189,7 @@ Mostly pure logic and system integration. They know nothing about commands.
 - **Freeze:** installed + rule -> FROZEN. Not installed + rule -> hidden from install-new/upgrades/check-updates, visible in search/info. A frozen candidate is treated as absent and resolution continues with the remaining candidates.
 - **Pin:** `@repo 100% name`, exact name, never freezes. A real freeze on the same name wins.
 - **install-new:** `cmd_install_new` and `dist_install_new` are intentionally different (normal: official + subtrees ranked above official; dist: official + patches only, regardless of priority).
-- **upgrade-dist:** requires an explicit target; deliberately bypasses the blacklist and priority; empties the blacklist and keeps `blacklist.bak` (never overwritten on a re-run); disables third-party repos; installs `kernel-generic` after everything else and the GnuPG chain last of all; clean-system stays in Phase 3, after the upgrade.
+- **upgrade-dist:** x86 only (x86_64 and 32-bit x86): on Slackware ARM (aarch64) it refuses before reading or changing anything (`dist_arch_supported`, a final decision, Nov 2026). It requires an explicit target; deliberately bypasses the blacklist and priority; empties the blacklist and keeps `blacklist.bak` (never overwritten on a re-run); disables third-party repos; installs `kernel-generic` after everything else and the GnuPG chain last of all; clean-system stays in Phase 3, after the upgrade.
 - **clean-system:** pinned packages installed from the pin's repo get a separate R/K/P prompt (default Keep). With `-y` they are kept. It never proposes removing slacker itself, nor a fallback kernel saved by Slackware's `/boot/make-kernel-backup`: that tool records the kernel and its modules as a package `kernel-<BACKUP_NAME>-<version>` (`kernel-backup` by default) that no repository ships, so it looked foreign and was removed on Enter or `-y`. Since BACKUP_NAME can be anything, the backup is recognised by the two description lines the script writes in its pkgtools record, whatever its name (`is_kernel_backup` in `commands/clean.rs`, Nov 2026).
 - **new-config:** protected files are never replaced, whatever the user answers in the menu. Only a manual merge, or the user naming the exact path in `NEWCONFIG_OVERWRITE`; a glob there never matches them.
 - **new-config rules** (`NEWCONFIG_OVERWRITE` / `_REMOVE` / `_KEEP` in slacker.conf, paths or globs of the installed file, `*` and `?` not crossing `/`): applied before the menu, with or without `--yes`. In upgrade-dist **only `NEWCONFIG_KEEP`** applies, so a file the user keeps is never replaced there, not even by "[A]ll new"; OVERWRITE and REMOVE are not applied there: as with the blacklist, upgrade-dist shows every other file (it prints a note when such rules exist). These keys add up when repeated (every other key keeps its last line). When several match, the safer wins: KEEP over REMOVE over OVERWRITE. OVERWRITE keeps the old file as `.orig`; KEEP renames the `.new` to `.new.kept`, so nothing is left pending and nothing is lost (issue by gegechris99, Nov 2026).
@@ -234,7 +234,7 @@ Rules followed at every step:
 | 10 | `commands/new_config.rs` | new-config, with `PROTECTED_CONFIGS` and its test |
 | 11 | `commands/update.rs` | update, `refresh_stock_db` |
 | 12 | `commands/status.rs` | status, list-repos, check-updates, with `attribution_tests`, `locate_db_tests` and 6 more tests |
-| 13 | `commands/upgrade_dist.rs` | upgrade-dist and its 19 own items, with 4 tests. `dist_upgrade_sets` is `pub(crate)` for 2 tests in `collect_tests`. |
+| 13 | `commands/upgrade_dist.rs` | upgrade-dist and its 19 own items, with 4 tests (5 since 0.14.1). `dist_upgrade_sets` is `pub(crate)` for 2 tests in `collect_tests`. |
 | 14 | `commands/install.rs` | the 7 package commands and their 20 own helpers, with 4 tests. `abort_on_misses`, `selector_miss_hint`, `plan_alternatives` are `pub(crate)` for tests in `collect_tests`. |
 
 ### 8.3 How it was verified
@@ -274,14 +274,14 @@ The 0.12.x line is no longer maintained, so there is no normal branch to keep in
 
 The first change after the refactor was the plan label (see 7). The second was issue #11 (source attribution and `remove @repo`, see 7), with 2 tests. The third was `BANNER` (issue #12, see 4), with 1 test. The fourth was the dependency exclusion (see 7), with 4 tests. The fifth was the download progress line (issue #14, see 7), with 2 tests. These five are 0.13.0.
 
-0.14.0 added, each with its tests: "Preparing the plan" with the parallel, cached `.dep` reading, and the official tree no longer asked for `.dep`; `TERSE` and the install counter; the install order of UPGRADE.TXT with the kernel last, in every plan and in upgrade-dist; the `NEWCONFIG_*` rules of new-config; `NEWCONFIG_AFTER`, and `NEWCONFIG_KEEP` in upgrade-dist; and the proxy (`PROXY`/`NO_PROXY`, off by default, with a `Proxy` line in `status`) (all see 7). Every new key defaults to the behaviour from before it existed. After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
+0.14.0 added, each with its tests: "Preparing the plan" with the parallel, cached `.dep` reading, and the official tree no longer asked for `.dep`; `TERSE` and the install counter; the install order of UPGRADE.TXT with the kernel last, in every plan and in upgrade-dist; the `NEWCONFIG_*` rules of new-config; `NEWCONFIG_AFTER`, and `NEWCONFIG_KEEP` in upgrade-dist; the proxy (`PROXY`/`NO_PROXY`, off by default, with a `Proxy` line in `status`); `search --partial` and `SEARCH` (issue #22); and clean-system keeping the `make-kernel-backup` kernel (all see 7). 0.14.1: `rusqlite` 0.42 (MSRV 1.89), upgrade-dist refused on aarch64, and the no-match hint of `search` naming `--partial`. Every new key defaults to the behaviour from before it existed. After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **252 passed, 1 ignored** (253 in total).
-- Per file: `main.rs` 50, `config.rs` 38, `pkgdb.rs` 35, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (one ignored: a live TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 4, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, and one each in `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
+- `cargo test`: **253 passed, 1 ignored** (254 in total).
+- Per file: `main.rs` 50, `config.rs` 38, `pkgdb.rs` 35, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (one ignored: a live TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 5, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, and one each in `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Test modules in `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (with the `av()` and `fixture()` fixtures), `freshness_tests`, `foundational_tests`.
 
 ---
