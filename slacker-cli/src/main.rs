@@ -2097,7 +2097,7 @@ fn arch_family(a: &str) -> &str {
 /// True for x86_64 and every 32-bit x86 token: the architectures the official
 /// Slackware tree (and its mirror list) carries. Slackware ARM (aarch64, arm) is
 /// a separate port with its own trees and mirrors.
-fn is_x86_arch(a: &str) -> bool {
+pub(crate) fn is_x86_arch(a: &str) -> bool {
     a == "x86_64" || arch_family(a) == "x86"
 }
 

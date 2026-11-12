@@ -1,4 +1,4 @@
-.TH SLACKER 8 "November 2026" "slacker 0.14.0" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.14.1" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -297,7 +297,8 @@ moves a stable release to \-current, or give a stable
 .I VERSION
 (e.g.\&
 .IR 15.1 )
-to move to a newer stable. The allowed routes are a fail\-closed whitelist
+to move to a newer stable. Not supported on Slackware ARM (aarch64): there it
+refuses before anything is read or changed. The allowed routes are a fail\-closed whitelist
 (currently 15.0 \(-> \-current and 15.0 \(-> a newer stable); anything else is
 refused. This is a deliberately heavyweight, one\-way operation and is gated by a
 typed point\-of\-no\-return confirmation.

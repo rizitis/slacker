@@ -423,6 +423,9 @@ fn dist_execute(
 /// the target, take the target's version of every package (priority bypassed),
 /// and install core-first, then install-new, then the rest.
 pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome, String> {
+    // Slackware ARM (aarch64) is not supported, by decision: refused before
+    // anything is read or touched. Fail-closed, so only the x86 trees pass.
+    dist_arch_supported(&cfg.arch)?;
     // A little ceremony for the distribution-scale operation on the official tree.
     if config::banner_enabled(&cfg.config_dir) {
         banner::show();
@@ -1087,6 +1090,19 @@ fn comment_nonmirror_repos(text: &str) -> (String, Vec<String>) {
     (joined, disabled)
 }
 
+/// upgrade-dist runs only on the x86 trees (x86_64 and 32-bit x86). Slackware
+/// ARM is not supported.
+fn dist_arch_supported(arch: &str) -> Result<(), String> {
+    if crate::is_x86_arch(arch) {
+        Ok(())
+    } else {
+        Err(format!(
+            "upgrade-dist is not supported on {arch} (Slackware ARM). \
+             For -current updates use `slacker upgrade-all`."
+        ))
+    }
+}
+
 /// Refuse to write through a symlink at `path` (so a planted symlink cannot
 /// redirect a config write elsewhere).
 fn refuse_through_symlink(path: &std::path::Path) -> Result<(), String> {
@@ -1104,6 +1120,16 @@ fn refuse_through_symlink(path: &std::path::Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrade_dist_is_refused_on_arm() {
+        assert!(super::dist_arch_supported("x86_64").is_ok());
+        assert!(super::dist_arch_supported("i686").is_ok());
+        assert!(super::dist_arch_supported("i586").is_ok());
+        let e = super::dist_arch_supported("aarch64").unwrap_err();
+        assert!(e.contains("not supported on aarch64"));
+        assert!(super::dist_arch_supported("arm").is_err());
+    }
 
     #[test]
     fn dist_rewrite_swaps_release_segment() {
