@@ -61,7 +61,7 @@ _slacker_template_names() {
     command ls "$dir" 2>/dev/null | sed -E 's/\.template$//'
 }
 
-_slacker_commands='update search file-search info list-repos status install upgrade reinstall remove revert-pkg download upgrade-all upgrade-dist install-new clean-system clean-cache new-config check-updates show-changelog history find-mirror generate-template install-template remove-template delete-template frozen unfrozen pin unpin add-repo del-repo pri-repo add-tag del-tag vet-repo trust-repo distrust-repo help'
+_slacker_commands='update search file-search info list-repos status install upgrade reinstall remove revert-pkg download upgrade-all upgrade-dist install-new clean-system clean-cache new-config check-updates show-changelog history find-mirror generate-template install-template remove-template delete-template frozen unfrozen pin unpin nodep undep add-repo del-repo pri-repo add-tag del-tag vet-repo trust-repo distrust-repo help'
 _slacker_global_flags='--config-dir --yes -y --dry-run --no-deps --help -h --version -V'
 
 _slacker_dispatch() {
@@ -76,6 +76,7 @@ _slacker_dispatch() {
     if [[ $cur == -* ]]; then
         local flags="$_slacker_global_flags"
         case $sub in
+            search) flags+=' --partial --exact' ;;
             download) flags+=' -o --output' ;;
             history) flags+=' --last --since --installed --removed --upgraded' ;;
         esac

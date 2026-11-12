@@ -53,7 +53,7 @@ pub fn status() -> Spec {
     user(&["status"])
 }
 
-/// slacker's search takes exactly one exact name (case-insensitive).
+/// slacker's search takes exactly one name (case-insensitive).
 pub fn search(name: &str) -> Spec {
     user(&["search", name])
 }
@@ -106,6 +106,10 @@ pub fn pin_list() -> Spec {
     root(&["pin"], &[], false)
 }
 
+pub fn nodep_list() -> Spec {
+    root(&["nodep"], &[], false)
+}
+
 // ---- changes that slacker confirms itself ---------------------------------
 
 /// Prints the rule it will add, then "Add these to the blacklist? [y/N]"
@@ -154,6 +158,13 @@ pub fn remove(names: &[String]) -> Spec {
     root(&["remove"], names, true)
 }
 
+/// Prints the exclusions it will add (with a note when the package does not
+/// itself require the dependency), then "write them to the blacklist? [y/N]".
+/// Each rule is `package:dependency`, as made by `dep_rule`.
+pub fn nodep(rules: &[String]) -> Spec {
+    root(&["nodep"], rules, true)
+}
+
 // ---- changes that slacker makes at once -----------------------------------
 
 /// Removes the rule whose text matches exactly; asks nothing.
@@ -164,6 +175,42 @@ pub fn unfreeze(rule: &str) -> Spec {
 /// Removes the package's pin; asks nothing.
 pub fn unpin(package: &str) -> Spec {
     root(&["unpin"], &[package.to_string()], false)
+}
+
+/// Removes the given dependency exclusions (`package:dependency`); asks
+/// nothing.
+pub fn undep(rules: &[String]) -> Spec {
+    root(&["undep"], rules, false)
+}
+
+/// Builds the `package:dependency` argument of `nodep`/`undep` from two exact
+/// package names, checked the way slacker checks a `!package:dependency` line:
+/// letters, digits and `._+-` only, so no space, comma or colon. A blank
+/// package, or `*`, means any package. A leading `-` is refused, so the text
+/// can never become an option.
+pub fn dep_rule(package: &str, dependency: &str) -> Result<String, String> {
+    fn name(what: &str, t: &str) -> Result<(), String> {
+        if t.is_empty() {
+            return Err(format!("Type the {what}."));
+        }
+        if t.starts_with('-') {
+            return Err(format!("The {what} cannot start with \u{201c}-\u{201d}."));
+        }
+        if !t.chars().all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c)) {
+            return Err(format!(
+                "The {what} is one exact package name: letters, digits and \u{201c}._+-\u{201d}, no spaces."
+            ));
+        }
+        Ok(())
+    }
+    let p = package.trim();
+    let p = if p.is_empty() { "*" } else { p };
+    let d = dependency.trim();
+    if p != "*" {
+        name("package", p)?;
+    }
+    name("dependency", d)?;
+    Ok(format!("{p}:{d}"))
 }
 
 /// Checks a typed freeze rule. Spaces are allowed (`@repo PATTERN`); a
@@ -232,6 +279,9 @@ mod tests {
             remove(&n),
             unfreeze("kde/"),
             unpin("vlc"),
+            nodep_list(),
+            nodep(&["ghostty:xvfb-run".to_string()]),
+            undep(&["ghostty:xvfb-run".to_string()]),
         ]
     }
 
@@ -249,8 +299,10 @@ mod tests {
     #[test]
     fn changes_run_as_root_and_reads_as_the_user() {
         let n = vec!["vim".to_string()];
+        let r = vec!["a:b".to_string()];
         for s in [freeze("x"), pin("a", "b"), pri_repo(1, "a"), update(), install_new(), upgrade_all(),
-                  install(&n), reinstall(&n), remove(&n), unfreeze("x"), unpin("b"), frozen_list(), pin_list()] {
+                  install(&n), reinstall(&n), remove(&n), unfreeze("x"), unpin("b"), frozen_list(), pin_list(),
+                  nodep_list(), nodep(&r), undep(&r)] {
             assert_eq!(s.privilege, Privilege::Root, "{:?}", s.args);
         }
         for s in [version(), status(), search("vim"), info("vim"), list_repos(), find_mirror(),
@@ -260,16 +312,17 @@ mod tests {
     }
 
     #[test]
-    fn only_unfreeze_and_unpin_change_without_asking() {
-        // Every root change except these two prints its plan and asks first
+    fn only_unfreeze_unpin_and_undep_change_without_asking() {
+        // Every root change except these three prints its plan and asks first
         // (checked against slacker's cmd_* functions), so the GUI must ask
-        // for these two itself.
+        // for these three itself.
         let n = vec!["vim".to_string()];
+        let r = vec!["a:b".to_string()];
         for s in [freeze("x"), pin("a", "b"), pri_repo(1, "a"), update(), install_new(), upgrade_all(),
-                  install(&n), reinstall(&n), remove(&n)] {
+                  install(&n), reinstall(&n), remove(&n), nodep(&r)] {
             assert!(s.confirms, "{:?}", s.args);
         }
-        assert!(!unfreeze("x").confirms && !unpin("b").confirms);
+        assert!(!unfreeze("x").confirms && !unpin("b").confirms && !undep(&r).confirms);
     }
 
     #[test]
@@ -286,6 +339,22 @@ mod tests {
         assert_eq!(unfreeze("fcitx5*").args, vec!["unfrozen", "fcitx5*"]);
         assert_eq!(unpin("vlc").args, vec!["unpin", "vlc"]);
         assert_eq!(upgrade_all().args, vec!["upgrade-all"]);
+        assert_eq!(nodep_list().args, vec!["nodep"]);
+        let r = vec!["ghostty:xvfb-run".to_string(), "*:cargo-auditable".to_string()];
+        assert_eq!(nodep(&r).args, vec!["nodep", "ghostty:xvfb-run", "*:cargo-auditable"]);
+        assert_eq!(undep(&r).args, vec!["undep", "ghostty:xvfb-run", "*:cargo-auditable"]);
+    }
+
+    #[test]
+    fn typed_dependency_rules_are_checked() {
+        assert_eq!(dep_rule(" ghostty ", " xvfb-run ").unwrap(), "ghostty:xvfb-run");
+        assert_eq!(dep_rule("", "cargo-auditable").unwrap(), "*:cargo-auditable");
+        assert_eq!(dep_rule("*", "cargo-auditable").unwrap(), "*:cargo-auditable");
+        assert_eq!(dep_rule("slackpkg+", "gtk+3").unwrap(), "slackpkg+:gtk+3");
+        for (p, d) in [("a", ""), ("a", "*"), ("a b", "c"), ("a", "b,c"), ("a", "b c"), ("a:b", "c"),
+                       ("a", "b:c"), ("--yes", "b"), ("a", "-b"), ("py*", "b"), ("a", "b\u{7}")] {
+            assert!(dep_rule(p, d).is_err(), "{p:?} {d:?}");
+        }
     }
 
     #[test]

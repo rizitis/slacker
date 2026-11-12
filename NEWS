@@ -1,15 +1,96 @@
-Version Beta 0.13.0
+Version Beta 0.14.0
+=====
+- Update: slacker-gui
+    - Fix: correct minimum rust version in Cargo.toml (highest needed by Cargo.lock: 1.92 (pango-sys 0.22.9) )
+- Update: slacker-cli
+    - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.
+- Update: wiki
+- Update: scripts/
+    - Add: check-msrv.sh (SlackBuild use it now before build)
+---
+
+Version Beta 0.14.0
 =====
 SEMANTIC CHANGES (slacker.conf need update)
+- Update: slacker-gui (Version _beta.6)
+    - Added: a Sources button next to the filter shows only the packages from the repositories or build tags you tick, each listed with its package count; it combines with the name filter, and clicking a package's source tag shows only that source. The list is no longer cut at 200: "Show 200 More" and "Show All" add the rest. (Requested by @gegechris99 #20)
+    - Request for gui: dialogs take 85% of the window and follow its size (issue #23)
 - Update: slacker-cli
+    - packages are installed in the order UPGRADE.TXT gives: aaa_glibc-solibs,
+  pkgtools, tar, xz, findutils and mkinitrd first, kernel-generic last, so its
+  initrd is built with everything else already upgraded (as slackpkg does).
+  upgrade-dist also installs the kernel last, before the GnuPG chain.
+    - new slacker.conf option TERSE=on passes --terse to installpkg and
+  upgradepkg, so each package prints a single line. Default is off.
+  removepkg is terse already.
+    - when several packages are installed, each one is preceded by its
+  place in the run, e.g. `[ 37/245 ] upgrading glibc-2.44-x86_64-5`.
+    - "Preparing the plan for N package(s)..." is shown while the plan is
+  built, with a counter on a terminal. The .dep files are read in parallel
+  (MAX_PARALLEL), and the official tree and its subtrees are no longer asked
+  for .dep files (they ship none), so the wait before the table drops from
+  about a minute to a few seconds.
+    - new slacker.conf keys NEWCONFIG_OVERWRITE, NEWCONFIG_REMOVE and
+  NEWCONFIG_KEEP decide in advance what new-config does with some .new
+  files; only the rest are asked about. OVERWRITE saves your file as .orig,
+  REMOVE deletes the .new, KEEP keeps your file and renames the .new to
+  .new.kept, so nothing is left pending and nothing is lost.
+    - Fix bug a Slackware series name (k, kde, ...) now matches only that series:
+  `k` matched every package with a "k" in its name, from every repo, because
+  k/ holds a single package. A trailing / (k/, kde/) means the series only.
+    - revert-pkg, reinstall, install-new and install-template now say when
+  new .new configuration files were installed, like install and upgrade-all.
+    - New-config can now follow install, reinstall, upgrade, upgrade-all, install-new, install-template and revert-pkg when they leave new .new files: NEWCONFIG_AFTER=ask asks "Run new-config now?", run starts it; off, the default, only prints the reminder as before. Only at a terminal, never with --yes or --dry-run. Files with a NEWCONFIG_* rule are marked with it in the list.
+    - NEWCONFIG_KEEP now also applies in upgrade-dist, so a file you keep is never replaced there, not even by "[A]ll new". NEWCONFIG_OVERWRITE and NEWCONFIG_REMOVE are still not applied there.
+    - Downloads can go through a proxy, off by default: PROXY=http://host:port in slacker.conf (holds under sudo, cron and slacker-gui), or PROXY=env to use https_proxy, http_proxy, all_proxy and no_proxy from the environment. NO_PROXY lists hosts reached directly. Only http:// proxies; https is tunnelled with CONNECT, so TLS still runs end to end with the mirror, and a proxy password is sent only to the proxy. `slacker status` shows the proxy in use.
+    - clean-system no longer lists a fallback kernel saved by /boot/make-kernel-backup, whatever BACKUP_NAME it was given; before, it was removed on Enter or --yes.
+    - CMD `slacker search`: --partial (or SEARCH=partial in slacker.conf) lists every package whose name contains the word; --exact forces the exact match. Names only, never descriptions. The default is unchanged (issue #22).
+    - Add csb repo for current x86_64
+- Update: man pages
+- Update: wiki
+- Update: minimum rust version 1.89 (vulnerability fix)
+    - cargo audit bin target/release/slacker
+      Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1458 security advisories (from /home/omen/.cargo/advisory-db)
+      Updating crates.io index
+      warning: target/release/slacker was not built with 'cargo auditable', the report will be incomplete (28 dependencies recovered)
+      Crate:     libsqlite3-sys
+      Version:   0.38.2
+      Title:     `libsqlite3-sys` via C SQLite CVE-2026-119375
+      Date:      2026-10-30
+      ID:        RUSTSEC-2026-0459
+      URL:       https://rustsec.org/advisories/RUSTSEC-2026-0459
+      Severity:  6.8 (medium)
+      Solution:  Upgrade to >=0.39.0
+      error: 1 vulnerability found in target/release/slacker
+
+Thanks @gegechris99 for the requests. #17 #18 #19 #20 #21 #22 :)
+---
+
+Version Beta 0.13.0
+=====
+SEMANTIC CHANGES (etc/slacker/{slacker.conf,blacklist} are new files, slacker.conf need update)
+- Update: slacker-cli
+    - parallel downloads (upgrade-all, install, upgrade-dist, download) now
+      show what is being downloaded (#14). On a terminal one line is redrawn with
+      the MB of every running download, e.g. `↓ llvm 214/612 M · mesa 3.1/40 M`,
+      and says `no data for 15s` if a download stops receiving. Off a terminal
+      (GUI, pipe, log) a plain `↓ llvm (612 M)` line is printed when a download
+      runs longer than a second.
+    - new commands nodep / undep: never pull one dependency in for one package
+      (`nodep python-sqlalchemy:python-psycopg2`), or for any package
+      (`nodep '*:cargo-auditable'`). Other packages that need it still get it.
+      Stored in the blacklist as `!package:dependency`.
+      The plan now prints a note for every dependency left out because it is
+      frozen or excluded, so nothing is installed without a dependency unnoticed.
     - new slacker.conf option BANNER=off hides the labyrinth header and the
-  SLACKWARE art (#12). Default is on.
+      SLACKWARE art (#12). Default is on.
     - list-repos, status and history attribute each installed package to the
-  repo it came from, not to the first repo using its build tag (#11).
+      repo it came from, not to the first repo using its build tag (#11).
    - `remove @ repo` removes only what list-repos counts for that repo.
-  Before, `remove @ extras` also took every alien package and every official one.
+      Before, `remove @ extras` also took every alien package and every official one.
    - clean-system now lists alienbob's packages as foreign like any third-party
-  repo; add `alien` to IGNORE_TAGS to keep them.
+      repo; add `alien` to IGNORE_TAGS to keep them.
     - refactoring slacker-cli/src
       main.rs had become huge with thousands of lines of code. Of course this wasn't a problem and a grep on a single file would have given us exactly what we were looking for. But in the future a novice forker or developer would have a hard time understanding where what goes, and what does what...
       The ARCHITECTURE.md file was added, so after separating main.rs into various rs, anyone who reads ARCHITECTURE.md can immediately understand where what goes and what not to touch...

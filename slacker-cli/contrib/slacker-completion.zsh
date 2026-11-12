@@ -52,7 +52,7 @@ _slacker_template_names() {
 
 _slacker() {
     local cfg; cfg=$(_slacker_config_dir)
-    local -a cmds; cmds=( 'update' 'search' 'file-search' 'info' 'list-repos' 'status' 'install' 'upgrade' 'reinstall' 'remove' 'revert-pkg' 'download' 'upgrade-all' 'upgrade-dist' 'install-new' 'clean-system' 'clean-cache' 'new-config' 'check-updates' 'show-changelog' 'history' 'find-mirror' 'generate-template' 'install-template' 'remove-template' 'delete-template' 'frozen' 'unfrozen' 'pin' 'unpin' 'add-repo' 'del-repo' 'pri-repo' 'add-tag' 'del-tag' 'vet-repo' 'trust-repo' 'distrust-repo' 'help' )
+    local -a cmds; cmds=( 'update' 'search' 'file-search' 'info' 'list-repos' 'status' 'install' 'upgrade' 'reinstall' 'remove' 'revert-pkg' 'download' 'upgrade-all' 'upgrade-dist' 'install-new' 'clean-system' 'clean-cache' 'new-config' 'check-updates' 'show-changelog' 'history' 'find-mirror' 'generate-template' 'install-template' 'remove-template' 'delete-template' 'frozen' 'unfrozen' 'pin' 'unpin' 'nodep' 'undep' 'add-repo' 'del-repo' 'pri-repo' 'add-tag' 'del-tag' 'vet-repo' 'trust-repo' 'distrust-repo' 'help' )
     local -a gflags; gflags=( '--config-dir' '--yes' '-y' '--dry-run' '--no-deps' '--help' '-h' '--version' '-V' )
 
     if (( CURRENT == 2 )); then
@@ -73,6 +73,7 @@ _slacker() {
     if [[ $PREFIX == -* ]]; then
         local -a flags; flags=( $gflags )
         case $sub in
+        (search) flags+=( '--partial' '--exact' ) ;;
         (download) flags+=( '-o' '--output' ) ;;
         (history) flags+=( '--last' '--since' '--installed' '--removed' '--upgraded' ) ;;
         esac

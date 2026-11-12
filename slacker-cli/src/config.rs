@@ -127,6 +127,15 @@ pub struct Config {
     pub repos: Vec<Repo>,
     /// Resolve .dep files and pull in dependencies (RESOLVE_DEPS, default on).
     pub resolve_deps: bool,
+    /// Pass `--terse` to installpkg/upgradepkg: one line per package
+    /// (TERSE, default off).
+    pub terse: bool,
+    /// What happens when a command leaves new .new config files behind
+    /// (NEWCONFIG_AFTER, default ask).
+    pub newconfig_after: NewConfigAfter,
+    /// `search` lists every package whose name contains the word (SEARCH=partial)
+    /// instead of the exact name only (the default).
+    pub search_partial: bool,
     /// resolve-stock: also pull a stock package's stock deps from the
     /// local depgraph.db (RESOLVE_STOCK, default off).
     pub resolve_stock: bool,
@@ -195,6 +204,13 @@ pub struct Repo {
     /// only. Setting it is an explicit, at-your-own-risk override, since the
     /// login would then be exposed on the wire.
     pub insecure: bool,
+    /// `dep` flag on the repos line, deliberately undocumented. The official
+    /// tree and its subtrees ship no `.dep` files, so slacker does not ask for
+    /// them there (hundreds of 404s per upgrade). Should Slackware ever start
+    /// shipping `.dep` files, add `dep` to those repos lines and they are read
+    /// like any third-party repo's, with no code change. `PACKAGE REQUIRED` in
+    /// PACKAGES.TXT is read either way.
+    pub dep: bool,
 }
 
 impl Repo {
@@ -262,6 +278,12 @@ impl Config {
             Some(v) if v == "no" || v == "false" || v == "0" || v == "off" => false,
             _ => true,
         };
+
+        // TERSE defaults off; on/yes/true/1 passes --terse to installpkg and
+        // upgradepkg (removepkg is terse already).
+        let terse = parse_terse(conf.get("TERSE").map(String::as_str));
+        let newconfig_after = parse_newconfig_after(conf.get("NEWCONFIG_AFTER").map(String::as_str));
+        let search_partial = parse_search_partial(conf.get("SEARCH").map(String::as_str));
 
         // RESOLVE_STOCK defaults OFF. yes/on/true/1 turns it on. The user's
         // explicit declaration that this is a container/minimal system.
@@ -346,6 +368,9 @@ impl Config {
             blacklist,
             repos,
             resolve_deps,
+            terse,
+            newconfig_after,
+            search_partial,
             resolve_stock,
             stock_db_url,
             ignore_tags,
@@ -414,6 +439,22 @@ impl Config {
             .filter(|r| r.pin)
             .filter_map(|r| Some((r.pin_name.as_deref()?, r.repo.as_deref()?)))
             .collect()
+    }
+
+    /// The dependency exclusion that stops `dep` being pulled in as a dependency
+    /// of `parent` (`!parent:dep`, or `!*:dep` for any package), written as a
+    /// rule, if there is one. Exact names on both sides.
+    pub fn nodep_rule(&self, parent: &str, dep: &str) -> Option<String> {
+        self.blacklist
+            .iter()
+            .filter_map(|r| r.nodep())
+            .find(|(p, d)| *d == dep && (*p == "*" || *p == parent))
+            .map(|(p, d)| format!("!{p}:{d}"))
+    }
+
+    /// All dependency exclusions as (parent, dep), for display.
+    pub fn nodeps(&self) -> Vec<(&str, &str)> {
+        self.blacklist.iter().filter_map(|r| r.nodep()).collect()
     }
 
     /// Name of the official repository, if one is configured.
@@ -566,6 +607,57 @@ pub fn banner_enabled(dir: &Path) -> bool {
     parse_revert_enabled(parse_keyvals(&text).get("BANNER").map(String::as_str))
 }
 
+/// PROXY and NO_PROXY from slacker.conf (None when unset or empty), read
+/// leniently like `banner_enabled`: downloads happen in `status` and
+/// `find-mirror` too, which run before (and without) the full config load.
+pub fn proxy_settings(dir: &Path) -> (Option<String>, Option<String>) {
+    let text = read_optional(&dir.join("slacker.conf")).unwrap_or_default();
+    let conf = parse_keyvals(&text);
+    let get = |k: &str| conf.get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    (get("PROXY"), get("NO_PROXY"))
+}
+
+/// What `new-config` does on its own with some `.new` files, from slacker.conf:
+/// NEWCONFIG_OVERWRITE / NEWCONFIG_REMOVE / NEWCONFIG_KEEP, each a list of
+/// paths or globs of the installed file (without `.new`). A key may be repeated
+/// on several lines and its lines add up, unlike every other key.
+#[derive(Debug, Default, PartialEq)]
+pub struct NewConfigRules {
+    pub overwrite: Vec<String>,
+    pub remove: Vec<String>,
+    pub keep: Vec<String>,
+}
+
+/// Read the NEWCONFIG_* rules leniently, like `banner_enabled`: new-config runs
+/// without the full config load (it must work while repos/mirrors are broken),
+/// so a missing or unreadable slacker.conf just means no rules.
+pub fn newconfig_rules(dir: &Path) -> NewConfigRules {
+    parse_newconfig_rules(&read_optional(&dir.join("slacker.conf")).unwrap_or_default())
+}
+
+fn parse_newconfig_rules(text: &str) -> NewConfigRules {
+    let mut out = NewConfigRules::default();
+    for raw in text.lines() {
+        let line = strip_comment(raw);
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let list = match k.trim() {
+            "NEWCONFIG_OVERWRITE" => &mut out.overwrite,
+            "NEWCONFIG_REMOVE" => &mut out.remove,
+            "NEWCONFIG_KEEP" => &mut out.keep,
+            _ => continue,
+        };
+        let v = v.trim().trim_matches('"').trim_matches('\'');
+        // A path copied from slackpkg's post-functions.conf still names the
+        // .new file; it means the same installed file.
+        list.extend(
+            v.split_whitespace()
+                .map(|p| p.strip_suffix(".new").unwrap_or(p).to_string())
+                .filter(|p| !p.is_empty()),
+        );
+    }
+    out
+}
+
 /// Architecture tokens we recognise in Slackware package names / os-release.
 const KNOWN_ARCHES: &[&str] = &["x86_64", "aarch64", "i586", "i686", "arm", "noarch"];
 
@@ -696,6 +788,11 @@ pub struct BlacklistRule {
     /// NOT match in the freeze path (`matches` early-returns false on it); it is
     /// consulted only by `pinned_repo`.
     pin: bool,
+    /// For a dependency exclusion (`!parent:dep`, or `!*:dep` for any parent):
+    /// (parent, dep), both EXACT names. Neither a freeze nor a pin: it only
+    /// stops `dep` being pulled in as a dependency of `parent`, so `matches`
+    /// early-returns false on it; it is consulted only by `nodep_rule`.
+    nodep: Option<(String, String)>,
 }
 
 impl BlacklistRule {
@@ -703,8 +800,9 @@ impl BlacklistRule {
     /// may be None (then series/`@repo` rules simply do not match).
     pub fn matches(&self, id: &str, series: Option<&str>, repo: Option<&str>) -> bool {
         // A pin is a positive rule ("only from this repo"), never a freeze, so it
-        // must never make a package look blacklisted. The freeze path stops here.
-        if self.pin {
+        // must never make a package look blacklisted; nor does a dependency
+        // exclusion (`!parent:dep`). The freeze path stops here.
+        if self.pin || self.nodep.is_some() {
             return false;
         }
         if let Some(want) = &self.repo {
@@ -728,6 +826,11 @@ impl BlacklistRule {
         }
     }
 
+    /// (parent, dep) for a dependency exclusion `!parent:dep`, else None.
+    pub fn nodep(&self) -> Option<(&str, &str)> {
+        self.nodep.as_ref().map(|(p, d)| (p.as_str(), d.as_str()))
+    }
+
     /// The `@repo` scope of this rule, if any.
     pub fn repo(&self) -> Option<&str> {
         self.repo.as_deref()
@@ -746,6 +849,10 @@ impl BlacklistRule {
             let repo = self.repo.as_deref().unwrap_or("?");
             let name = self.pin_name.as_deref().unwrap_or("?");
             return format!("pins '{name}' to repo '{repo}' (not a freeze)");
+        }
+        if let Some((parent, dep)) = &self.nodep {
+            let of = if parent == "*" { "any package".to_string() } else { format!("'{parent}'") };
+            return format!("never pulls '{dep}' in as a dependency of {of} (not a freeze)");
         }
         let scope = match &self.repo {
             Some(r) => format!("in repo '{r}' only"),
@@ -822,6 +929,12 @@ fn glob_to_regex(glob: &str) -> String {
 
 pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
     let raw = line.trim().to_string();
+    // Dependency exclusion: `!parent:dep` never pulls `dep` in as a dependency
+    // of `parent` (`!*:dep`: of any package). Checked first: `!` starts no
+    // freeze pattern or pin.
+    if let Some(body) = raw.strip_prefix('!') {
+        return parse_nodep(&raw, body);
+    }
     let mut rest = raw.as_str();
     let mut repo = None;
     if let Some(after) = rest.strip_prefix('@') {
@@ -887,6 +1000,7 @@ pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
             name: None,
             pin_name: Some(rest.to_string()),
             pin: true,
+            nodep: None,
         });
     }
     if let Some(series) = rest.strip_suffix('/') {
@@ -900,10 +1014,64 @@ pub fn parse_blacklist_rule(line: &str) -> Result<BlacklistRule, String> {
             name: None,
             pin_name: None,
             pin: false,
+            nodep: None,
         });
     }
     let re = compile_pattern(rest).map_err(|e| format!("'{raw}': {e}"))?;
-    Ok(BlacklistRule { repo, series: None, name: Some(re), pin_name: None, pin: false })
+    Ok(BlacklistRule { repo, series: None, name: Some(re), pin_name: None, pin: false, nodep: None })
+}
+
+/// Parse the body of a dependency exclusion `!parent:dep` (`raw` is the whole
+/// rule, for messages). Both are EXACT package names; the parent may be `*`
+/// ("a dependency of any package"). One dependency per rule, written with no
+/// spaces, so every rule is one line that `undep` removes on its own. No
+/// `@repo` scope: the rule is about which package asks for the dependency, not
+/// where either comes from.
+fn parse_nodep(raw: &str, body: &str) -> Result<BlacklistRule, String> {
+    let usage = "a dependency rule is '!package:dependency' (or '!*:dependency' for any package)";
+    if body.contains(',') {
+        return Err(format!(
+            "'{raw}': one dependency per rule — write a '!package:dependency' line for each"
+        ));
+    }
+    if body.contains(char::is_whitespace) {
+        return Err(format!("'{raw}': no spaces in a dependency rule; {usage}"));
+    }
+    let (parent, dep) = body.split_once(':').ok_or_else(|| format!("'{raw}': {usage}"))?;
+    if parent.is_empty() || dep.is_empty() {
+        return Err(format!("'{raw}': {usage}"));
+    }
+    if parent != "*" {
+        check_exact_name(raw, parent)?;
+    }
+    check_exact_name(raw, dep)?;
+    Ok(BlacklistRule {
+        repo: None,
+        series: None,
+        name: None,
+        pin_name: None,
+        pin: false,
+        nodep: Some((parent.to_string(), dep.to_string())),
+    })
+}
+
+/// A name in a dependency rule must be one exact package name: letters,
+/// digits and `.` `_` `+` `-` (`slackpkg+`, `python3.11`, `gtk+3`), not
+/// starting or ending with `-`.
+fn check_exact_name(raw: &str, name: &str) -> Result<(), String> {
+    if name_has_pattern_chars(name) {
+        return Err(format!(
+            "'{raw}': '{name}' is a pattern; a dependency rule takes EXACT package names"
+        ));
+    }
+    if name.contains(':') {
+        return Err(format!("'{raw}': one ':' only; {}", "write it as '!package:dependency'"));
+    }
+    let valid = name.chars().all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c));
+    if !valid || name.starts_with('-') || name.ends_with('-') {
+        return Err(format!("'{raw}': '{name}' is not a valid package name"));
+    }
+    Ok(())
 }
 
 /// Parse the whole `blacklist` file, warning about and skipping any malformed
@@ -1048,6 +1216,7 @@ fn parse_repos(
         let mut verify: Option<VerifyPolicy> = None;
         let mut credentials: Option<String> = None;
         let mut insecure = false;
+        let mut dep = false;
         for flag in fields {
             if flag == "official" {
                 official = true;
@@ -1057,6 +1226,10 @@ fn parse_repos(
                 subtree = true;
             } else if flag == "insecure" {
                 insecure = true;
+            } else if flag == "dep" {
+                // Not listed in the error below or in the docs on purpose;
+                // see Repo::dep.
+                dep = true;
             } else if let Some(v) = flag.strip_prefix("verify=") {
                 verify = Some(
                     VerifyPolicy::parse(v)
@@ -1088,6 +1261,7 @@ fn parse_repos(
             verify,
             credentials,
             insecure,
+            dep,
         });
     }
 
@@ -1127,6 +1301,43 @@ fn parse_max_parallel(raw: Option<&str>) -> usize {
         Some(Ok(n)) => n.clamp(1, 16),
         _ => 4,
     }
+}
+
+/// What an install, upgrade, reinstall, install-new, install-template or
+/// revert-pkg does when it leaves new .new config files behind. Only ever acted
+/// on at an interactive terminal without --yes; otherwise the reminder is
+/// printed whatever this says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewConfigAfter {
+    /// Ask "Run new-config now? [Y/n]".
+    Ask,
+    /// Run new-config right away, like slackpkg.
+    Run,
+    /// Only print the reminder (the default, as before this key existed).
+    Off,
+}
+
+/// NEWCONFIG_AFTER: ask or run; anything else (or nothing) is off.
+fn parse_newconfig_after(v: Option<&str>) -> NewConfigAfter {
+    match v.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("ask") => NewConfigAfter::Ask,
+        Some("run") => NewConfigAfter::Run,
+        _ => NewConfigAfter::Off,
+    }
+}
+
+/// SEARCH: partial; anything else (or nothing) is the exact name, as before
+/// this key existed.
+fn parse_search_partial(v: Option<&str>) -> bool {
+    v.is_some_and(|s| s.trim().eq_ignore_ascii_case("partial"))
+}
+
+/// TERSE: off unless explicitly on/yes/true/1.
+fn parse_terse(v: Option<&str>) -> bool {
+    matches!(
+        v.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("on") | Some("yes") | Some("true") | Some("1")
+    )
 }
 
 /// Parse a `REVERT` on/off value. Default is on; only an explicit
@@ -1223,6 +1434,52 @@ mod tests {
         assert_eq!(parse_max_parallel(Some("999")), 16); // ceiling
         assert_eq!(parse_max_parallel(Some("abc")), 4); // garbage -> default
         assert_eq!(parse_max_parallel(Some("")), 4); // empty -> default
+    }
+
+    #[test]
+    fn newconfig_rules_add_up_across_lines() {
+        let text = "\
+            # NEWCONFIG_KEEP=/etc/ignored\n\
+            NEWCONFIG_OVERWRITE=/etc/rc.d/rc.*\n\
+            NEWCONFIG_KEEP=/etc/rc.d/rc.modules.local\n\
+            NEWCONFIG_KEEP=\"/etc/ssh/sshd_config /etc/slacker/mirrors\"  # two at once\n\
+            NEWCONFIG_REMOVE=/etc/ntp.conf.new\n\
+            TERSE=on\n";
+        let r = parse_newconfig_rules(text);
+        assert_eq!(r.overwrite, vec!["/etc/rc.d/rc.*"]);
+        assert_eq!(r.keep, vec!["/etc/rc.d/rc.modules.local", "/etc/ssh/sshd_config", "/etc/slacker/mirrors"]);
+        assert_eq!(r.remove, vec!["/etc/ntp.conf"]); // a slackpkg-style .new path is accepted
+        assert_eq!(parse_newconfig_rules(""), NewConfigRules::default());
+    }
+
+    #[test]
+    fn newconfig_after_defaults_to_off() {
+        assert_eq!(parse_newconfig_after(None), NewConfigAfter::Off);
+        assert_eq!(parse_newconfig_after(Some("typo")), NewConfigAfter::Off);
+        assert_eq!(parse_newconfig_after(Some("Ask")), NewConfigAfter::Ask);
+        assert_eq!(parse_newconfig_after(Some(" RUN ")), NewConfigAfter::Run);
+        assert_eq!(parse_newconfig_after(Some("off")), NewConfigAfter::Off);
+    }
+
+    #[test]
+    fn search_is_exact_unless_set_to_partial() {
+        assert!(!parse_search_partial(None));
+        assert!(!parse_search_partial(Some("exact")));
+        assert!(!parse_search_partial(Some("typo")));
+        assert!(parse_search_partial(Some("partial")));
+        assert!(parse_search_partial(Some(" Partial ")));
+    }
+
+    #[test]
+    fn terse_defaults_off() {
+        assert!(!parse_terse(None));
+        assert!(!parse_terse(Some("off")));
+        assert!(!parse_terse(Some("anything")));
+        assert!(parse_terse(Some("on")));
+        assert!(parse_terse(Some(" ON ")));
+        assert!(parse_terse(Some("yes")));
+        assert!(parse_terse(Some("true")));
+        assert!(parse_terse(Some("1")));
     }
 
     #[test]
@@ -1486,6 +1743,35 @@ mod tests {
     }
 
     #[test]
+    fn repos_dep_flag_is_off_unless_given() {
+        let (repos, _t) = parse_repos(
+            "100 slackware mirror official\n\
+             200 patches https://m/slackware64-current/patches subtree dep\n",
+            Some("https://m/slackware64-current/"),
+        )
+        .unwrap();
+        assert!(!repos.iter().find(|r| r.name == "slackware").unwrap().dep);
+        assert!(repos.iter().find(|r| r.name == "patches").unwrap().dep);
+    }
+
+    #[test]
+    fn official_and_subtrees_are_not_asked_for_dep_files() {
+        let (repos, _t) = parse_repos(
+            "100 slackware mirror official\n\
+             200 patches https://m/s/patches subtree immutable\n\
+             90 extras https://m/s/extra subtree dep\n\
+             80 conraid https://slackers.it/r\n",
+            Some("https://m/s/"),
+        )
+        .unwrap();
+        let reads = |n: &str| crate::repo::reads_dep_files(repos.iter().find(|r| r.name == n).unwrap());
+        assert!(!reads("slackware"));
+        assert!(!reads("patches"));
+        assert!(reads("extras")); // the dep flag turns it back on
+        assert!(reads("conraid"));
+    }
+
+    #[test]
     fn repos_subtree_flag_parses_and_resolves_parent_base() {
         let (repos, _t) = parse_repos(
             "100 slackware mirror official\n\
@@ -1663,6 +1949,9 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            terse: false,
+            newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1710,6 +1999,9 @@ mod tests {
             blacklist: bl,
             repos: vec![],
             resolve_deps: true,
+            terse: false,
+            newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],
@@ -1735,6 +2027,62 @@ mod tests {
     }
 
     #[test]
+    fn nodep_rules_parse_and_never_freeze_or_pin() {
+        let r = parse_blacklist_rule("!python-sqlalchemy:python-psycopg2").unwrap();
+        assert_eq!(r.nodep(), Some(("python-sqlalchemy", "python-psycopg2")));
+        assert!(!r.matches("python-psycopg2-2.9-x86_64-1cf", Some("l"), Some("conraid")));
+        assert!(parse_blacklist_rule("!*:cargo-auditable").is_ok());
+        assert!(parse_blacklist_rule("!slackpkg+:gtk+3").is_ok());
+        assert!(parse_blacklist_rule("!python3.11:py_lib-2").is_ok());
+        for bad in [
+            "!", "!a", "!a:", "!:b", "!a:*", "!py*:b", "!a:b:c", "!a b:c", "!@x:b", "!a:kde/",
+            "!a:b,c", "!a:b c", "!a :b", "!a: b", "! a:b", "!-a:b", "!a:b-", "!a:b;c", "!a:b=1",
+            "!!a:b", "!*x:b",
+        ] {
+            assert!(parse_blacklist_rule(bad).is_err(), "{bad} should be rejected");
+        }
+        let bl = parse_blacklist("!python-sqlalchemy:python-psycopg2\n!*:cargo-auditable\nfirefox\n@alienbob 100% vlc\n");
+        let cfg = Config {
+            arch: "x86_64".into(),
+            cache_dir: std::path::PathBuf::new(),
+            state_dir: std::path::PathBuf::new(),
+            pkg_db_dir: std::path::PathBuf::new(),
+            adm_dir: std::path::PathBuf::new(),
+            blacklist: bl,
+            repos: vec![],
+            resolve_deps: true,
+            terse: false,
+            newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
+            resolve_stock: false,
+            stock_db_url: String::new(),
+            ignore_tags: vec![],
+            tag_priorities: vec![],
+            config_dir: std::path::PathBuf::new(),
+            verify: VerifyPolicy::All,
+            max_parallel: 1,
+            revert_enabled: true,
+            cumulative_url: String::new(),
+            distro_upgrade_mirror: None,
+        };
+        // only for the package it names ...
+        assert_eq!(
+            cfg.nodep_rule("python-sqlalchemy", "python-psycopg2").as_deref(),
+            Some("!python-sqlalchemy:python-psycopg2")
+        );
+        assert_eq!(cfg.nodep_rule("pgadmin", "python-psycopg2"), None);
+        // ... or for any package with `*`
+        assert_eq!(cfg.nodep_rule("ripgrep", "cargo-auditable").as_deref(), Some("!*:cargo-auditable"));
+        assert_eq!(cfg.nodeps().len(), 2);
+        // neither is a freeze or a pin; the freeze and the pin still work
+        assert!(!cfg.blacklist_hit("python-psycopg2-2.9-x86_64-1cf", Some("l"), Some("conraid")));
+        assert!(!cfg.blacklist_hit("cargo-auditable-0.7-x86_64-1cf", Some("d"), Some("conraid")));
+        assert!(cfg.blacklist_hit("firefox-1-x86_64-1", Some("xap"), Some("slackware")));
+        assert_eq!(cfg.pinned_repo("vlc"), Some("alienbob"));
+        assert_eq!(cfg.pins().len(), 1);
+    }
+
+    #[test]
     fn install_new_scans_subtrees_ranked_above_official() {
         // install-new (no arg) scans the official repo PLUS any distribution
         // subtree ranked strictly above it; subtrees at or below the base stay
@@ -1755,6 +2103,9 @@ mod tests {
             blacklist: vec![],
             repos,
             resolve_deps: true,
+            terse: false,
+            newconfig_after: NewConfigAfter::Off,
+            search_partial: false,
             resolve_stock: false,
             stock_db_url: String::new(),
             ignore_tags: vec![],

@@ -13,7 +13,7 @@
 ![slacker-cli](./slacker-cli/DOCS/files/slacker-cli.png)
 
 
-A Slackware package manager in Rust from sratch, with full **slackpkg action parity**, plus
+A Slackware package manager in Rust from scratch, with full **slackpkg action parity**, plus
 **slackpkg+-style multi-repo priority** resolution.
 
 - slackpkg: official mirror, update/install/upgrade/remove/clean-system, file-
@@ -71,7 +71,7 @@ slacker upgrade-all
 | [Quick Start](https://forge.slackware.nl/rizitis/slacker/wiki/Quick-Start) | first-time setup, step by step |
 | [Configuration](https://forge.slackware.nl/rizitis/slacker/wiki/Configuration) | `slacker.conf`, `mirrors`, `repos`, `blacklist` |
 | [Repositories and Priority](https://forge.slackware.nl/rizitis/slacker/wiki/Repositories-and-Priority) | the priority model, `subtree`, pins, `@` selectors |
-| [Commands](https://forge.slackware.nl/rizitis/slacker/wiki/Commands) | full reference for all 38 actions |
+| [Commands](https://forge.slackware.nl/rizitis/slacker/wiki/Commands) | full reference for all 40 actions |
 | [Common Workflows](https://forge.slackware.nl/rizitis/slacker/wiki/Common-Workflows) | the recipes you will actually use |
 | [Distribution Upgrade](https://forge.slackware.nl/rizitis/slacker/wiki/Distribution-Upgrade) | `upgrade-dist` - moving to a new Slackware release |
 | [Package History](https://forge.slackware.nl/rizitis/slacker/wiki/Package-History) | the `history` command |
@@ -105,7 +105,7 @@ runs the slacker binary, reads what slacker prints, and lays it out.
 
 <!-- αυτή η γραμμή δεν φαίνεται  ![repos](./slacker-gui/dev-docs/slacker-2.png) -->
 
-<video src="/attachments/4b3ab746-b83f-4794-8765-2269bd03086f" controls></video>
+<video src="/attachments/17506fcd-1fd4-4781-a495-c5376302be2d" controls></video>
 ---
 
 ## slacker-src
@@ -130,7 +130,7 @@ report what you find:
 - **Ideas are welcome too** - thanks to the fluid `0.x` model, a strong idea can
   genuinely make it into the codebase.
   
-- If you can code PR's are more than welcome. Help from AI assistans are also welcome but a PR direclty from an AI is not.
+- If you can code, PRs are more than welcome. Help from AI assistants is also welcome, but a PR directly from an AI is not.
 - NOTE: That this project it cannot succeed if it remains the work of one person, no matter how well-made it is.
   So do it, try slacker, and if you like it get involved, take project and make it better...
 
@@ -142,6 +142,7 @@ report what you find:
 > but send any **patches upstream**.
 >
 > **aarch64** binaries are signed by @n4t3r , was kind enough to test and build them. (only on <https://forge.slackware.nl/rizitis/slacker>) 
+> `upgrade-dist` is not supported on aarch64.
 
 ---
 

@@ -3,7 +3,7 @@
   "_global_flags": ["--config-dir", "--yes", "-y", "--dry-run", "--no-deps", "--help", "-h", "--version", "-V"],
   "commands": {
     "update":            {"selector": false, "positional": "none"},
-    "search":            {"selector": false, "positional": "none"},
+    "search":            {"selector": false, "positional": "none", "flags": ["--partial", "--exact"]},
     "file-search":       {"selector": false, "positional": "none"},
     "info":              {"selector": false, "positional": "installed"},
     "list-repos":        {"selector": false, "positional": "none"},
@@ -32,6 +32,8 @@
     "unfrozen":          {"selector": false, "positional": "none"},
     "pin":               {"selector": false, "positional": "repo:pkg"},
     "unpin":             {"selector": false, "positional": "installed"},
+    "nodep":             {"selector": false, "positional": "none"},
+    "undep":             {"selector": false, "positional": "none"},
     "add-repo":          {"selector": false, "positional": "none"},
     "del-repo":          {"selector": false, "positional": "repo"},
     "pri-repo":          {"selector": false, "positional": "repo"},

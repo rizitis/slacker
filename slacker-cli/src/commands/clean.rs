@@ -13,12 +13,46 @@ use std::io::Write;
 /// Whether an installed package should be treated as "pinned to its source" by
 /// clean-system: it carries a persistent pin (`pin_repo` is `Some`) AND its
 /// installed build actually came from that pinned repo (`installed_tag_repo` —
-/// the repo that owns the installed build tag — equals the pin's repo). A pinned
-/// name installed from some OTHER repo returns false: the pin is then ignored and
-/// the package falls through to the normal foreign-package logic (kept if
-/// official, removed if nothing else protects it).
+/// the repo the installed build came from, `repo_for_installed` — equals the
+/// pin's repo). A pinned name installed from some OTHER repo returns false: the
+/// pin is then ignored and the package falls through to the normal
+/// foreign-package logic (kept if official, removed if nothing else protects it).
 fn is_pinned_from_its_repo(pin_repo: Option<&str>, installed_tag_repo: Option<&str>) -> bool {
     matches!((pin_repo, installed_tag_repo), (Some(p), Some(o)) if p == o)
+}
+
+/// Whether `record`, the pkgtools record of the installed package `name`, was
+/// written by Slackware's /boot/make-kernel-backup (pkgtools). That script
+/// records the current kernel and its modules as a package
+/// `kernel-<BACKUP_NAME>-<version>`, so that the fallback kernel survives
+/// upgrades of kernel-generic. No repository ever ships such a package, which
+/// made clean-system list it as foreign and remove the fallback kernel on Enter
+/// or --yes. BACKUP_NAME can be anything (/etc/default/make-kernel-backup or the
+/// environment sets it), so the backup is known by the two description lines
+/// the script writes for it, not by its name.
+fn is_kernel_backup(name: &str, record: &str) -> bool {
+    if !name.starts_with("kernel-") {
+        return false;
+    }
+    let title = format!("{name}: {name} (backup of ");
+    let prefix = format!("{name}: ");
+    let (mut has_title, mut has_body) = (false, false);
+    let description = record
+        .lines()
+        .skip_while(|l| !l.starts_with("PACKAGE DESCRIPTION:"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("FILE LIST:"));
+    for line in description {
+        if line.starts_with(&title) {
+            has_title = true;
+        } else if let Some(text) = line.strip_prefix(&prefix) {
+            let text = text.trim_end();
+            if text.starts_with("This is a backup of ") && text.ends_with(" and modules.") {
+                has_body = true;
+            }
+        }
+    }
+    has_title && has_body
 }
 
 pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
@@ -31,11 +65,12 @@ pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, Strin
     // keeps exactly the packages slacker attributes to it:
     //
     //   * Tagged install (cf, alien, _SBo, ...): it came from a tagged source,
-    //     identified by its build tag. Kept iff that tag is in IGNORE_TAGS, OR
-    //     the repo that owns the tag is `immutable`. So `immutable extras` keeps
-    //     every package carrying extras' tag — but making `patches` immutable
-    //     does NOT keep a `foo` you installed from alienbob (its `alien` tag is
-    //     owned by alienbob, not patches), so that `foo` is still foreign.
+    //     found from the package and its build tag (`repo_for_installed`). Kept
+    //     iff that tag is in IGNORE_TAGS, OR the repo it came from is
+    //     `immutable`. So `immutable extras` keeps alienbob's slackpkg+ that
+    //     extra/ ships (tag `alien`) but not alienbob's own alien packages; and
+    //     making `patches` immutable does NOT keep a `foo` you installed from
+    //     alienbob, so that `foo` is still foreign.
     //   * Tagless install (empty build tag — the Slackware/official convention):
     //     slacker cannot tell which tagless repo it came from, so it is kept iff
     //     its NAME is in the baseline (official + every `immutable` repo). This
@@ -87,15 +122,22 @@ pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, Strin
             if p.name.as_str() == env!("CARGO_PKG_NAME") {
                 return false;
             }
+            // Nor a fallback kernel saved by /boot/make-kernel-backup.
+            if p.name.starts_with("kernel-")
+                && std::fs::read_to_string(cfg.pkg_db_dir.join(p.tag()))
+                    .is_ok_and(|record| is_kernel_backup(&p.name, &record))
+            {
+                return false;
+            }
             if bl_installed(cfg, Some(&db), p) {
                 return false; // blacklisted -> always kept
             }
             if !p.is_official_build() {
                 // Genuine third-party tag (e.g. `_SBo`, `alien`): kept by
-                // IGNORE_TAGS, or if its owning repo is immutable.
+                // IGNORE_TAGS, or if the repo it came from is immutable.
                 let tag = p.build_tag();
                 let owned_by_immutable =
-                    db.repo_for_tag(tag).is_some_and(|r| immutable.contains(r));
+                    db.repo_for_installed(p).is_some_and(|r| immutable.contains(r));
                 !(cfg.is_ignored_tag(tag) || owned_by_immutable)
             } else {
                 // Official: tagless (-current) OR a `_slack<version>` stable patch
@@ -109,14 +151,14 @@ pub(crate) fn cmd_clean_system(cli: &Cli, cfg: &Config) -> Result<Outcome, Strin
         .collect();
 
     // Among the foreign packages, separate out ones the user PINNED to a repo
-    // and actually installed FROM that repo (the pin's repo owns the installed
-    // build tag). A pin is an explicit "take this from here" choice, so removing
+    // and actually installed FROM that repo (`repo_for_installed` names the
+    // pin's repo). A pin is an explicit "take this from here" choice, so removing
     // such a package is offered as a deliberate decision (R/K/P, default Keep)
     // rather than lumped in with the rest. A pinned name whose installed copy is
     // NOT from the pin repo keeps falling through to the normal logic above.
     let (pinned, mut orphans): (Vec<&pkg::PkgId>, Vec<&pkg::PkgId>) =
         orphans.into_iter().partition(|p| {
-            is_pinned_from_its_repo(cfg.pinned_repo(&p.name), db.repo_for_tag(p.build_tag()))
+            is_pinned_from_its_repo(cfg.pinned_repo(&p.name), db.repo_for_installed(p))
         });
 
     if !pinned.is_empty() {
@@ -408,5 +450,39 @@ mod tests {
         assert!(!is_pinned_from_its_repo(Some("alienbob"), None));
         // neither -> not
         assert!(!is_pinned_from_its_repo(None, None));
+    }
+
+    #[test]
+    fn a_kernel_backup_is_known_by_what_make_kernel_backup_writes() {
+        // The record /boot/make-kernel-backup writes, for any BACKUP_NAME.
+        let record = |n: &str| {
+            format!(
+                "PACKAGE NAME:     {n}-7.3.4-x86_64-1\n\
+                 PACKAGE LOCATION: ./{n}-7.3.4-x86_64-1\n\
+                 PACKAGE DESCRIPTION:\n\
+                 {n}: {n} (backup of /boot/vmlinuz-7.3.4)\n\
+                 {n}:\n\
+                 {n}: This is a backup of /boot/vmlinuz-7.3.4 and modules.\n\
+                 {n}:\n\
+                 FILE LIST:\n./\nboot/\nboot/vmlinuz-7.3.4\n"
+            )
+        };
+        assert!(is_kernel_backup("kernel-backup", &record("kernel-backup")));
+        assert!(is_kernel_backup("kernel-old", &record("kernel-old")));
+        assert!(is_kernel_backup("kernel-my-safe-one", &record("kernel-my-safe-one")));
+        // A record that belongs to another package name.
+        assert!(!is_kernel_backup("kernel-generic", &record("kernel-backup")));
+        // Only kernel-* packages.
+        assert!(!is_kernel_backup("foo", &record("foo")));
+        // Both description lines are needed, and only in the description.
+        let only_title = "PACKAGE DESCRIPTION:\nkernel-x: kernel-x (backup of /boot/vmlinuz)\nFILE LIST:\n";
+        assert!(!is_kernel_backup("kernel-x", only_title));
+        let in_file_list = "PACKAGE DESCRIPTION:\nkernel-x: kernel-x (backup of /boot/vmlinuz)\nFILE LIST:\n\
+                            kernel-x: This is a backup of /boot/vmlinuz and modules.\n";
+        assert!(!is_kernel_backup("kernel-x", in_file_list));
+        // A real kernel-generic record.
+        let generic = "PACKAGE DESCRIPTION:\nkernel-generic: kernel-generic (a general purpose SMP Linux kernel)\n\
+                       kernel-generic:\nFILE LIST:\n";
+        assert!(!is_kernel_backup("kernel-generic", generic));
     }
 }

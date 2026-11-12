@@ -301,11 +301,9 @@ fn show_log(window: &adw::ApplicationWindow, runner: &Runner) {
     view.set_content(Some(&body));
     let dialog = adw::Dialog::builder()
         .title("Command output")
-        .content_width(860)
-        .content_height(600)
         .child(&view)
         .build();
-    dialog.present(Some(window));
+    crate::widgets::present_fitted(&dialog, window, (860, 600));
 }
 
 fn show_about(window: &adw::ApplicationWindow) {

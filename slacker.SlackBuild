@@ -8,7 +8,7 @@ cd $(dirname $0) ; CWD=$(pwd)
 set -e
 
 PRGNAM=slacker
-VERSION=${VERSION:-0.13.0}
+VERSION=${VERSION:-0.14.1}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
@@ -67,6 +67,16 @@ while true; do
             ;;
     esac
 done
+
+# rust-version in both Cargo.toml must cover what their Cargo.lock needs
+if ! bash "$CWD/scripts/check-msrv.sh"; then
+  echo
+  echo "STOP: a rust-version in Cargo.toml is lower than its Cargo.lock needs."
+  echo "Raise it to the value shown above, then build again."
+  exit 1
+fi
+
+sleep 3
 
 # Pick the right example configs for the running release (stable vs -current).
 DIR=stable

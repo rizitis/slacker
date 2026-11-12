@@ -1,6 +1,6 @@
     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
     ▒ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ▒
-    ▒          ██╗                ██╗ ░░slacker v0.13.0░░░ ▒
+    ▒          ██╗                ██╗ ░░slacker v0.14.0░░░ ▒
     ▒   ██████╗██║  █████╗ ██████╗██║ ██╗██████╗██╗████╗   ▒
     ▒   ██╔═══╝██║  ╚═══██╗██╔═══╝██║██╔╝██╔═██║████╔══╝   ▒
     ▒   ██████╗██║  ██████║██║    ████╔╝ ██████║██╔═╝      ▒
@@ -11,14 +11,14 @@
     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 
 ████ LOADING PACKAGE INFO ██████████████████████████████████████████████
-[0x01] PACKAGE   : slacker v0.13.0_beta.5  [OK]
+[0x01] PACKAGE   : slacker v0.14.0_beta.6  [OK]
 [0x02] TYPE      : APPLICATION (cli + gui)  [OK]
-[0x03] SIZE      : 2.7 MiB  [OK]
-[0x04] DATE      : 2026-10-02  [OK]
-[0x05] MD5       : da34b54e2d3a9e352440a39cb26af709  [OK]
+[0x03] SIZE      : 2.8 MiB  [OK]
+[0x04] DATE      : 2026-10-11  [OK]
+[0x05] MD5       :   []
 [0x06] ARCH      : x86_64 i686  aarch64 [OK]
 [0x07] TARGET    : Slackware | development branch  [OK]
-[0x08] LANG      : Rust 1.88+  [OK]
+[0x08] LANG      : Rust 1.89+  [OK]
 [0x09] DEVELOPER : rizitis
 ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 
@@ -33,7 +33,7 @@
 [0x4100] usr/share/...............applications | polkit-1 | icons
 [0x5000] usr/doc/slacker-*/.......README.md | NEWS | CONF/ | SlackBuild
 [0x6000] var/cache/slacker/.......repos/ | packages/  (runtime)
-[0x7000] var/lib/slacker/.........trusted/ | quarantine/ | gpg/ (run)
+[0x7000] var/lib/slacker/.........trusted/ | quarantine/ | gpg/ | stock/
 ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 
 ████ CODE MAP STREAM ███████████████████████████████████████████████████
@@ -54,12 +54,19 @@
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 ████ CONFIG STREAM █████████████████████████████████████████████████████
-[CFG] CONFIG_DIR="/etc/slacker"
+[CFG] CONFIG_DIR="/etc/slacker"        (--config-dir)
 [CFG] CACHE_DIR="/var/cache/slacker"
 [CFG] STATE_DIR="/var/lib/slacker"
+[CFG] ADM_DIR="/var/adm"
 [CFG] VERIFY="all"
 [CFG] MAX_PARALLEL="4"
+[CFG] RESOLVE_DEPS="on"
 [CFG] REVERT="on"
+[CFG] TERSE="off"
+[CFG] PROXY="off"
+[CFG] NEWCONFIG_AFTER="off"
+[CFG] SEARCH="exact"
+[CFG] BANNER="on"
 
 ████ NOTES & STATUS ████████████████████████████████████████████████████
 - usr/bin: slacker (cli) and slacker-gui

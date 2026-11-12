@@ -1,10 +1,11 @@
-//! `frozen`, `unfrozen`, `pin`, `unpin`: editing blacklist rules and pins.
+//! `frozen`, `unfrozen`, `pin`, `unpin`, `nodep`, `undep`: editing blacklist
+//! rules, pins and dependency exclusions.
 
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{closest, confirm, Outcome};
-use crate::{config, ui};
+use crate::{config, repo, ui};
 use std::collections::HashSet;
 
 /// Add one or more package names to the blacklist ("freeze" them so update,
@@ -36,7 +37,8 @@ fn frozen_warn(raw: &str, rule: &config::BlacklistRule, active: &[&str]) -> Opti
 
 pub(crate) fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
     if names.is_empty() {
-        // No argument: show the current freeze rules (pins are listed by `pin`).
+        // No argument: show the current freeze rules (pins are listed by `pin`,
+        // dependency exclusions by `nodep`).
         let text =
             std::fs::read_to_string(cfg.config_dir.join("blacklist")).unwrap_or_default();
         let rules: Vec<&str> = text
@@ -44,6 +46,7 @@ pub(crate) fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Ou
             .map(config::strip_comment)
             .filter(|r| !r.is_empty())
             .filter(|r| parse_pin_line(r).is_none())
+            .filter(|r| !r.starts_with('!'))
             .collect();
         if rules.is_empty() {
             println!("No frozen rules set.");
@@ -547,10 +550,316 @@ pub(crate) fn cmd_unpin(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Out
     Ok(Outcome::Ok)
 }
 
+/// Parse a `nodep`/`undep` argument `package:dependency` (a leading `!`, as the
+/// rule is written in the file, is accepted too) into its canonical rule text
+/// `!package:dependency` and the (package, dependency) pair. The checks are the
+/// blacklist parser's own, so the commands and the file never disagree.
+fn nodep_spec(spec: &str) -> Result<(String, String, String), String> {
+    let body = spec.trim();
+    let body = body.strip_prefix('!').unwrap_or(body);
+    let rule = config::parse_blacklist_rule(&format!("!{body}"))?;
+    let (p, d) = rule.nodep().ok_or_else(|| format!("'{spec}' is not a dependency rule"))?;
+    Ok((format!("!{p}:{d}"), p.to_string(), d.to_string()))
+}
+
+/// Parse every `nodep`/`undep` argument, collecting ALL problems so they are
+/// reported together and nothing is changed unless every argument is valid.
+/// Duplicates are dropped, first occurrence kept.
+fn nodep_specs(specs: &[String]) -> Result<Vec<(String, String, String)>, String> {
+    let mut rules: Vec<(String, String, String)> = Vec::new();
+    let mut errs: Vec<String> = Vec::new();
+    for s in specs {
+        match nodep_spec(s) {
+            Ok(r) => {
+                if !rules.iter().any(|(l, _, _)| *l == r.0) {
+                    rules.push(r);
+                }
+            }
+            Err(e) => errs.push(e),
+        }
+    }
+    if errs.is_empty() {
+        Ok(rules)
+    } else {
+        Err(format!("{} problem(s), nothing changed:\n  {}", errs.len(), errs.join("\n  ")))
+    }
+}
+
+/// Drop every dependency-exclusion line whose (package, dependency) is in
+/// `wanted`, keeping all other lines verbatim (comments, blanks, freezes, pins,
+/// other exclusions). Returns the new text and the removed rules, canonical and
+/// without repeats.
+fn blacklist_remove_nodeps(text: &str, wanted: &[(String, String)]) -> (String, Vec<String>) {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut removed: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let rule = config::strip_comment(line);
+        if rule.starts_with('!') {
+            if let Ok((canon, p, d)) = nodep_spec(rule) {
+                if wanted.iter().any(|(wp, wd)| *wp == p && *wd == d) {
+                    if !removed.contains(&canon) {
+                        removed.push(canon);
+                    }
+                    continue;
+                }
+            }
+        }
+        kept.push(line);
+    }
+    let mut body = kept.join("\n");
+    if !body.is_empty() {
+        body.push('\n');
+    }
+    (body, removed)
+}
+
+/// "'dep'" of "'package'" / "any package", for messages.
+fn of_whom(parent: &str) -> String {
+    if parent == "*" {
+        "any package".to_string()
+    } else {
+        format!("'{parent}'")
+    }
+}
+
+/// Print the current dependency exclusions, with `hint` underneath.
+fn list_nodeps(cfg: &Config, hint: &str) {
+    let rules = cfg.nodeps();
+    if rules.is_empty() {
+        println!("No dependency exclusions set.");
+    } else {
+        println!("{}", ui::blue("Current dependency exclusions:"));
+        for (p, d) in rules {
+            println!(
+                "  {}  {}",
+                ui::white(&format!("!{p}:{d}")),
+                ui::dim(&format!("('{d}' is not pulled in for {})", of_whom(p)))
+            );
+        }
+    }
+    println!("  {}", ui::dim(hint));
+}
+
+const NODEP_HINT: &str = "to add: `nodep package:dependency...`, e.g. \
+    `nodep python-sqlalchemy:python-psycopg2`, or `nodep '*:cargo-auditable'` for any package";
+
+/// Never pull a dependency in for one package (`nodep package:dependency`), or
+/// for any package (`nodep '*:dependency'`); several may be given at once.
+/// Writes one `!package:dependency` line per rule into the `blacklist` file;
+/// the counterpart is `undep`. Other packages that require the dependency still
+/// pull it in, which is what makes this safer than freezing the dependency.
+pub(crate) fn cmd_nodep(cli: &Cli, cfg: &Config, specs: &[String]) -> Result<Outcome, String> {
+    if specs.is_empty() {
+        list_nodeps(cfg, NODEP_HINT);
+        return Ok(Outcome::Ok);
+    }
+    let rules = nodep_specs(specs)?;
+
+    // Tolerant load: a rule may be set before `update`. A name no repo offers
+    // is recorded anyway (repos change), with a typo hint.
+    let (db, _missing) = PkgDb::load_available(cfg);
+    let mut seen: HashSet<&str> = HashSet::new();
+    for (_, p, d) in &rules {
+        for n in [p.as_str(), d.as_str()] {
+            if n != "*" && seen.insert(n) && db.candidates(n).is_empty() {
+                let mut msg =
+                    format!("note: no repo currently provides '{n}' — rule recorded anyway");
+                if let Some(s) = closest(n, db.available_names()) {
+                    msg.push_str(&format!("; did you mean '{s}'?"));
+                }
+                println!("{}", ui::purple(&msg));
+            }
+        }
+    }
+
+    // A rule only acts when the package itself requires the dependency. Say so
+    // when it does not (a common slip: naming the top package of a chain), and
+    // name the package one level down that does, but still record the rule:
+    // a repo may add the dependency later.
+    for (_, p, d) in &rules {
+        if p != "*" {
+            if let Some(msg) = nodep_reach_note(cfg, &db, p, d) {
+                println!("{}", ui::purple(&msg));
+            }
+        }
+    }
+
+    let present = cfg.nodeps();
+    let (already, to_add): (Vec<_>, Vec<_>) = rules
+        .into_iter()
+        .partition(|(_, p, d)| present.iter().any(|(pp, pd)| pp == p && pd == d));
+    if !already.is_empty() {
+        let names: Vec<&str> = already.iter().map(|(l, _, _)| l.as_str()).collect();
+        println!("{}", ui::dim(&format!("already set, skipping: {}", names.join(", "))));
+    }
+    if to_add.is_empty() {
+        println!("Nothing new to add — every given rule is already set.");
+        return Ok(Outcome::Ok);
+    }
+
+    println!("About to add {} dependency exclusion(s):", to_add.len());
+    for (i, (line, p, d)) in to_add.iter().enumerate() {
+        println!(
+            "  {}. {}  {}  never pulls '{d}' in as a dependency of {}",
+            i + 1,
+            ui::white(line),
+            ui::dim("→"),
+            of_whom(p)
+        );
+    }
+    if cli.dry_run {
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
+    }
+    if !confirm("write them to the blacklist?", cli.yes) {
+        println!("{}", ui::blue("aborted — nothing changed"));
+        return Ok(Outcome::Ok);
+    }
+    let path = cfg.config_dir.join("blacklist");
+    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    for (line, _, _) in &to_add {
+        text.push_str(line);
+        text.push('\n');
+    }
+    std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
+    let added: Vec<&str> = to_add.iter().map(|(l, _, _)| l.as_str()).collect();
+    println!("{}", ui::green(&format!("Added: {}", added.join(", "))));
+    Ok(Outcome::Ok)
+}
+
+/// The dependencies `pkg` declares, read as the resolver reads them (its
+/// `.dep`, else `PACKAGE REQUIRED`).
+fn declared_deps(cfg: &Config, pkg: &crate::repo::AvailPkg) -> Vec<String> {
+    cfg.repo_by_name(&pkg.repo).map(|r| repo::fetch_dep(r, pkg)).unwrap_or_default()
+}
+
+/// None when some build of `parent` requires `dep` itself (or no repo offers
+/// `parent`, which `cmd_nodep` reports on its own). Otherwise a note that the
+/// rule does nothing, naming the dependencies of `parent` that require `dep`
+/// (one level down, each taken from the parent's repo, as the resolver takes
+/// it).
+fn nodep_reach_note(cfg: &Config, db: &PkgDb, parent: &str, dep: &str) -> Option<String> {
+    let builds = db.candidates(parent);
+    if builds.is_empty() {
+        return None;
+    }
+    let mut via: Vec<String> = Vec::new();
+    for b in &builds {
+        let deps = declared_deps(cfg, b);
+        if deps.iter().any(|d| d == dep) {
+            return None;
+        }
+        for x in deps {
+            if via.contains(&x) {
+                continue;
+            }
+            if let Some(o) = db.resolve(&format!("{}:{x}", b.repo)) {
+                if declared_deps(cfg, o).iter().any(|d| d == dep) {
+                    via.push(x);
+                }
+            }
+        }
+    }
+    if via.is_empty() {
+        return Some(format!(
+            "note: '{parent}' does not require '{dep}' — this rule does nothing as it stands; \
+             `slacker --dry-run install {parent}` shows which package brings it in (\"for ...\")"
+        ));
+    }
+    let through: Vec<String> = via.iter().map(|v| format!("'{v}'")).collect();
+    let fixes: Vec<String> = via.iter().map(|v| format!("`nodep {v}:{dep}`")).collect();
+    Some(format!(
+        "note: '{parent}' does not require '{dep}' itself; it comes in through {} \
+         — this rule does nothing; use {} (`slacker --dry-run install {parent}` shows \
+         every package that brings it in)",
+        through.join(" or "),
+        fixes.join(" or ")
+    ))
+}
+
+/// Remove dependency exclusions (`undep package:dependency...`). The
+/// counterpart to `nodep`. With no argument, lists the current ones.
+pub(crate) fn cmd_undep(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Outcome, String> {
+    if names.is_empty() {
+        list_nodeps(cfg, "to remove: `undep package:dependency...`, written as listed above");
+        return Ok(Outcome::Ok);
+    }
+    let rules = nodep_specs(names)?;
+    let wanted: Vec<(String, String)> = rules.iter().map(|(_, p, d)| (p.clone(), d.clone())).collect();
+    let path = cfg.config_dir.join("blacklist");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let (new_text, removed) = blacklist_remove_nodeps(&text, &wanted);
+    let not_found: Vec<&str> = rules
+        .iter()
+        .map(|(l, _, _)| l.as_str())
+        .filter(|l| !removed.iter().any(|r| r == l))
+        .collect();
+    if removed.is_empty() {
+        return Err(format!(
+            "no dependency exclusion found for: {}\n  (run `slacker undep` with no argument to list them)",
+            not_found.join(", ")
+        ));
+    }
+    let report_missing = || {
+        if !not_found.is_empty() {
+            println!("  {}", ui::dim(&format!("not found (unchanged): {}", not_found.join(", "))));
+        }
+    };
+    if cli.dry_run {
+        println!("Would remove: {}", removed.join(", "));
+        report_missing();
+        println!("(dry-run: nothing changed)");
+        return Ok(Outcome::Ok);
+    }
+    std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
+    println!("{}", ui::green(&format!("Removed: {}", removed.join(", "))));
+    report_missing();
+    Ok(Outcome::Ok)
+}
+
 #[cfg(test)]
 mod tests {
     use super::blacklist_remove;
+    use super::{blacklist_remove_nodeps, nodep_spec, nodep_specs};
     use super::{blacklist_remove_pins, parse_pin_line};
+
+    #[test]
+    fn nodep_spec_canonicalises_and_validates() {
+        let s = |x: &str| nodep_spec(x).map(|(l, _, _)| l);
+        assert_eq!(s("python-sqlalchemy:python-psycopg2").unwrap(), "!python-sqlalchemy:python-psycopg2");
+        assert_eq!(s("!a:b").unwrap(), "!a:b"); // as written in the file
+        assert_eq!(s(" a:b ").unwrap(), "!a:b"); // outer blanks of the argument
+        assert_eq!(s("*:cargo-auditable").unwrap(), "!*:cargo-auditable");
+        assert_eq!(s("slackpkg+:gtk+3").unwrap(), "!slackpkg+:gtk+3");
+        for bad in ["a", "a:", ":b", "a:*", "py*:b", "a:b:c", "a b:c", "a : b", "a:b,c", "a:b c", "!!a:b"] {
+            assert!(s(bad).is_err(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn nodep_specs_reports_every_problem_and_drops_repeats() {
+        let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let ok = nodep_specs(&v(&["a:b", "!a:b", "a:c"])).unwrap();
+        let lines: Vec<&str> = ok.iter().map(|(l, _, _)| l.as_str()).collect();
+        assert_eq!(lines, vec!["!a:b", "!a:c"]);
+        let err = nodep_specs(&v(&["a:b", "x", "y:z,w"])).unwrap_err();
+        assert!(err.starts_with("2 problem(s), nothing changed"), "{err}");
+    }
+
+    #[test]
+    fn remove_nodeps_drops_only_matching_rules() {
+        let text = "# head\nfirefox\n!a:b  # note\n!*:c\n@alienbob 100% vlc\n!a:x\n!a:b\n";
+        let (out, removed) = blacklist_remove_nodeps(text, &[("a".into(), "b".into())]);
+        assert_eq!(removed, vec!["!a:b".to_string()]); // both copies go, reported once
+        assert_eq!(out, "# head\nfirefox\n!*:c\n@alienbob 100% vlc\n!a:x\n");
+        let (out2, removed2) = blacklist_remove_nodeps(&out, &[("x".into(), "c".into())]);
+        assert!(removed2.is_empty()); // `!*:c` is not `!x:c`
+        assert_eq!(out2, out);
+    }
 
     #[test]
     fn parse_pin_line_recognizes_pins_only() {

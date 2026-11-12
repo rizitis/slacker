@@ -7,9 +7,9 @@ use crate::commands::status::cmd_status;
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{
-    collect, in_graphical_session, package_dest, parallel_fetch, report_batch_failures,
-    slackware_dir, summarize_outcomes, update_one_repo, DlItem, InstallAction, Outcome, PlanItem,
-    UpdateOutcomes,
+    collect, in_graphical_session, install_counter, package_dest, parallel_fetch, report_batch_failures,
+    slackware_dir, summarize_outcomes, update_one_repo, upgrade_last, DlItem, InstallAction, Outcome,
+    PlanItem, UpdateOutcomes,
 };
 use crate::{banner, changelog, config, dist, download, pkg, system, template, ui};
 use std::collections::{HashMap, HashSet};
@@ -88,9 +88,15 @@ pub(crate) fn dist_upgrade_sets(db: &PkgDb, installed: &[pkg::PkgId]) -> (Vec<Pl
     // Defer the GnuPG verification toolchain (DIST_GPG_LAST) to the very end, so
     // the working gpg keeps verifying every other package and is only replaced
     // once nothing else remains to install.
-    let (mut others, gpg_last): (Vec<PlanItem>, Vec<PlanItem>) = rest
+    let (others, gpg_last): (Vec<PlanItem>, Vec<PlanItem>) = rest
         .into_iter()
         .partition(|it| !DIST_GPG_LAST.contains(&it.pkg.id.name.as_str()));
+    // The kernel goes after everything else but the GnuPG tail: its doinst runs
+    // geninitrd, which copies kmod, udev, lvm2 and the like into the initrd, so
+    // they must already be upgraded (see upgrade_last).
+    let (mut others, kernel): (Vec<PlanItem>, Vec<PlanItem>) =
+        others.into_iter().partition(|it| !upgrade_last(&it.pkg.id.name));
+    others.extend(kernel);
     others.extend(gpg_last);
     (critical, others)
 }
@@ -295,9 +301,9 @@ fn dist_execute(
     // counterpart (renames across releases, e.g. glibc-solibs -> aaa_glibc-solibs),
     // hence --install-new even for the "upgrade" action.
     let do_install = |dest: &Path, action: InstallAction| match action {
-        InstallAction::Install => system::install(dest),
-        InstallAction::Upgrade => system::upgrade_install_new(dest),
-        InstallAction::Reinstall => system::reinstall(dest),
+        InstallAction::Install => system::install(dest, cfg.terse),
+        InstallAction::Upgrade => system::upgrade_install_new(dest, cfg.terse),
+        InstallAction::Reinstall => system::reinstall(dest, cfg.terse),
     };
     let rm_cached = |dest: &Path| {
         let _ = std::fs::remove_file(dest);
@@ -338,6 +344,7 @@ fn dist_execute(
         //      post-install record check. ----
         println!("{}", ui::blue("Phase 0 — core packages (in order):"));
         for (i, it) in citems.iter().enumerate() {
+            install_counter(i + 1, citems.len(), critical[i].action, &it.pkg.id.tag());
             do_install(&it.dest, critical[i].action).map_err(|e| {
                 format!(
                     "Phase 0: installing core '{}' failed: {e}\nThe system may be in a partial \
@@ -391,6 +398,7 @@ fn dist_execute(
             if !ready[b] {
                 continue; // download/verify failed; counted in dl_failed
             }
+            install_counter(gi + 1, total_noncore, noncore[gi].action, &it.pkg.id.tag());
             match do_install(&it.dest, noncore[gi].action) {
                 Ok(()) => done += 1,
                 Err(e) => install_failed.push((it.pkg.id.name.clone(), e)),
@@ -415,6 +423,9 @@ fn dist_execute(
 /// the target, take the target's version of every package (priority bypassed),
 /// and install core-first, then install-new, then the rest.
 pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome, String> {
+    // Slackware ARM (aarch64) is not supported, by decision: refused before
+    // anything is read or touched. Fail-closed, so only the x86 trees pass.
+    dist_arch_supported(&cfg.arch)?;
     // A little ceremony for the distribution-scale operation on the official tree.
     if config::banner_enabled(&cfg.config_dir) {
         banner::show();
@@ -1079,6 +1090,19 @@ fn comment_nonmirror_repos(text: &str) -> (String, Vec<String>) {
     (joined, disabled)
 }
 
+/// upgrade-dist runs only on the x86 trees (x86_64 and 32-bit x86). Slackware
+/// ARM is not supported.
+fn dist_arch_supported(arch: &str) -> Result<(), String> {
+    if crate::is_x86_arch(arch) {
+        Ok(())
+    } else {
+        Err(format!(
+            "upgrade-dist is not supported on {arch} (Slackware ARM). \
+             For -current updates use `slacker upgrade-all`."
+        ))
+    }
+}
+
 /// Refuse to write through a symlink at `path` (so a planted symlink cannot
 /// redirect a config write elsewhere).
 fn refuse_through_symlink(path: &std::path::Path) -> Result<(), String> {
@@ -1096,6 +1120,16 @@ fn refuse_through_symlink(path: &std::path::Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrade_dist_is_refused_on_arm() {
+        assert!(super::dist_arch_supported("x86_64").is_ok());
+        assert!(super::dist_arch_supported("i686").is_ok());
+        assert!(super::dist_arch_supported("i586").is_ok());
+        let e = super::dist_arch_supported("aarch64").unwrap_err();
+        assert!(e.contains("not supported on aarch64"));
+        assert!(super::dist_arch_supported("arm").is_err());
+    }
 
     #[test]
     fn dist_rewrite_swaps_release_segment() {

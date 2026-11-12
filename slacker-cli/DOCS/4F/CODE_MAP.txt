@@ -192,8 +192,9 @@ This is where most behavioural bugs live — read carefully before changing.
 
   PkgDb            struct: all (Vec<AvailPkg>) + priority map (name->i32)
   PkgDb::load      build from Config (calls repo::load_repo per repo)
-  search           EXACT package name, case-insensitive (one row per name,
-                   highest-priority repo winning); info/file-search do substrings
+  search           package NAME only, case-insensitive (one row per name,
+                   highest-priority repo winning): exact, or with partial=true
+                   every name containing the term (SEARCH=partial, --partial)
   resolve          one name -> the winning candidate; honours a transient
                    `repo:name` pin OR a persistent pin (pins map), each forcing
                    that repo regardless of priority. upgrades_for bypasses the

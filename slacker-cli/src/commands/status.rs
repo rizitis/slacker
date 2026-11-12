@@ -787,6 +787,14 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         None => srow(&info, "Mirror", &ui::dim("no official repo configured (third-party only)")),
     }
 
+    // The proxy downloads go through, when there is one (PROXY in slacker.conf
+    // or the environment's https_proxy and friends).
+    match download::describe_proxy() {
+        Some(Ok(p)) => srow(&info, "Proxy", &ui::dim(&p)),
+        Some(Err(e)) => srow(&bad, "Proxy", &ui::red(&e)),
+        None => {}
+    }
+
     // Mirror freshness vs upstream. Every other row reads local state; this is
     // the one that touches the network. On -current we compare the main-tree
     // PACKAGES.TXT; on STABLE the release root is frozen, so we compare the

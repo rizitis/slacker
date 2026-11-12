@@ -1,6 +1,6 @@
-//! Frozen rules and pins: `slacker frozen` and `slacker pin` without
-//! arguments. slacker lists these only as root, so the page reads them on
-//! request, through pkexec.
+//! Frozen rules, pins and dependency exclusions: `slacker frozen`, `slacker
+//! pin` and `slacker nodep` without arguments. slacker lists these only as
+//! root, so the page reads them on request, through pkexec.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -44,18 +44,23 @@ pub fn page(ctx: &Ctx) -> Page {
                 }
                 let (ctx3, body3, refresh3) = (ctx2.clone(), body2.clone(), refresh2.clone());
                 ctx2.runner.capture(commands::pin_list(), move |pst, ptext| {
-                    widgets::clear(&body3);
-                    refresh3.set_visible(true);
-                    unlocked2.set(true);
-                    let frozen = rules::parse_frozen(&ftext);
-                    let pins = rules::parse_pins(&ptext);
-                    let pin_error = if pst.answered() {
-                        ctx3.set_pins(&pins.pins);
-                        None
-                    } else {
-                        Some(describe(&pst, Privilege::Root))
-                    };
-                    render(&ctx3, &body3, &frozen, &pins, pin_error);
+                    let (ctx4, body4, refresh4) = (ctx3.clone(), body3.clone(), refresh3.clone());
+                    ctx3.runner.capture(commands::nodep_list(), move |nst, ntext| {
+                        widgets::clear(&body4);
+                        refresh4.set_visible(true);
+                        unlocked2.set(true);
+                        let frozen = rules::parse_frozen(&ftext);
+                        let pins = rules::parse_pins(&ptext);
+                        let nodeps = rules::parse_nodeps(&ntext);
+                        let pin_error = if pst.answered() {
+                            ctx4.set_pins(&pins.pins);
+                            None
+                        } else {
+                            Some(describe(&pst, Privilege::Root))
+                        };
+                        let nodep_error = (!nst.answered()).then(|| describe(&nst, Privilege::Root));
+                        render(&ctx4, &body4, &frozen, &pins, pin_error, &nodeps, nodep_error);
+                    });
                 });
             });
         })
@@ -84,7 +89,7 @@ pub fn page(ctx: &Ctx) -> Page {
     Page {
         name: "rules",
         title: "Frozen & Pins",
-        subtitle: "slacker frozen \u{00b7} slacker pin",
+        subtitle: "slacker frozen \u{00b7} pin \u{00b7} nodep",
         icon: "changes-prevent-symbolic",
         widget: scroller.upcast(),
         header: Some(refresh.upcast()),
@@ -96,10 +101,10 @@ pub fn page(ctx: &Ctx) -> Page {
 fn locked(ctx: &Ctx, slot: &Slot, error: Option<&str>) -> gtk::Widget {
     let desc = match error {
         Some(e) => format!("{e}."),
-        None => "slacker shows frozen rules and pins only to root, so reading them asks for your password.".to_string(),
+        None => "slacker shows frozen rules, pins and dependency exclusions only to root, so reading them asks for your password.".to_string(),
     };
-    let sp = widgets::status_page("changes-prevent-symbolic", "Frozen rules and pins", &desc);
-    let b = gtk::Button::with_label("Show rules and pins");
+    let sp = widgets::status_page("changes-prevent-symbolic", "Blacklist rules", &desc);
+    let b = gtk::Button::with_label("Show the rules");
     b.add_css_class("pill");
     b.add_css_class("suggested-action");
     b.set_halign(gtk::Align::Center);
@@ -115,7 +120,15 @@ fn locked(ctx: &Ctx, slot: &Slot, error: Option<&str>) -> gtk::Widget {
     sp.upcast()
 }
 
-fn render(ctx: &Ctx, body: &gtk::Box, frozen: &rules::Frozen, pins: &rules::Pins, pin_error: Option<String>) {
+fn render(
+    ctx: &Ctx,
+    body: &gtk::Box,
+    frozen: &rules::Frozen,
+    pins: &rules::Pins,
+    pin_error: Option<String>,
+    nodeps: &rules::Nodeps,
+    nodep_error: Option<String>,
+) {
     let g = widgets::group(
         "Frozen rules",
         "Installed packages that match are kept as they are; packages that match and are not installed are left out of install-new and upgrades.",
@@ -173,8 +186,40 @@ fn render(ctx: &Ctx, body: &gtk::Box, frozen: &rules::Frozen, pins: &rules::Pins
     }
     body.append(&g);
 
+    let g = widgets::group(
+        "Dependency exclusions",
+        "Each dependency is not pulled in for the package named, or for any package. Other packages that require it still pull it in. To choose for one package, open its Dependencies\u{2026} window from Installed or from the package details.",
+    );
+    if nodep_error.is_none() {
+        g.set_header_suffix(Some(&add_button(ctx, "Add Exclusion", edit::nodep_dialog)));
+    }
+    match nodep_error {
+        Some(e) => {
+            let r = widgets::row("Dependency exclusions could not be read", &e);
+            r.add_prefix(&widgets::tile("dialog-error-symbolic", Some("error")));
+            g.add(&r);
+        }
+        None if nodeps.rules.is_empty() => {
+            let r = widgets::row("No dependency exclusions", "");
+            r.add_prefix(&widgets::tile("changes-allow-symbolic", None));
+            g.add(&r);
+        }
+        None => {
+            for (pkg, dep) in &nodeps.rules {
+                let whom = if pkg == "*" { "Not pulled in for any package".to_string() } else { format!("Not pulled in for {pkg}") };
+                let r = widgets::row(dep, &whom);
+                r.add_css_class("rule-row");
+                r.add_prefix(&widgets::tile("action-unavailable-symbolic", Some("purple")));
+                r.add_suffix(&remove_button(ctx, "Remove", format!("{pkg}:{dep}"), edit::undep));
+                g.add(&r);
+            }
+        }
+    }
+    body.append(&g);
+
     let mut other: Vec<&str> = frozen.unrecognized.iter().map(String::as_str).collect();
     other.extend(pins.unrecognized.iter().map(String::as_str));
+    other.extend(nodeps.unrecognized.iter().map(String::as_str));
     if !other.is_empty() {
         let g = widgets::group("Other output", "Lines this version of the GUI does not recognise.");
         g.add(&widgets::raw_text(&other.join("\n")));

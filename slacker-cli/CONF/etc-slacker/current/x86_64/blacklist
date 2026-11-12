@@ -1,8 +1,8 @@
 # ============================================================================
-#  slacker — package source policy   (freezes + pins)
+#  slacker — package source policy   (freezes + pins + dependency exclusions)
 # ============================================================================
 #
-#  One rule per line. This file controls two opposite things:
+#  One rule per line. This file controls three things:
 #
 #  1) FREEZE — slacker must never install, upgrade or remove the package.
 #       name           freeze by exact name or substring/regex (matched on the
@@ -25,11 +25,22 @@
 #     Example — vlc always from alienbob, even if a higher-priority repo has it:
 #       @alienbob 100% vlc
 #
+#  3) DEPENDENCY EXCLUSION — never pull one dependency in for one package; any
+#     other package that requires it still gets it. Easiest via the commands:
+#       slacker nodep python-sqlalchemy:python-psycopg2
+#       slacker nodep '*:cargo-auditable'   # '*' = for every package
+#       slacker undep python-sqlalchemy:python-psycopg2
+#     ...or write it by hand with a leading '!' (exact names, no patterns, no
+#     spaces, one dependency per line):
+#       !package:dependency
+#       !*:dependency
+#
 #  Notes
 #    * A FREEZE on a package always WINS over a PIN on the same package.
 #    * Comments start with '#'; blank lines are ignored.
 #    * Manage freezes with:  slacker frozen RULE...  /  slacker unfrozen RULE...
 #    * Manage pins with:     slacker pin repo:pkg    /  slacker unpin pkg
+#    * Manage exclusions:    slacker nodep pkg:dep   /  slacker undep pkg:dep
 #
 # ----------------------------------------------------------------------------
 #  Examples (commented out — uncomment or use the commands above)
