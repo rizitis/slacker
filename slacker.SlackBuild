@@ -76,6 +76,8 @@ if ! bash "$CWD/scripts/check-msrv.sh"; then
   exit 1
 fi
 
+sleep 3
+
 # Pick the right example configs for the running release (stable vs -current).
 DIR=stable
 grep -q '^VERSION_CODENAME=current$' /etc/os-release && DIR=current
