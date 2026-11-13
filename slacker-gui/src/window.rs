@@ -15,17 +15,57 @@ use crate::resolve;
 use crate::runner::Runner;
 use crate::zoom;
 
+/// `SLACKER_GUI_FRAME=system` or `=app` chooses who draws the window frame.
+const FRAME_ENV: &str = "SLACKER_GUI_FRAME";
+
+/// Who draws the window frame: the title bar and the minimise, maximise and
+/// close buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Frame {
+    /// The window manager, as for every other window (KWin, Xfwm4, ...).
+    System,
+    /// slacker-gui itself, in the libadwaita style.
+    App,
+}
+
+/// SLACKER_GUI_FRAME decides when set. Otherwise GNOME gets the app's own
+/// frame, as every GNOME application has one and its compositor draws none on
+/// Wayland; every other desktop gets the window manager's.
+fn frame_mode(env: Option<&str>, desktop: Option<&str>) -> Frame {
+    match env.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("system") => return Frame::System,
+        Some("app") => return Frame::App,
+        _ => {}
+    }
+    let gnome = desktop.is_some_and(|d| d.split(':').any(|p| p.trim().eq_ignore_ascii_case("gnome")));
+    if gnome {
+        Frame::App
+    } else {
+        Frame::System
+    }
+}
+
 pub fn build(app: &adw::Application) {
     let resolved = resolve::slacker_binary();
 
-    let window = adw::ApplicationWindow::builder()
+    // A plain GTK window, not an adw::ApplicationWindow: libadwaita always
+    // draws its own frame, so the window could never wear the one the window
+    // manager gives every other window (KWin, Xfwm4, ...).
+    let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Slacker")
         .default_width(1180)
         .default_height(780)
-        .width_request(360)
-        .height_request(420)
         .build();
+    let frame = frame_mode(
+        std::env::var(FRAME_ENV).ok().as_deref(),
+        std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+    );
+    if frame == Frame::App {
+        // An empty title bar makes GTK draw the frame itself (as libadwaita
+        // does); the header bars below then carry the window buttons.
+        window.set_titlebar(Some(&gtk::Box::builder().visible(false).build()));
+    }
 
     // ---- content side ----------------------------------------------------
     let spinner = gtk::Spinner::builder().visible(false).tooltip_text("slacker is running").build();
@@ -46,6 +86,7 @@ pub fn build(app: &adw::Application) {
     ];
 
     let stack = gtk::Stack::builder()
+        .hhomogeneous(false)
         .transition_type(gtk::StackTransitionType::Crossfade)
         .transition_duration(150)
         .build();
@@ -71,6 +112,9 @@ pub fn build(app: &adw::Application) {
         .build();
     let content_title = adw::WindowTitle::new("Doctor", "slacker status");
     let content_header = adw::HeaderBar::builder().title_widget(&content_title).build();
+    // With the window manager's frame its buttons are there already.
+    content_header.set_show_start_title_buttons(frame == Frame::App);
+    content_header.set_show_end_title_buttons(frame == Frame::App);
     content_header.pack_end(&menu_button);
     content_header.pack_end(&spinner);
     content_header.pack_start(&header_actions);
@@ -107,6 +151,8 @@ pub fn build(app: &adw::Application) {
     brand.append(&mark);
     brand.append(&name);
     let sidebar_header = adw::HeaderBar::builder().title_widget(&brand).build();
+    sidebar_header.set_show_start_title_buttons(frame == Frame::App);
+    sidebar_header.set_show_end_title_buttons(frame == Frame::App);
 
     let footer = gtk::Label::builder()
         .label(resolved.path.to_string_lossy().as_ref())
@@ -144,13 +190,25 @@ pub fn build(app: &adw::Application) {
         .min_sidebar_width(210.0)
         .max_sidebar_width(260.0)
         .build();
-    window.set_content(Some(&split));
-
+    // A narrow window shows the sidebar and the page one at a time. An
+    // adw::BreakpointBin carries the breakpoint in a plain GTK window (an
+    // adw::ApplicationWindow did it before), and lets the window be made
+    // narrower than the two side by side would need.
+    // The numbers come from the pages themselves: side by side the sidebar
+    // and a page need about 745 px, a page alone about 535 px. Collapsing any
+    // later, or letting the window get narrower, cuts the page off (and
+    // libadwaita warns that the split view exceeds the bin).
+    let bin = adw::BreakpointBin::builder()
+        .child(&split)
+        .width_request(540)
+        .height_request(420)
+        .build();
     let bp = adw::Breakpoint::new(
-        adw::BreakpointCondition::parse("max-width: 680sp").expect("valid breakpoint"),
+        adw::BreakpointCondition::parse("max-width: 760sp").expect("valid breakpoint"),
     );
     bp.add_setter(&split, "collapsed", Some(&true.to_value()));
-    window.add_breakpoint(bp);
+    bin.add_breakpoint(bp);
+    window.set_child(Some(&bin));
 
     // ---- navigation and lazy loading ---------------------------------------
     let loaded: Rc<RefCell<HashSet<&'static str>>> = Rc::default();
@@ -274,7 +332,7 @@ pub fn build(app: &adw::Application) {
     window.present();
 }
 
-fn show_log(window: &adw::ApplicationWindow, runner: &Runner) {
+fn show_log(window: &gtk::ApplicationWindow, runner: &Runner) {
     let clear = gtk::Button::from_icon_name("edit-clear-all-symbolic");
     clear.set_tooltip_text(Some("Clear"));
     {
@@ -306,7 +364,7 @@ fn show_log(window: &adw::ApplicationWindow, runner: &Runner) {
     crate::widgets::present_fitted(&dialog, window, (860, 600));
 }
 
-fn show_about(window: &adw::ApplicationWindow) {
+fn show_about(window: &gtk::ApplicationWindow) {
     let about = adw::AboutDialog::builder()
         .application_name("Slacker GUI")
         .application_icon(crate::APP_ID)
@@ -340,4 +398,22 @@ fn sidebar_logo() -> Option<gtk::Image> {
     image.set_halign(gtk::Align::Center);
     image.add_css_class("sidebar-logo");
     Some(image)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{frame_mode, Frame};
+
+    #[test]
+    fn the_window_frame_follows_the_desktop() {
+        assert_eq!(frame_mode(None, Some("KDE")), Frame::System);
+        assert_eq!(frame_mode(None, Some("XFCE")), Frame::System);
+        assert_eq!(frame_mode(None, None), Frame::System);
+        assert_eq!(frame_mode(None, Some("GNOME")), Frame::App);
+        assert_eq!(frame_mode(None, Some("ubuntu:GNOME")), Frame::App);
+        // The variable wins, whatever the desktop.
+        assert_eq!(frame_mode(Some("app"), Some("KDE")), Frame::App);
+        assert_eq!(frame_mode(Some(" System "), Some("GNOME")), Frame::System);
+        assert_eq!(frame_mode(Some("typo"), Some("KDE")), Frame::System);
+    }
 }
