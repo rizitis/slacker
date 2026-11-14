@@ -1,0 +1,2 @@
+org.vinegarhq.Sober	Sober	1.8.0	stable	x86_64	system	flathub	18.3 MB	a611b863277f	org.freedesktop.Platform/x86_64/24.08
+org.vinegarhq.Sober	Sober	1.6.7	stable	x86_64	user	flathub	18.3 MB	19aa66ef3bab	org.freedesktop.Platform/x86_64/24.08

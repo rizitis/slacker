@@ -1,0 +1,2 @@
+org.test.Platform	test platform		1	x86_64	system	testrepo	512 bytes	83e5384409ce
+org.test.Platform	test platform		1	x86_64	user	testrepo	512 bytes	83e5384409ce

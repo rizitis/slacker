@@ -1,0 +1,40 @@
+Liri Text	Edit text files	io.liri.Text	0.5.0	stable	flathub
+Micro Text Editor	A modern and intuitive terminal-based text editor	io.github.zyedidia.micro	2.0.15	stable	flathub
+Text Compare	Text snippet comparison	io.github.josephmawa.TextCompare	0.1.12	stable	flathub
+Sublime Text	Text Editing, Done Right	com.sublimehq.SublimeText	4215	stable	flathub
+Text Pieces	Developer's scratchpad	io.gitlab.liferooter.TextPieces	4.3.2	stable	flathub
+Text Editor	Edit text files	org.gnome.TextEditor	51.0	stable	flathub
+Sublime Text Developer Utilities	Adds various Python and Node.js developer tools to Sublime Text	com.sublimetext.three.DevUtils		21.08	flathub
+Sublime Text Developer Utilities	Adds various Python and Node.js developer tools to Sublime Text	com.sublimetext.three.DevUtils		19.08	flathub
+Sublime Text Developer Utilities	Adds various Python and Node.js developer tools to Sublime Text	com.sublimetext.three.DevUtils		18.08	flathub
+Sublime Text Developer Utilities	Adds various Python and Node.js developer tools to Sublime Text	com.sublimetext.three.DevUtils		1.6	flathub
+Pthread Text	Plugin for OBS Studio to display text with rich features	com.obsproject.Studio.Plugin.TextPthread	2.1.0	stable	flathub
+Mini Text	Ephemeral scratch pad	io.github.nokse22.minitext	1.0.0	stable	flathub
+Mousepad	Mousepad is a simple text editor for the Xfce desktop environment	org.xfce.mousepad	0.7.0	stable	flathub
+Vim	The ubiquitous text editor	org.vim.Vim	9.2.1161	stable	flathub
+Recoll	Full-text search for your desktop	org.recoll.recoll	1.44.1	stable	flathub
+KWrite	Text Editor	org.kde.kwrite	26.08.3	stable	flathub
+Kate	Advanced text editor	org.kde.kate	26.08.3	stable	flathub
+gedit	Text editor	org.gnome.gedit	51.0	stable	flathub
+CorePad	A simple lightweight but powerful text editor	org.cubocore.CorePad	5.0.1	stable	flathub
+ReText	Simple text editor for Markdown and reStructuredText	me.mitya57.ReText	8.1.0	stable	flathub
+Jollpi	Text Editor	io.gitlab.zulfian1732.jollpi-text-editor	3.0.10	stable	flathub
+word-sys PDF Editor	Edit text content in PDF files	io.github.word_sys.word-sys-pdf-editor	1.12.0	stable	flathub
+TextShine	Powerfully transform text	io.github.phase1geo.textshine	3.0.0	stable	flathub
+Jottr	Simple text and markdown editor mainly intended for writers, journalists and researchers	io.github.mfat.jottr	3.0.4	stable	flathub
+WebkitWord	Rich text editor using WebKit	io.github.fastrizwaan.WebkitWord	0.4	stable	flathub
+Janus	Simple text editor	dev.pantheum.janus	0.9.8	stable	flathub
+Cedilla	Markdown Text Editor	dev.mariinkys.Cedilla	0.1.14	stable	flathub
+Notepadqq	An advanced text editor	com.notepadqq.Notepadqq	1.4.8	stable	flathub
+Glate	Offline translator, text to speech	com.ktechpit.glate	4.6.0	stable	flathub
+Helix	A post-modern text editor	com.helix_editor.Helix	25.07.1	stable	flathub
+Norka	Continuous text editor	com.github.tenderowl.norka	1.1.0	stable	flathub
+Frog	Extract text from images	com.github.tenderowl.frog	1.6.0	stable	flathub
+KonbuCase	Convert case in your text	com.github.ryonakano.konbucase	5.0.0	stable	flathub
+Kibi	Small but mighty text editor	com.github.ilai_deutel.kibi	0.3.2	stable	flathub
+NormCap	Capture text from any screen area	com.github.dynobo.normcap	0.6.0	stable	flathub
+Buffer	Embrace ephemeral text	org.gnome.gitlab.cheywood.Buffer	2026.1	stable	flathub
+Calligraphy	Turn text into ASCII banners	dev.geopjr.Calligraphy	1.3.0	stable	flathub
+Zim	Write notes in a desktop wiki	org.zim_wiki.Zim	0.77.2	stable	flathub
+Xiphos	Bible Study Guide	org.xiphos.Xiphos	4.3.2	stable	flathub
+Holy Bible	An app designed for reading and listening to the Holy Bible	org.temple.Bible	0.1.13	stable	flathub

@@ -36,6 +36,34 @@ pub fn write_for(redrawing: bool, _kind: Chunk) -> Write {
     }
 }
 
+/// How far back a finished download looks for its `↓` line. slacker prints
+/// that line shortly before the download ends, so it is always near the end;
+/// searching only here keeps a long upgrade log cheap.
+const STARTED_WINDOW: i32 = 200;
+
+/// The package a finished-download line names: slacker's `  ✓ NAME …` or
+/// `  ✗ NAME …` (slacker-cli main.rs, the parallel download loop).
+fn finished_download(line: &str) -> Option<&str> {
+    let t = line.trim_start();
+    let rest = t.strip_prefix("\u{2713} ").or_else(|| t.strip_prefix("\u{2717} "))?;
+    rest.split_whitespace().next()
+}
+
+/// Whether `line` is the `  ↓ NAME (size)` (or `  ↓ NAME`) line slacker
+/// prints when NAME's download has run for a moment and the output is not a
+/// terminal. Only the exact name: `↓ rust-bindgen` is not `rust`'s line.
+fn started_download(line: &str, name: &str) -> bool {
+    let Some(rest) = line.trim_start().strip_prefix("\u{2193} ") else { return false };
+    rest == name || rest.strip_prefix(name).is_some_and(|r| r.starts_with(" ("))
+}
+
+/// Of `lines`, the one `finished` makes stale: the last `↓ NAME` line for the
+/// package a `✓`/`✗` line names. None for any other line, or if there is none.
+pub fn stale_started(lines: &[&str], finished: &str) -> Option<usize> {
+    let name = finished_download(finished)?;
+    lines.iter().rposition(|l| started_download(l, name))
+}
+
 /// How many lines to drop from the front to keep at most `max_lines`.
 fn overflow(line_count: i32, max_lines: i32) -> i32 {
     (line_count - max_lines).max(0)
@@ -49,11 +77,20 @@ pub struct Feed {
     /// Whether the last line written is one the command is still redrawing.
     redrawing: Cell<bool>,
     max_lines: Option<i32>,
+    /// Drop a download's `↓` line once its `✓`/`✗` line arrives (the
+    /// transaction window). The command log keeps every line as printed.
+    tidy_downloads: bool,
 }
 
 impl Feed {
     pub fn new(buffer: &gtk::TextBuffer) -> Self {
-        Self { buffer: buffer.clone(), redrawing: Cell::new(false), max_lines: None }
+        Self { buffer: buffer.clone(), redrawing: Cell::new(false), max_lines: None, tidy_downloads: false }
+    }
+
+    /// As `new`, and a finished download removes its `↓ NAME (size)` line,
+    /// as a terminal does when slacker redraws its live line. Display only.
+    pub fn tidying_downloads(buffer: &gtk::TextBuffer) -> Self {
+        Self { tidy_downloads: true, ..Self::new(buffer) }
     }
 
     /// As `new`, but keeping only the last `max_lines` lines.
@@ -66,6 +103,11 @@ impl Feed {
     }
 
     pub fn push(&self, text: &str, kind: Chunk) {
+        if self.tidy_downloads && kind == Chunk::Line {
+            for line in text.split('\n') {
+                self.drop_started(line);
+            }
+        }
         let redrawing = self.redrawing.replace(kind == Chunk::Progress);
         match write_for(redrawing, kind) {
             Write::OverLast => replace_last_line(&self.buffer, text),
@@ -82,6 +124,27 @@ impl Feed {
         self.redrawing.set(false);
         append(&self.buffer, text);
         self.cap();
+    }
+
+    /// Removes the `↓` line `finished` makes stale, if it is among the last
+    /// STARTED_WINDOW lines. The last line is never touched while it is being
+    /// redrawn.
+    fn drop_started(&self, finished: &str) {
+        if finished_download(finished).is_none() {
+            return;
+        }
+        let b = &self.buffer;
+        let count = b.line_count();
+        let first = (count - STARTED_WINDOW).max(0);
+        let Some(from) = b.iter_at_line(first) else { return };
+        let text = b.text(&from, &b.end_iter(), false);
+        let mut lines: Vec<&str> = text.split('\n').collect();
+        if self.redrawing.get() {
+            lines.pop();
+        }
+        if let Some(i) = stale_started(&lines, finished) {
+            delete_line(b, first + i as i32);
+        }
     }
 
     fn cap(&self) {
@@ -165,6 +228,29 @@ pub fn replace_last_line(buffer: &gtk::TextBuffer, text: &str) {
     buffer.delete(&mut start, &mut end);
     let mut at = buffer.end_iter();
     buffer.insert(&mut at, text);
+}
+
+/// Deletes line `n` and its line break; the last line takes the break
+/// before it instead, so no empty line is left behind.
+pub fn delete_line(buffer: &gtk::TextBuffer, n: i32) {
+    let count = buffer.line_count();
+    if n < 0 || n >= count {
+        return;
+    }
+    let (start, end) = if n + 1 < count {
+        (buffer.iter_at_line(n), buffer.iter_at_line(n + 1))
+    } else if n > 0 {
+        let mut s = buffer.iter_at_line(n - 1);
+        if let Some(s) = s.as_mut() {
+            s.forward_to_line_end();
+        }
+        (s, Some(buffer.end_iter()))
+    } else {
+        (Some(buffer.start_iter()), Some(buffer.end_iter()))
+    };
+    if let (Some(mut s), Some(mut e)) = (start, end) {
+        buffer.delete(&mut s, &mut e);
+    }
 }
 
 /// Drops the oldest lines once the buffer is longer than `max_lines`.
@@ -299,6 +385,82 @@ mod tests {
         assert_eq!(overflow(10, 4_000), 0);
         assert_eq!(overflow(4_000, 4_000), 0);
         assert_eq!(overflow(4_007, 4_000), 7);
+    }
+
+    /// slacker's parallel download lines when the output is not a terminal,
+    /// as in gegechris99's screenshot (issue #25).
+    #[test]
+    fn a_finished_download_finds_its_started_line() {
+        let lines = [
+            "  \u{2713} openexr [4/8]",
+            "  \u{2193} cmake (13 M)",
+            "  \u{2193} nodejs (25 M)",
+            "  \u{2193} rust (102 M)",
+            "  \u{2193} vim (9.2 M)",
+        ];
+        assert_eq!(stale_started(&lines, "  \u{2713} vim [5/8]"), Some(4));
+        assert_eq!(stale_started(&lines, "  \u{2713} cmake [7/8]"), Some(1));
+        // A failed download ends its line too; the ✗ line stays and says why.
+        assert_eq!(stale_started(&lines, "  \u{2717} rust [8/8]  connection reset"), Some(3));
+        // With slacker's verify suffix between the name and the counter.
+        assert_eq!(stale_started(&lines, "  \u{2713} nodejs gpg+md5 [6/8]"), Some(2));
+        // Only the exact name, and only for ✓/✗ lines.
+        assert_eq!(stale_started(&["  \u{2193} rust-bindgen (3 M)"], "  \u{2713} rust [1/1]"), None);
+        assert_eq!(stale_started(&["  \u{2193} rust"], "  \u{2713} rust [1/1]"), Some(0));
+        assert_eq!(stale_started(&lines, "Upgrading: cmake-4.5.0"), None);
+        assert_eq!(stale_started(&lines, "  \u{2713} flex [1/8]"), None);
+    }
+
+    /// Fifteen parallel downloads finishing in a scrambled order: every ↓
+    /// line goes, every ✓ stays, nothing else is touched.
+    #[test]
+    fn fifteen_parallel_downloads_leave_only_their_ticks() {
+        let mut lines: Vec<String> = vec!["Downloading 15 package(s) (15 parallel)...".into()];
+        for i in 0..15 {
+            lines.push(format!("  \u{2193} pkg{i} ({i} M)"));
+        }
+        let order = [7, 0, 14, 3, 11, 1, 9, 5, 13, 2, 8, 12, 4, 10, 6];
+        for (done, i) in order.iter().enumerate() {
+            let tick = format!("  \u{2713} pkg{i} [{}/15]", done + 1);
+            let view: Vec<&str> = lines.iter().map(String::as_str).collect();
+            let at = stale_started(&view, &tick).expect("its ↓ line");
+            assert_eq!(lines[at], format!("  \u{2193} pkg{i} ({i} M)"));
+            lines.remove(at);
+            lines.push(tick);
+        }
+        assert_eq!(lines.len(), 16);
+        assert!(lines.iter().all(|l| !l.contains('\u{2193}')));
+        assert_eq!(lines.iter().filter(|l| l.contains('\u{2713}')).count(), 15);
+    }
+
+    /// The real GTK buffer path, when a display is there (skipped otherwise).
+    #[test]
+    fn the_transaction_window_drops_started_lines_the_log_keeps_them() {
+        if gtk::init().is_err() {
+            return;
+        }
+        let tidy = gtk::TextBuffer::new(None);
+        let raw = gtk::TextBuffer::new(None);
+        let (t, r) = (Feed::tidying_downloads(&tidy), Feed::new(&raw));
+        for f in [&t, &r] {
+            f.push("Downloading 3 package(s) (3 parallel)...", Chunk::Line);
+            f.push("  \u{2193} cmake (13 M)\n  \u{2193} rust (102 M)", Chunk::Line);
+            f.push("  \u{2713} rust [1/3]", Chunk::Line);
+            f.push("  \u{2193} vim (9.2 M)", Chunk::Line);
+            f.push("  \u{2713} vim [2/3]\n  \u{2717} cmake [3/3]  timed out", Chunk::Line);
+        }
+        let text = |b: &gtk::TextBuffer| b.text(&b.start_iter(), &b.end_iter(), false).to_string();
+        assert_eq!(
+            text(&tidy),
+            "Downloading 3 package(s) (3 parallel)...\n  \u{2713} rust [1/3]\n  \u{2713} vim [2/3]\n  \u{2717} cmake [3/3]  timed out"
+        );
+        assert_eq!(text(&raw).matches('\u{2193}').count(), 3);
+        // The last line alone, and the first line alone.
+        let one = gtk::TextBuffer::new(None);
+        let f = Feed::tidying_downloads(&one);
+        f.push("  \u{2193} x (1 M)", Chunk::Line);
+        f.push("  \u{2713} x [1/1]", Chunk::Line);
+        assert_eq!(text(&one), "  \u{2713} x [1/1]");
     }
 
     #[test]

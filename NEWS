@@ -1,6 +1,9 @@
 Version Beta 0.14.1
 =====
 - Update: slacker-gui (Version _beta.7)
+    - Upgrade all: a finished download's "↓ name (size)" line is removed
+      from the window when its "✓"/"✗" line arrives, as in a terminal
+      (issue #25, reported by @gegechris99). The command log keeps every line.
     - the main window now gets its title bar and the minimize, maximize and
       close buttons from the window manager, like every other window on the
       desktop (KWin, Xfwm4, ...). On GNOME it keeps libadwaita's own header bar.

@@ -1,0 +1,20 @@
+[package]
+name = "slacker-flatpak"
+version = "0.4.0"
+edition = "2021"
+rust-version = "1.92"
+description = "GTK4/libadwaita front-end for Flatpak on Slackware (experimental)"
+license = "Apache-2.0"
+authors = ["rizitis"]
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["v4_4"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+libc = "0.2"
+quick-xml = "0.42"
+flate2 = "1"
+
+[profile.release]
+opt-level = 2
+lto = true
+strip = true
