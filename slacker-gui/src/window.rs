@@ -144,8 +144,15 @@ pub fn build(app: &adw::Application) {
     }
 
     let brand = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let mark = gtk::Label::new(Some("\u{25C6}"));
-    mark.add_css_class("brand-mark");
+    // The small app icon; the old diamond if there is no SVG loader.
+    let mark: gtk::Widget = match brand_icon() {
+        Some(i) => i.upcast(),
+        None => {
+            let l = gtk::Label::new(Some("\u{25C6}"));
+            l.add_css_class("brand-mark");
+            l.upcast()
+        }
+    };
     let name = gtk::Label::new(Some("slacker"));
     name.add_css_class("brand");
     brand.append(&mark);
@@ -397,6 +404,24 @@ fn sidebar_logo() -> Option<gtk::Image> {
     image.set_valign(gtk::Align::Center);
     image.set_halign(gtk::Align::Center);
     image.add_css_class("sidebar-logo");
+    Some(image)
+}
+
+/// The small slacker-gui icon beside the name in the sidebar header. Compiled
+/// in and rasterised once, large enough to stay sharp on HiDPI and when zoomed;
+/// style.css sizes it in em, so it follows the text size.
+fn brand_icon() -> Option<gtk::Image> {
+    const SVG: &[u8] = include_bytes!("../data/icons/source/slacker-gui-small.svg");
+    const PX: i32 = 96;
+    let loader = gtk::gdk_pixbuf::PixbufLoader::with_type("svg").ok()?;
+    loader.set_size(PX, PX);
+    loader.write(SVG).ok()?;
+    loader.close().ok()?;
+    let pixbuf = loader.pixbuf()?;
+    let texture = gtk::gdk::Texture::for_pixbuf(&pixbuf);
+    let image = gtk::Image::from_paintable(Some(&texture));
+    image.add_css_class("brand-icon");
+    image.set_valign(gtk::Align::Center);
     Some(image)
 }
 

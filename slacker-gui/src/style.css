@@ -35,6 +35,7 @@
 /* ---- sidebar ---- */
 .brand { font-weight: 800; font-size: 1.3em; letter-spacing: 0.02em; }
 .brand-mark { color: @accent_color; font-size: 1.1em; }
+.brand-icon { -gtk-icon-size: 1.4em; }
 .navigation-sidebar row { min-height: 40px; }
 .nav-row { padding: 0 4px; }
 .sidebar-logo { margin: 24px 0; }

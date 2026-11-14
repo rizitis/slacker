@@ -27,6 +27,7 @@ Version Beta 0.14.1
       Everything inside it is still GTK4/libadwaita.
     - Fix: correct minimum rust version in Cargo.toml (highest needed by Cargo.lock: 1.92 (pango-sys 0.22.9) )
     - The font size and "Copied" messages show for 2 seconds, and a new one replaces the previous one instead of waiting behind it.
+    - The sidebar header shows the small slacker-gui icon instead of the diamond (the diamond stays when there is no SVG loader).
 - Update: slacker-cli
     - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.
 - Add: slacker-flatpak (Version 0.N.0, experimental)
