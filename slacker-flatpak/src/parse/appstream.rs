@@ -16,6 +16,8 @@ pub struct App {
     /// File name of the cached icon, under icons/128x128 or icons/64x64.
     pub icon: Option<String>,
     pub branch: String,
+    /// `<url type="homepage">`, only when it is an http(s) address.
+    pub homepage: Option<String>,
 }
 
 /// The component types the Browse page lists; add-ons, runtimes, fonts and
@@ -31,6 +33,7 @@ struct Partial {
     categories: Vec<String>,
     icon: Option<(u32, String)>,
     bundle: String,
+    homepage: String,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -41,6 +44,7 @@ enum Field {
     Category,
     Icon(u32),
     Bundle,
+    Homepage,
 }
 
 fn attr(e: &BytesStart, key: &str) -> Option<String> {
@@ -86,6 +90,7 @@ pub fn parse(xml: &str) -> Vec<App> {
                         Some(Field::Icon(attr(&e, "height").and_then(|h| h.parse().ok()).unwrap_or(0)))
                     }
                     (1, "bundle") if attr(&e, "type").as_deref() == Some("flatpak") => Some(Field::Bundle),
+                    (1, "url") if attr(&e, "type").as_deref() == Some("homepage") => Some(Field::Homepage),
                     _ => None,
                 };
                 text.clear();
@@ -125,6 +130,7 @@ pub fn parse(xml: &str) -> Vec<App> {
                             }
                         }
                         Field::Bundle => c.bundle = v,
+                        Field::Homepage => c.homepage = v,
                     }
                 }
                 depth -= 1;
@@ -149,7 +155,18 @@ fn finish(p: Partial) -> Option<App> {
     if crate::commands::valid_id(&id).is_err() {
         return None;
     }
-    Some(App { id, name: p.name, summary: p.summary, categories: p.categories, icon: p.icon.map(|(_, f)| f), branch })
+    let homepage = web_address(&p.homepage).then_some(p.homepage);
+    Some(App { id, name: p.name, summary: p.summary, categories: p.categories, icon: p.icon.map(|(_, f)| f), branch, homepage })
+}
+
+/// An address the window may offer to open: http or https only (never file:,
+/// javascript: or anything else), no spaces or control characters, not huge.
+pub fn web_address(u: &str) -> bool {
+    let lower = u.to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://"))
+        && u.len() > "https://".len()
+        && u.len() <= 2048
+        && !u.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// The groups the Browse page offers, each with the freedesktop main
@@ -192,6 +209,8 @@ mod tests {
     <icon type="cached" height="128" width="128">org.gnome.baobab.png</icon>
     <icon type="remote" height="128">https://example.org/x.png</icon>
     <bundle type="flatpak" runtime="org.gnome.Platform/x86_64/51">app/org.gnome.baobab/x86_64/stable</bundle>
+    <url type="bugtracker">https://gitlab.gnome.org/GNOME/baobab/issues</url>
+    <url type="homepage">https://apps.gnome.org/Baobab/</url>
   </component>
   <component type="addon">
     <id>org.gnome.baobab.Locale</id>
@@ -203,6 +222,7 @@ mod tests {
     <name><![CDATA[Hello <test>]]></name>
     <summary>Says hello &#x2014; for testing</summary>
     <categories><category>Game</category></categories>
+    <url type="homepage">javascript:alert(1)</url>
   </component>
 </components>"#;
 
@@ -220,6 +240,13 @@ mod tests {
         assert_eq!(a[1].name, "Hello <test>");
         assert_eq!(a[1].summary, "Says hello \u{2014} for testing");
         assert_eq!(a[1].icon, None);
+        assert_eq!(a[0].homepage.as_deref(), Some("https://apps.gnome.org/Baobab/"));
+        // Only http(s) is kept.
+        assert_eq!(a[1].homepage, None);
+        assert!(web_address("http://example.org/x"));
+        for bad in ["", "https://", "file:///etc/passwd", "ftp://x.org", "https://a b", "https://x\n"] {
+            assert!(!web_address(bad), "{bad:?}");
+        }
         assert!(in_group(&a[0], "System") && in_group(&a[0], "Utilities"));
         assert!(!in_group(&a[0], "Games") && in_group(&a[1], "Games"));
     }

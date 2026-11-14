@@ -59,6 +59,18 @@ struct Data {
     ran: Vec<String>,
     /// `flatpak --default-arch`, e.g. x86_64.
     arch: String,
+    /// `flatpak pin` patterns, per installation.
+    pins_user: Vec<String>,
+    pins_system: Vec<String>,
+}
+
+impl Data {
+    fn pinned(&self, item: &Item, inst: Inst) -> Option<&str> {
+        let pins = if inst == Inst::User { &self.pins_user } else { &self.pins_system };
+        pins.iter()
+            .find(|p| parse::pins::covers(p, &item.id, &item.arch, &item.branch))
+            .map(String::as_str)
+    }
 }
 
 struct Ui {
@@ -117,6 +129,8 @@ struct Target {
     remote: Option<String>,
     icon: Option<PathBuf>,
     runtime: bool,
+    /// The application's web page, from appstream (http or https only).
+    homepage: Option<String>,
 }
 
 /// Icon sizes, in logical pixels.
@@ -394,6 +408,16 @@ async fn load() -> Data {
     if let Some(out) = step(&fp, commands::remotes(), &mut d).await {
         d.remotes = parse::remotes::parse(&out);
     }
+    for inst in [Inst::User, Inst::System] {
+        if let Some(out) = step(&fp, commands::pins(inst), &mut d).await {
+            let p = parse::pins::parse(&out);
+            if inst == Inst::User {
+                d.pins_user = p;
+            } else {
+                d.pins_system = p;
+            }
+        }
+    }
     if let Some(out) = step(&fp, commands::default_arch(), &mut d).await {
         d.arch = out.trim().to_string();
     }
@@ -648,6 +672,7 @@ fn tile_grid(ui: &Rc<Ui>) -> gtk::GridView {
                     remote: Some(e.remote.clone()),
                     icon: e.icon.clone(),
                     runtime: false,
+                    homepage: e.app.homepage.clone(),
                 }
             };
             show_app(&ui, t);
@@ -826,6 +851,9 @@ fn render_installed(ui: &Rc<Ui>) {
     if ui.show_runtimes.get() {
         items(ui, page, &d, &d.runtimes, true);
         ran.push(commands::display(&commands::list_runtimes()));
+        for inst in [Inst::User, Inst::System] {
+            ran.push(commands::display(&commands::pins(inst)));
+        }
     }
     page.append(&commands_footer(&ran));
 }
@@ -883,6 +911,17 @@ fn items(ui: &Rc<Ui>, page: &gtk::Box, d: &Data, items: &[Item], runtimes: bool)
                 let other = if inst == Inst::User { Inst::System } else { Inst::User };
                 r.add_suffix(&tag(&format!("also in {}", other.words()), true));
             }
+            if runtimes {
+                if let Some(pattern) = d.pinned(item, inst) {
+                    let t = tag("pinned", false);
+                    t.set_tooltip_text(Some(&format!(
+                        "flatpak keeps this runtime on purpose (pinned as {pattern}), usually because it was \
+                         installed by name. Remove Unused never removes it. To let it go: flatpak pin {} --remove {pattern}",
+                        inst.flag()
+                    )));
+                    r.add_suffix(&t);
+                }
+            }
             r.add_suffix(&tag(&item.size, false));
             if !runtimes {
                 let open = gtk::Button::builder().label("Open").valign(gtk::Align::Center).build();
@@ -900,6 +939,7 @@ fn items(ui: &Rc<Ui>, page: &gtk::Box, d: &Data, items: &[Item], runtimes: bool)
                 remote: (!item.origin.is_empty()).then(|| item.origin.clone()),
                 icon: icon_path,
                 runtime: runtimes,
+                homepage: None,
             };
             let ui2 = ui.clone();
             r.connect_activated(move |_| show_app(&ui2, t.clone()));
@@ -925,6 +965,11 @@ fn summary_of(ui: &Ui, id: &str) -> String {
         .as_ref()
         .and_then(|c| c.entries.iter().find(|e| e.app.id == id).map(|e| e.app.summary.clone()))
         .unwrap_or_default()
+}
+
+/// The catalog's web page for an application, if the catalog has one.
+fn homepage_of(ui: &Ui, id: &str) -> Option<String> {
+    ui.catalog.borrow().as_ref().and_then(|c| c.entries.iter().find(|e| e.app.id == id).and_then(|e| e.app.homepage.clone()))
 }
 
 /// Where an installation is, with ~ for the home directory.
@@ -1042,6 +1087,13 @@ fn show_app(ui: &Rc<Ui>, t: Target) {
     m.add_css_class("caption");
     m.add_css_class("dim-label");
     words.append(&m);
+    // Read when the page opens: an installed app's row may have been made
+    // before the catalog was read.
+    let homepage = t.homepage.clone().or_else(|| homepage_of(ui, &t.id));
+    if let Some(url) = homepage.filter(|u| parse::appstream::web_address(u)) {
+        let link = gtk::LinkButton::builder().label("Website").uri(&url).tooltip_text(&url).halign(gtk::Align::Start).build();
+        words.append(&link);
+    }
     hero.append(&words);
     col.append(&hero);
 
@@ -1504,6 +1556,7 @@ fn show_overview(ui: &Rc<Ui>) {
         }
         page.append(&g);
     }
+    page.append(&repair_group(ui, &d));
     if !d.notes.is_empty() {
         let g = group("Messages from flatpak", Some("As printed, with the command that printed them."));
         for (cmd, text) in &d.notes {
@@ -1516,6 +1569,51 @@ fn show_overview(ui: &Rc<Ui>) {
     page.append(&commands_footer(&ran));
     drop(d);
     push(ui, "Overview and Checks", scrolled(&page).upcast_ref());
+}
+
+/// Check each installation with `flatpak repair --dry-run`, which changes
+/// nothing. Repair itself is left to a terminal: it deletes what is damaged
+/// before downloading it again, and what came from a .flatpak file cannot be
+/// downloaded again.
+fn repair_group(ui: &Rc<Ui>, d: &Data) -> adw::PreferencesGroup {
+    let g = group(
+        "Check the installations",
+        Some("Verifies every installed file against its checksum; changes nothing."),
+    );
+    for inst in [Inst::User, Inst::System] {
+        let argv = commands::repair_check(inst);
+        let r = row(&format!("Check {}", inst.words()), &commands::display(&argv));
+        r.set_subtitle_selectable(false);
+        let b = gtk::Button::builder().label("Check").valign(gtk::Align::Center).build();
+        let (ui2, title) = (ui.clone(), format!("Check {} (no changes)", inst.words()));
+        b.connect_clicked(move |_| start(&ui2, txn::Spec { title: title.clone(), inst, argv: argv.clone() }));
+        r.add_suffix(&b);
+        g.add(&r);
+    }
+    // Applications installed from a .flatpak file: their remote has no URL.
+    let bundles: Vec<String> = d
+        .apps
+        .iter()
+        .filter(|a| {
+            d.remotes.iter().any(|r| r.name == a.origin && r.installation == a.installation && r.is_bundle_origin())
+        })
+        .map(|a| a.title().to_string())
+        .collect();
+    let mut text = String::from(
+        "If a check finds damaged files, repair them from a terminal: flatpak repair --user, or as root \
+         flatpak repair --system. Repair deletes what is damaged first and then downloads it again.",
+    );
+    if !bundles.is_empty() {
+        text.push_str(&format!(
+            " Applications installed from a .flatpak file cannot be downloaded again; if they are damaged, \
+             repair deletes them and you need their file again: {}.",
+            bundles.join(", ")
+        ));
+    }
+    let l = note(&text);
+    l.set_margin_top(6);
+    g.add(&l);
+    g
 }
 
 fn show_remotes(ui: &Rc<Ui>) {

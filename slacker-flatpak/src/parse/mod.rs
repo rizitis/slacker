@@ -6,6 +6,7 @@
 pub mod appstream;
 pub mod list;
 pub mod metadata;
+pub mod pins;
 pub mod remotes;
 pub mod search;
 pub mod transaction;

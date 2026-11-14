@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Slacker Flatpak
+GenericName=Flatpak Applications
+Comment=Browse, install and update Flatpak applications, for your user or system-wide
+Exec=slacker-flatpak
+Icon=nl.slackware.forge.rizitis.SlackerFlatpak
+Terminal=false
+StartupNotify=true
+SingleMainWindow=true
+StartupWMClass=slacker-flatpak
+Categories=System;PackageManager;GTK;
+Keywords=flatpak;flathub;applications;install;update;

@@ -7,6 +7,10 @@ as slacker-flatpak runs it.
 remotes-disabled-1.14.txt
                   the same test repo after `flatpak remote-modify --user
                   --disable testrepo`, listed with --show-disabled.
+pin-user-1.14.txt
+                  flatpak pin --user after pinning org.gnome.Platform//47
+                  and runtime/org.test.Platform/x86_64/1 (plain output: no
+                  title line, patterns as given).
 list-app-slackware.txt
 remotes-slackware.txt
                   real output from r-tz's Slackware (flatpak 1.18.4,

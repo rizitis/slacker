@@ -74,6 +74,14 @@ pub fn hint(text: &str) -> Option<&'static str> {
              use wheel).",
         );
     }
+    // From `flatpak repair`: what it found damaged (a --dry-run only reports).
+    if text.contains("Corrupted file object") || text.contains("due to invalid objects") {
+        return Some(
+            "Damaged files were found. Repair them from a terminal: flatpak repair --user, or as root \
+             flatpak repair --system. Repair deletes what is damaged and then downloads it again; an \
+             application installed from a .flatpak file needs that file again.",
+        );
+    }
     None
 }
 
@@ -170,6 +178,12 @@ mod tests {
     fn a_polkit_refusal_gets_a_hint() {
         assert!(hint("Error: Flatpak system operation Deploy not allowed for user\n").is_some());
         assert!(hint("Updates complete.\n").is_none());
+        // r-tz's repair output (Nov 2026).
+        let repair = "[113/114] Verifying flathub:runtime/org.gnome.Platform/x86_64/49\u{2026}\n\
+            fsck content object 0ab6390d: Corrupted file object; checksum expected='0ab6' actual='6da2', deleting object\n\
+            Deleting ref flathub:runtime/org.gnome.Platform/x86_64/49 due to invalid objects\n";
+        assert!(hint(repair).unwrap().starts_with("Damaged files were found"));
+        assert!(hint("[1/5] Verifying testrepo:app/org.test.Big/x86_64/stable\u{2026}\nChecking remotes...\n").is_none());
     }
 
     #[test]

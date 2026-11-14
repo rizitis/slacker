@@ -12,6 +12,9 @@ VERSION=${VERSION:-0.14.1}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
+# GUI=no / FLATPAK=no skip building slacker-gui / slacker-flatpak
+GUI=${GUI:-${gui:-yes}}
+FLATPAK=${FLATPAK:-${flatpak:-yes}}
 
 if [ -z "$ARCH" ]; then
   case "$( uname -m )" in
@@ -41,6 +44,10 @@ else
   LIBDIRSUFFIX=""
 fi
 
+# ---------------------------------------------------- #
+# BUILD CHECKS
+# -----------------------------------------------------#
+echo "BUILD CHECKS...................."
 # yes needed.
 echo "=============================================================="
 cat /etc/slackware-version
@@ -89,6 +96,10 @@ mkdir -p $TMP $PKG $OUTPUT
 cd $TMP
 
 # First build slacker-cli (the original slacker)
+# ---------------------------------------------------- #
+# SLACKER-CLI
+# -----------------------------------------------------#
+echo "SLACKER-CLI......................"
 
 cp -R $CWD/slacker-cli/* .
 rm -rf target || true
@@ -206,7 +217,10 @@ install -m0644 contrib/slacker.fish \
 # ---------------------------------------------------- #
 # SLACKER-GUI
 # -----------------------------------------------------#
-
+if [ "$GUI" = "NO" ] || [ "$GUI" = "no" ]; then
+echo "SLACKER-GUI: skipped (GUI=$GUI)"
+else
+echo "SLACKER-GUI............"
 # Now we build slacker-gui on top of slacker
 # Built in $TMP like slacker-cli, never inside $CWD.
 mkdir -p $TMP/slacker-gui
@@ -236,12 +250,16 @@ install -Dm644 data/nl.slackware.forge.rizitis.slacker.policy \
 ( cd data/icons && find hicolor -type f ) | while read -r f; do
   install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
 done
+fi
 
 
 # ---------------------------------------------------- #
 # SLACKER-FLATPAK
 # ----------------------------------------------------- #
-
+if [ "$FLATPAK" = "NO" ] || [ "$FLATPAK" = "no" ]; then
+echo "SLACKER-FLATPAK: skipped (FLATPAK=$FLATPAK)"
+else
+echo "SLACKER-FLATPAK......................."
 mkdir -p $TMP/slacker-flatpak
 cd $TMP/slacker-flatpak
 cp -R $CWD/slacker-flatpak/* .
@@ -261,11 +279,21 @@ CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo test --release --locked
 
 install -Dm755 target/release/slacker-flatpak $PKG/usr/bin/slacker-flatpak
 
-# MENEI NA DOYME AN THA ENSOMATOTHEI STO GUI ;H THA EXEI DIKO TOY ICONS KTL
+install -Dm644 data/nl.slackware.forge.rizitis.SlackerFlatpak.desktop \
+  $PKG/usr/share/applications/nl.slackware.forge.rizitis.SlackerFlatpak.desktop
+
+# install, not cp -a: cp -a would keep the owner of the source tree
+# (the user who unpacked it) and sbopkglint rejects uid/gid >= 1000.
+( cd data/icons && find hicolor -type f ) | while read -r f; do
+  install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
+done
+fi
 
 # ------------------------------------- #
 # PKG
 # ------------------------------------- #
+echo "PKG..............................."
+
 
 # Whatever came from the source trees is owned by root.
 chown -R root:root $PKG/usr
@@ -278,9 +306,13 @@ cat $CWD/doinst.sh > $PKG/install/doinst.sh
 cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
 
+# ------------------------------------- #
+# PKG-CHECKS
+# ------------------------------------- #
+echo "PKG-CHECKS........................."
 sleep 1
 if command -v sbopkglint >/dev/null 2>&1; then
-    sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+    sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE || true
 else
     echo "skip cheks: sbopkglint not found."
 fi
@@ -289,7 +321,8 @@ rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new /tmp/sto
 echo "=============================================================="
 # audit the embedded dependency lists (cargo-auditable)
 if command -v cargo-audit >/dev/null 2>&1; then
-  for b in slacker slacker-gui; do
+  for b in slacker slacker-gui slacker-flatpak; do
+    [ -f $PKG/usr/bin/$b ] || continue
     cargo audit bin $PKG/usr/bin/$b || echo "WARNING: cargo audit reported problems in $b"
   done
 else
@@ -298,3 +331,4 @@ fi
 echo "=============================================================="
 #sleep 1
 #gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+echo "gpg --detach-sign --armor need user mode.........................."

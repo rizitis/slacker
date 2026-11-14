@@ -141,6 +141,18 @@ pub fn run_app(inst: Inst, id: &str, branch: &str) -> Result<Vec<String>, String
     Ok(args(&["run", inst.flag(), &format!("--branch={branch}"), id]))
 }
 
+/// `flatpak pin --user|--system`: which runtimes are kept on purpose.
+pub fn pins(inst: Inst) -> Vec<String> {
+    args(&["pin", inst.flag()])
+}
+
+/// `flatpak repair --user|--system --dry-run`: checks every installed ref
+/// and changes nothing. (Without --dry-run, repair deletes what is damaged
+/// and downloads it again; that is left to the terminal.)
+pub fn repair_check(inst: Inst) -> Vec<String> {
+    args(&["repair", inst.flag(), "--dry-run"])
+}
+
 /// `flatpak repair --user|--system`, shown after a transaction was stopped.
 pub fn repair(inst: Inst) -> Vec<String> {
     args(&["repair", inst.flag()])
@@ -271,6 +283,9 @@ mod tests {
             "flatpak run --system --branch=stable org.gnome.baobab"
         );
         assert!(run_app(Inst::User, "--command=sh", "stable").is_err());
+        assert_eq!(display(&pins(Inst::System)), "flatpak pin --system");
+        assert_eq!(display(&repair_check(Inst::User)), "flatpak repair --user --dry-run");
+        assert!(repair_check(Inst::System).iter().any(|a| a == "--dry-run"));
         assert!(run_app(Inst::User, "org.gnome.baobab", "-x").is_err());
         assert_eq!(
             display(&install(Inst::User, "flathub", "org.gnome.baobab", "stable").unwrap()),

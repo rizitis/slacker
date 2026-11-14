@@ -53,6 +53,12 @@ Version Beta 0.14.1
     - Overview and Checks: flatpak version, system helper, installations,
       and warnings (exports not on XDG_DATA_DIRS, an app installed twice, an
       enabled remote without GPG). A banner says when there is something.
+        - Installed: runtimes that flatpak keeps on purpose are tagged "pinned"
+      (Remove Unused never removes them).
+    - each application page links to its website (appstream homepage,
+      http/https only).
+    - Overview: Check runs flatpak repair --dry-run for each installation
+      (changes nothing); repairing itself is left to a terminal.
 - Update: wiki
 - Update: scripts/
     - Add: check-msrv.sh (SlackBuild use it now before build)

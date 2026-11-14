@@ -9,6 +9,8 @@
 //! Every command it runs is the same one you can run in a terminal.
 
 mod catalog;
+#[cfg(test)]
+mod install_tests;
 mod checks;
 mod commands;
 mod parse;
@@ -44,6 +46,9 @@ fn main() -> glib::ExitCode {
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| {
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::PreferDark);
+        // The icon installed under data/icons; the window manager and the
+        // task bar take it from here.
+        gtk::Window::set_default_icon_name(APP_ID);
     });
     app.connect_activate(window::build);
     app.run()
