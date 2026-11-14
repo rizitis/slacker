@@ -1,9 +1,11 @@
 #!/bin/sh
 # check-msrv.sh - is the rust-version in each Cargo.toml still true for the
-# crates in its Cargo.lock? For slacker-cli and slacker-gui it prints the highest
-# rust-version the locked crates declare, and fails when it is above ours.
-# Run after every `cargo update`. Lives in scripts/, next to slacker-cli/ and
-# slacker-gui/; it finds them from its own location, so it runs from anywhere.
+# crates in its Cargo.lock? For slacker-cli, slacker-gui and slacker-flatpak it
+# prints the highest rust-version the locked crates declare, and fails when it
+# is above ours.
+# Run after every `cargo update`. Lives in scripts/, next to slacker-cli/,
+# slacker-gui/ and slacker-flatpak/; it finds them from its own location, so
+# it runs from anywhere.
 #
 # Needs cargo and python3. Reads only, changes nothing.
 
@@ -11,7 +13,7 @@ set -u
 top=$(cd "$(dirname "$0")/.." && pwd)
 rc=0
 
-for crate in slacker-cli slacker-gui; do
+for crate in slacker-cli slacker-gui slacker-flatpak; do
   echo "== $crate"
   if [ ! -f "$top/$crate/Cargo.toml" ]; then
     echo "not found: $top/$crate"

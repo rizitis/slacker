@@ -325,7 +325,34 @@ pub fn terminal_view(buffer: &gtk::TextBuffer) -> gtk::ScrolledWindow {
     }
     let start = view.clone();
     gtk::glib::idle_add_local_once(move || start.scroll_mark_onscreen(&mark));
+
+    // Stay at the end when the view gets shorter or taller, as when a question
+    // panel appears under it (issue #25): no new text comes then, so the
+    // handler above does not run. Someone who scrolled up to read stays where
+    // they are.
+    stick_to_end(&scroller.vadjustment());
     scroller
+}
+
+/// Keeps a scroll position at the end while it is there: when the length or
+/// the visible height changes, it moves to the new end. Moved away from the
+/// end, it stays put.
+fn stick_to_end(adj: &gtk::Adjustment) {
+    let at_end = std::rc::Rc::new(std::cell::Cell::new(true));
+    {
+        let at_end = at_end.clone();
+        adj.connect_value_changed(move |a| at_end.set(is_at_end(a.value(), a.page_size(), a.upper())));
+    }
+    adj.connect_changed(move |a| {
+        if at_end.get() {
+            a.set_value(a.upper() - a.page_size());
+        }
+    });
+}
+
+/// The view shows the last line (a pixel of rounding allowed).
+fn is_at_end(value: f64, page: f64, upper: f64) -> bool {
+    value + page >= upper - 1.0
 }
 
 #[cfg(test)]
@@ -433,12 +460,49 @@ mod tests {
         assert_eq!(lines.iter().filter(|l| l.contains('\u{2713}')).count(), 15);
     }
 
-    /// The real GTK buffer path, when a display is there (skipped otherwise).
     #[test]
-    fn the_transaction_window_drops_started_lines_the_log_keeps_them() {
+    fn the_end_is_where_the_last_line_shows() {
+        assert!(is_at_end(888.0, 500.0, 1388.0));
+        assert!(is_at_end(887.5, 500.0, 1388.0));
+        assert!(!is_at_end(888.0, 250.0, 1388.0));
+        assert!(!is_at_end(0.0, 250.0, 1388.0));
+        // Shorter than the view: nothing to scroll, always at the end.
+        assert!(is_at_end(0.0, 500.0, 300.0));
+    }
+
+    // GTK can be started on one thread only, and the test runner gives each
+    // test its own thread; so every check that needs GTK runs from this one
+    // test, else all but the first would be skipped without a word. Skipped
+    // when GTK cannot start (no display).
+    #[test]
+    fn with_gtk() {
         if gtk::init().is_err() {
             return;
         }
+        the_transaction_window_drops_started_lines_the_log_keeps_them();
+        the_output_stays_at_its_end_when_a_question_takes_room_under_it();
+    }
+
+    /// What the output's scroll bar goes through when a question panel
+    /// appears under it (numbers from issue #25's case). No window is opened.
+    fn the_output_stays_at_its_end_when_a_question_takes_room_under_it() {
+        let adj = gtk::Adjustment::new(0.0, 0.0, 1388.0, 20.0, 450.0, 500.0);
+        stick_to_end(&adj);
+        // The output has been followed to its end.
+        adj.set_value(888.0);
+        // slacker stops on a question; the panel takes 250 px of the view.
+        adj.configure(adj.value(), 0.0, 1388.0, 20.0, 225.0, 250.0);
+        assert_eq!(adj.value(), 1138.0, "the last lines are hidden");
+        // More output: it follows.
+        adj.configure(adj.value(), 0.0, 1500.0, 20.0, 225.0, 250.0);
+        assert_eq!(adj.value(), 1250.0);
+        // Someone scrolls up to read; the panel goes away: they stay put.
+        adj.set_value(0.0);
+        adj.configure(adj.value(), 0.0, 1500.0, 20.0, 450.0, 500.0);
+        assert_eq!(adj.value(), 0.0);
+    }
+
+    fn the_transaction_window_drops_started_lines_the_log_keeps_them() {
         let tidy = gtk::TextBuffer::new(None);
         let raw = gtk::TextBuffer::new(None);
         let (t, r) = (Feed::tidying_downloads(&tidy), Feed::new(&raw));
