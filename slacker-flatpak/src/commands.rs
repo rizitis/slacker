@@ -65,8 +65,17 @@ pub fn list_runtimes() -> Vec<String> {
     args(&["list", "--runtime", &format!("--columns={LIST_COLUMNS}")])
 }
 
+/// `flatpak remotes --show-disabled`: without it a disabled remote is not
+/// listed at all.
 pub fn remotes() -> Vec<String> {
-    args(&["remotes", &format!("--columns={REMOTE_COLUMNS}")])
+    args(&["remotes", "--show-disabled", &format!("--columns={REMOTE_COLUMNS}")])
+}
+
+/// `flatpak remote-modify --user|--system --enable|--disable REMOTE`. Only
+/// this switch; nothing else about the remote is changed.
+pub fn remote_enable(inst: Inst, remote: &str, enable: bool) -> Result<Vec<String>, String> {
+    valid_remote(remote)?;
+    Ok(args(&["remote-modify", inst.flag(), if enable { "--enable" } else { "--disable" }, remote]))
 }
 
 /// `flatpak info --show-permissions --user|--system ID//BRANCH`.
@@ -105,19 +114,9 @@ pub fn uninstall_unused(inst: Inst) -> Vec<String> {
     args(&["uninstall", "--unused", inst.flag()])
 }
 
-/// The columns asked of `flatpak search` (the same as --columns=all on 1.18).
-pub const SEARCH_COLUMNS: &str = "name,description,application,version,branch,remotes";
-
 /// `flatpak --default-arch`, for finding the appstream icons.
 pub fn default_arch() -> Vec<String> {
     args(&["--default-arch"])
-}
-
-/// `flatpak search TEXT`: looks in the appstream data flatpak already has,
-/// no network.
-pub fn search(text: &str) -> Result<Vec<String>, String> {
-    valid_search(text)?;
-    Ok(args(&["search", &format!("--columns={SEARCH_COLUMNS}"), text]))
 }
 
 /// `flatpak remote-info --user|--system --show-metadata REMOTE ID//BRANCH`:
@@ -134,14 +133,12 @@ pub fn install(inst: Inst, remote: &str, id: &str, branch: &str) -> Result<Vec<S
     Ok(args(&["install", inst.flag(), remote, &app_ref(id, branch)?]))
 }
 
-/// Search text: 1 to 100 characters, no control characters, not starting
-/// with '-' (it would be read as an option).
-pub fn valid_search(t: &str) -> Result<(), String> {
-    let n = t.chars().count();
-    if n == 0 || n > 100 || t.starts_with('-') || t.chars().any(char::is_control) {
-        return Err("search text: 1 to 100 characters, not starting with '-'".to_string());
-    }
-    Ok(())
+/// `flatpak run --user|--system --branch=BRANCH ID`: starts an installed
+/// application from the installation it is in.
+pub fn run_app(inst: Inst, id: &str, branch: &str) -> Result<Vec<String>, String> {
+    valid_id(id)?;
+    valid_branch(branch)?;
+    Ok(args(&["run", inst.flag(), &format!("--branch={branch}"), id]))
 }
 
 /// `flatpak repair --user|--system`, shown after a transaction was stopped.
@@ -224,7 +221,16 @@ mod tests {
     #[test]
     fn commands_are_read_only_and_exact() {
         assert_eq!(display(&list_apps()), format!("flatpak list --app --columns={LIST_COLUMNS}"));
-        assert_eq!(display(&remotes()), format!("flatpak remotes --columns={REMOTE_COLUMNS}"));
+        assert_eq!(display(&remotes()), format!("flatpak remotes --show-disabled --columns={REMOTE_COLUMNS}"));
+        assert_eq!(
+            display(&remote_enable(Inst::System, "flathub", false).unwrap()),
+            "flatpak remote-modify --system --disable flathub"
+        );
+        assert_eq!(
+            display(&remote_enable(Inst::User, "sober", true).unwrap()),
+            "flatpak remote-modify --user --enable sober"
+        );
+        assert!(remote_enable(Inst::User, "--url=x", true).is_err());
         assert_eq!(
             permissions(Inst::User, "org.vinegarhq.Sober", "stable").unwrap(),
             vec!["info", "--show-permissions", "--user", "org.vinegarhq.Sober//stable"]
@@ -259,14 +265,13 @@ mod tests {
     }
 
     #[test]
-    fn search_and_install_commands() {
+    fn run_and_install_commands() {
         assert_eq!(
-            search("sober").unwrap(),
-            vec!["search", &format!("--columns={SEARCH_COLUMNS}"), "sober"]
+            display(&run_app(Inst::System, "org.gnome.baobab", "stable").unwrap()),
+            "flatpak run --system --branch=stable org.gnome.baobab"
         );
-        for bad in ["", "-y", "--system", "a\nb", &"x".repeat(101)] {
-            assert!(search(bad).is_err(), "{bad:?}");
-        }
+        assert!(run_app(Inst::User, "--command=sh", "stable").is_err());
+        assert!(run_app(Inst::User, "org.gnome.baobab", "-x").is_err());
         assert_eq!(
             display(&install(Inst::User, "flathub", "org.gnome.baobab", "stable").unwrap()),
             "flatpak install --user flathub org.gnome.baobab//stable"

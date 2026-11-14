@@ -4,6 +4,9 @@ as slacker-flatpak runs it.
 *-1.14.txt        real output of flatpak 1.14.6, from a throwaway local test
                   repo (org.test.Hello installed in both user and system;
                   updates-1.14.txt: a newer commit waiting for the system one).
+remotes-disabled-1.14.txt
+                  the same test repo after `flatpak remote-modify --user
+                  --disable testrepo`, listed with --show-disabled.
 list-app-slackware.txt
 remotes-slackware.txt
                   real output from r-tz's Slackware (flatpak 1.18.4,

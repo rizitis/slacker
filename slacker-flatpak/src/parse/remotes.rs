@@ -1,4 +1,4 @@
-//! `flatpak remotes --columns=commands::REMOTE_COLUMNS`.
+//! `flatpak remotes --show-disabled --columns=commands::REMOTE_COLUMNS`.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Remote {
@@ -19,6 +19,19 @@ impl Remote {
 
     pub fn no_gpg(&self) -> bool {
         self.options.iter().any(|o| o == "no-gpg-verify")
+    }
+
+    /// No GPG on a remote flatpak uses. A disabled remote is not used, so it
+    /// is not worth a warning (its tag still says it).
+    pub fn gpg_warning(&self) -> bool {
+        self.no_gpg() && !self.disabled()
+    }
+
+    /// The remote flatpak makes by itself when an application is installed
+    /// from a .flatpak file (NAME-origin): no URL, so nothing can come from
+    /// it, enabled or not.
+    pub fn is_bundle_origin(&self) -> bool {
+        self.url.is_empty()
     }
 }
 
@@ -60,6 +73,27 @@ mod tests {
         assert_eq!(r[1].installation, "user");
         assert!(r[1].no_gpg());
         assert!(!r[1].disabled());
+    }
+
+    #[test]
+    fn a_disabled_remote_keeps_its_installation() {
+        let r = parse(include_str!("../../fixtures/remotes-disabled-1.14.txt"));
+        assert_eq!(r.len(), 2);
+        assert_eq!((r[0].installation.as_str(), r[0].disabled()), ("system", false));
+        assert_eq!((r[1].installation.as_str(), r[1].disabled()), ("user", true));
+        // Both have no GPG; only the enabled one is worth a warning.
+        assert!(r[0].gpg_warning() && !r[1].gpg_warning());
+        assert!(!r[0].is_bundle_origin());
+    }
+
+    #[test]
+    fn a_bundle_origin_remote_has_no_url() {
+        // Real flatpak 1.14.6 output after `flatpak install --user hello.flatpak`
+        // (r-tz's breezydesktop-origin and optimusui-origin look the same).
+        let r = parse("hello-origin\thello.flatpak\t\t0\tuser,disabled,no-enumerate,no-gpg-verify\n");
+        assert_eq!(r.len(), 1);
+        assert!(r[0].is_bundle_origin() && r[0].disabled() && !r[0].gpg_warning());
+        assert_eq!(r[0].installation, "user");
     }
 
     #[test]

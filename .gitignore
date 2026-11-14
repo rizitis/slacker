@@ -36,3 +36,5 @@ vendor
 vendors
 /containers
 containers
+*.BAK
+*.bak
