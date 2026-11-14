@@ -203,6 +203,10 @@ mkdir -p $PKG/usr/share/fish/vendor_completions.d
 install -m0644 contrib/slacker.fish \
   $PKG/usr/share/fish/vendor_completions.d/slacker.fish
 
+# ---------------------------------------------------- #
+# SLACKER-GUI
+# -----------------------------------------------------#
+
 # Now we build slacker-gui on top of slacker
 # Built in $TMP like slacker-cli, never inside $CWD.
 mkdir -p $TMP/slacker-gui
@@ -232,6 +236,36 @@ install -Dm644 data/nl.slackware.forge.rizitis.slacker.policy \
 ( cd data/icons && find hicolor -type f ) | while read -r f; do
   install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
 done
+
+
+# ---------------------------------------------------- #
+# SLACKER-FLATPAK
+# ----------------------------------------------------- #
+
+mkdir -p $TMP/slacker-flatpak
+cd $TMP/slacker-flatpak
+cp -R $CWD/slacker-flatpak/* .
+rm -rf target || true
+chown -R root:root .
+# same permission normalization as for slacker-cli above
+find . \( -type d          ! -perm 755 -exec chmod 00755 {} \; \) -o \
+       \( -type f   -perm /111 ! -perm 755 -exec chmod -f 755 {} + \) -o \
+       \( -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} + \)
+
+if command -v cargo-auditable >/dev/null 2>&1; then
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --release --locked
+else
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build --release --locked
+fi
+CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo test --release --locked
+
+install -Dm755 target/release/slacker-flatpak $PKG/usr/bin/slacker-flatpak
+
+# MENEI NA DOYME AN THA ENSOMATOTHEI STO GUI ;H THA EXEI DIKO TOY ICONS KTL
+
+# ------------------------------------- #
+# PKG
+# ------------------------------------- #
 
 # Whatever came from the source trees is owned by root.
 chown -R root:root $PKG/usr

@@ -25,6 +25,31 @@ Version Beta 0.14.1
     - Fix: correct minimum rust version in Cargo.toml (highest needed by Cargo.lock: 1.92 (pango-sys 0.22.9) )
 - Update: slacker-cli
     - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.
+- Add: slacker-flatpak (Version 0.N.0, experimental)
+    - a separate GTK4/libadwaita front-end for Flatpak, for both your user's
+      and the system-wide Flatpak. It runs flatpak as your user, never as
+      root; changes to the system-wide Flatpak get their privileges from
+      flatpak's system helper and polkit. It refuses to start as root.
+    - Explore: every application your remotes offer, with icons and
+      categories, read from the appstream data flatpak keeps on disk
+      (nothing is downloaded). The search bar filters by name, description
+      or ID as you type.
+    - each application has a page with its information and permissions, and
+      Open, Install or Uninstall for each installation. The same actions are
+      shown as terminal commands.
+    - Installed: applications per installation, with Open; runtimes behind a
+      switch, with Remove Unused. Updates: check every remote and update each
+      installation.
+    - install, update and uninstall run flatpak on a pty and show its own
+      questions with Yes/No buttons; nothing is answered for you (no -y).
+      Stop is always available.
+    - Remotes: all remotes, disabled ones too, with a switch to enable or
+      disable each (remote-modify). Remotes made by .flatpak files have no
+      switch. Flathub Beta and Fedora are suggested as commands to copy;
+      adding or removing remotes is done from a terminal.
+    - Overview and Checks: flatpak version, system helper, installations,
+      and warnings (exports not on XDG_DATA_DIRS, an app installed twice, an
+      enabled remote without GPG). A banner says when there is something.
 - Update: wiki
 - Update: scripts/
     - Add: check-msrv.sh (SlackBuild use it now before build)
