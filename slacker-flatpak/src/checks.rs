@@ -120,9 +120,81 @@ pub fn installed_icon(base: &Path, id: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// Folders under `data_root` (~/.var/app) named like an application ID that
+/// is not installed in any installation: data an uninstall kept. Only real
+/// directories; a symlink is never listed.
+pub fn leftover_data(data_root: &Path, installed: &std::collections::HashSet<String>) -> Vec<(String, PathBuf)> {
+    let Ok(rd) = std::fs::read_dir(data_root) else { return Vec::new() };
+    let mut out: Vec<(String, PathBuf)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let path = e.path();
+            let meta = std::fs::symlink_metadata(&path).ok()?;
+            (meta.is_dir() && crate::commands::valid_id(&name).is_ok() && !installed.contains(&name))
+                .then_some((name, path))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// Bytes under `path`, symlinks counted as themselves and never followed.
+pub fn dir_size(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else { return 0 };
+    if !meta.is_dir() {
+        return meta.len();
+    }
+    std::fs::read_dir(path).map(|rd| rd.flatten().map(|e| dir_size(&e.path())).sum()).unwrap_or(0)
+}
+
+/// Deletes one leftover folder, after checking again that it is exactly
+/// `data_root/ID`, a real directory, and not an installed application's.
+pub fn delete_leftover(data_root: &Path, id: &str, installed: &std::collections::HashSet<String>) -> Result<(), String> {
+    crate::commands::valid_id(id)?;
+    if installed.contains(id) {
+        return Err(format!("{id} is installed; its data is not deleted"));
+    }
+    let path = data_root.join(id);
+    let meta = std::fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_dir() {
+        return Err(format!("{} is not a folder", path.display()));
+    }
+    // remove_dir_all does not follow symlinks inside the folder.
+    std::fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leftover_data_is_only_real_folders_of_apps_not_installed() {
+        let tmp = std::env::temp_dir().join(format!("sf-left-{}", std::process::id()));
+        let root = tmp.join(".var/app");
+        for d in ["org.gnome.baobab", "com.onepassword.OnePassword", "not-an-id"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        std::fs::write(root.join("com.onepassword.OnePassword/x"), b"12345").unwrap();
+        // A symlink named like an app, pointing outside: never listed, never followed.
+        let outside = tmp.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep"), b"data").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("org.evil.Link")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("com.onepassword.OnePassword/link")).unwrap();
+        let installed: std::collections::HashSet<String> = ["org.gnome.baobab".to_string()].into();
+        let left = leftover_data(&root, &installed);
+        assert_eq!(left.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["com.onepassword.OnePassword"]);
+        assert!(dir_size(&root.join("com.onepassword.OnePassword")) >= 5);
+        assert!(delete_leftover(&root, "org.gnome.baobab", &installed).is_err());
+        assert!(delete_leftover(&root, "org.evil.Link", &installed).is_err());
+        assert!(delete_leftover(&root, "../outside", &installed).is_err());
+        delete_leftover(&root, "com.onepassword.OnePassword", &installed).unwrap();
+        assert!(!root.join("com.onepassword.OnePassword").exists());
+        // The link inside was removed, not what it pointed to.
+        assert!(outside.join("keep").exists());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
 
     #[test]
     fn installed_icons_prefer_png_then_svg() {

@@ -26,6 +26,7 @@ Version Beta 0.14.1
       adw::ApplicationWindow, because libadwaita always draws its own frame.
       Everything inside it is still GTK4/libadwaita.
     - Fix: correct minimum rust version in Cargo.toml (highest needed by Cargo.lock: 1.92 (pango-sys 0.22.9) )
+    - The font size and "Copied" messages show for 2 seconds, and a new one replaces the previous one instead of waiting behind it.
 - Update: slacker-cli
     - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.
 - Add: slacker-flatpak (Version 0.N.0, experimental)
@@ -59,6 +60,15 @@ Version Beta 0.14.1
       http/https only).
     - Overview: Check runs flatpak repair --dry-run for each installation
       (changes nothing); repairing itself is left to a terminal.
+    - Update: slacker-flatpak (Version 0.6.0, experimental)
+    - an application's page says "Verified" when its remote (Flathub) has
+      verified the developer, with how and when; tiles on Explore carry a
+      small check mark.
+    - the page shows the developer and the license, from appstream.
+    - The Stop question now says the change can be left half done (it said "update").
+    - After a stopped install, a line says that parts installed before the stop stay, and that Remove Unused takes away the ones nothing needs.
+    - Overview and Checks lists the data of applications that are no longer installed (~/.var/app), with its size, and deletes a folder only after you confirm.
+    - Short messages show for 2 seconds, and a new one replaces the previous one. Errors still stay until closed.
 - Update: wiki
 - Update: scripts/
     - Add: check-msrv.sh (SlackBuild use it now before build)

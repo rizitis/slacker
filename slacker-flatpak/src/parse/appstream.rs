@@ -1,6 +1,7 @@
 //! A remote's appstream catalog (appstream.xml), as flatpak keeps it under
 //! BASE/appstream/REMOTE/ARCH/active/. Only what the Browse page shows is
-//! read: id, name, summary, categories, the cached icon and the flatpak ref.
+//! read: id, name, summary, categories, the cached icon, the flatpak ref, the
+//! homepage, the license, the developer and Flathub's verification.
 //! Translations (xml:lang) and long descriptions are skipped.
 
 use quick_xml::events::{BytesStart, Event};
@@ -18,6 +19,22 @@ pub struct App {
     pub branch: String,
     /// `<url type="homepage">`, only when it is an http(s) address.
     pub homepage: Option<String>,
+    /// `<project_license>`, as written (an SPDX expression, usually).
+    pub license: String,
+    /// `<developer><name>`, or the older `<developer_name>`.
+    pub developer: String,
+    /// Flathub's `flathub::verification::*` custom values; None when the
+    /// remote says nothing about it (or says it is not verified).
+    pub verified: Option<Verified>,
+}
+
+/// The developer was verified by Flathub.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Verified {
+    /// e.g. "website", "login_provider".
+    pub method: String,
+    /// Seconds since the epoch, when Flathub gives it.
+    pub timestamp: Option<i64>,
 }
 
 /// The component types the Browse page lists; add-ons, runtimes, fonts and
@@ -34,6 +51,9 @@ struct Partial {
     icon: Option<(u32, String)>,
     bundle: String,
     homepage: String,
+    license: String,
+    developer: String,
+    custom: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -45,6 +65,9 @@ enum Field {
     Icon(u32),
     Bundle,
     Homepage,
+    License,
+    Developer,
+    Custom(usize),
 }
 
 fn attr(e: &BytesStart, key: &str) -> Option<String> {
@@ -62,6 +85,8 @@ pub fn parse(xml: &str) -> Vec<App> {
     let mut depth = 0usize;
     let mut field: Option<Field> = None;
     let mut text = String::new();
+    // The current direct child of <component>, for fields one level deeper.
+    let mut parent = String::new();
 
     loop {
         let ev = match r.read_event() {
@@ -80,6 +105,9 @@ pub fn parse(xml: &str) -> Vec<App> {
                     continue;
                 }
                 depth += 1;
+                if depth == 1 {
+                    parent = name.to_string();
+                }
                 let untranslated = attr(&e, "xml:lang").is_none();
                 field = match (depth, name) {
                     (1, "id") => Some(Field::Id),
@@ -91,6 +119,17 @@ pub fn parse(xml: &str) -> Vec<App> {
                     }
                     (1, "bundle") if attr(&e, "type").as_deref() == Some("flatpak") => Some(Field::Bundle),
                     (1, "url") if attr(&e, "type").as_deref() == Some("homepage") => Some(Field::Homepage),
+                    (1, "project_license") => Some(Field::License),
+                    (1, "developer_name") if untranslated => Some(Field::Developer),
+                    (2, "name") if untranslated && parent == "developer" => Some(Field::Developer),
+                    (2, "value") if parent == "custom" => match attr(&e, "key") {
+                        Some(k) if k.starts_with("flathub::verification::") => {
+                            let c = cur.as_mut().expect("inside a component");
+                            c.custom.push((k, String::new()));
+                            Some(Field::Custom(c.custom.len() - 1))
+                        }
+                        _ => None,
+                    },
                     _ => None,
                 };
                 text.clear();
@@ -131,6 +170,18 @@ pub fn parse(xml: &str) -> Vec<App> {
                         }
                         Field::Bundle => c.bundle = v,
                         Field::Homepage => c.homepage = v,
+                        Field::License => c.license = v,
+                        Field::Developer => {
+                            // <developer><name> wins over the older <developer_name>.
+                            if c.developer.is_empty() || parent == "developer" {
+                                c.developer = v
+                            }
+                        }
+                        Field::Custom(i) => {
+                            if let Some(slot) = c.custom.get_mut(i) {
+                                slot.1 = v
+                            }
+                        }
                     }
                 }
                 depth -= 1;
@@ -156,7 +207,25 @@ fn finish(p: Partial) -> Option<App> {
         return None;
     }
     let homepage = web_address(&p.homepage).then_some(p.homepage);
-    Some(App { id, name: p.name, summary: p.summary, categories: p.categories, icon: p.icon.map(|(_, f)| f), branch, homepage })
+    let value = |key: &str| {
+        p.custom.iter().find(|(k, _)| k == &format!("flathub::verification::{key}")).map(|(_, v)| v.as_str())
+    };
+    let verified = (value("verified") == Some("true")).then(|| Verified {
+        method: value("method").unwrap_or("").to_string(),
+        timestamp: value("timestamp").and_then(|t| t.parse().ok()),
+    });
+    Some(App {
+        id,
+        name: p.name,
+        summary: p.summary,
+        categories: p.categories,
+        icon: p.icon.map(|(_, f)| f),
+        branch,
+        homepage,
+        license: p.license,
+        developer: p.developer,
+        verified,
+    })
 }
 
 /// An address the window may offer to open: http or https only (never file:,
@@ -211,6 +280,12 @@ mod tests {
     <bundle type="flatpak" runtime="org.gnome.Platform/x86_64/51">app/org.gnome.baobab/x86_64/stable</bundle>
     <url type="bugtracker">https://gitlab.gnome.org/GNOME/baobab/issues</url>
     <url type="homepage">https://apps.gnome.org/Baobab/</url>
+    <project_license>GPL-2.0-or-later</project_license>
+    <developer_name>Old Name</developer_name>
+    <developer id="org.gnome"><name>The GNOME Project</name><name xml:lang="el">Το έργο GNOME</name></developer>
+    <custom><value key="flathub::manifest">https://example.org/m.json</value><value key="flathub::verification::verified">true</value>
+    <value key="flathub::verification::timestamp">1764081595</value>
+    <value key="flathub::verification::method">website</value></custom>
   </component>
   <component type="addon">
     <id>org.gnome.baobab.Locale</id>
@@ -223,6 +298,8 @@ mod tests {
     <summary>Says hello &#x2014; for testing</summary>
     <categories><category>Game</category></categories>
     <url type="homepage">javascript:alert(1)</url>
+    <developer_name>Someone</developer_name>
+    <custom><value key="flathub::verification::verified">false</value></custom>
   </component>
 </components>"#;
 
@@ -241,6 +318,11 @@ mod tests {
         assert_eq!(a[1].summary, "Says hello \u{2014} for testing");
         assert_eq!(a[1].icon, None);
         assert_eq!(a[0].homepage.as_deref(), Some("https://apps.gnome.org/Baobab/"));
+        assert_eq!(a[0].license, "GPL-2.0-or-later");
+        assert_eq!(a[0].developer, "The GNOME Project");
+        assert_eq!(a[0].verified, Some(Verified { method: "website".into(), timestamp: Some(1764081595) }));
+        assert_eq!(a[1].developer, "Someone");
+        assert_eq!(a[1].verified, None);
         // Only http(s) is kept.
         assert_eq!(a[1].homepage, None);
         assert!(web_address("http://example.org/x"));

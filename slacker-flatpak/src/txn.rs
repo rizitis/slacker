@@ -31,6 +31,10 @@ struct T {
     win: gtk::Window,
     buffer: gtk::TextBuffer,
     view: gtk::TextView,
+    /// What the buffer holds now, so a redraw changes only what differs.
+    shown: RefCell<String>,
+    /// Stays at the end of the buffer; the view follows it.
+    end: gtk::TextMark,
     perms: gtk::Label,
     perms_box: gtk::Box,
     question: gtk::Label,
@@ -48,6 +52,9 @@ struct T {
     stopped: Cell<bool>,
     finished: Cell<bool>,
     inst: Inst,
+    /// The command is `flatpak install`: a stop can leave what it had already
+    /// installed (runtimes, locales) behind.
+    installing: bool,
     on_done: Rc<dyn Fn()>,
 }
 
@@ -78,6 +85,8 @@ pub fn run(parent: &gtk::ApplicationWindow, app_frame: bool, flatpak: PathBuf, s
         .build();
     let scroller = gtk::ScrolledWindow::builder().child(&view).vexpand(true).build();
     scroller.add_css_class("card");
+    stick_to_end(&scroller.vadjustment());
+    let end = buffer.create_mark(None, &buffer.end_iter(), false);
 
     let perms = gtk::Label::builder().xalign(0.0).wrap(true).selectable(true).build();
     let perms_title = gtk::Label::builder()
@@ -148,6 +157,8 @@ pub fn run(parent: &gtk::ApplicationWindow, app_frame: bool, flatpak: PathBuf, s
         win: win.clone(),
         buffer,
         view,
+        shown: RefCell::default(),
+        end,
         perms,
         perms_box,
         question,
@@ -165,6 +176,7 @@ pub fn run(parent: &gtk::ApplicationWindow, app_frame: bool, flatpak: PathBuf, s
         stopped: Cell::new(false),
         finished: Cell::new(false),
         inst: spec.inst,
+        installing: spec.argv.first().map(String::as_str) == Some("install"),
         on_done,
     });
 
@@ -264,9 +276,22 @@ fn read_some(t: &Rc<T>, fd: i32) -> glib::ControlFlow {
 
 fn show_text(t: &Rc<T>) {
     let clean = transaction::clean(&t.text.borrow());
-    t.buffer.set_text(&clean);
-    let mut end = t.buffer.end_iter();
-    t.view.scroll_to_iter(&mut end, 0.0, false, 0.0, 1.0);
+    // Only what changed is rewritten: a progress line redrawn in place is the
+    // last line, so the text above it stays and the view does not move.
+    // (Setting the whole text each time sent the view to the top and back.)
+    {
+        let mut shown = t.shown.borrow_mut();
+        let keep = transaction::common_prefix(&shown, &clean);
+        if keep < shown.len() || keep < clean.len() {
+            let mut from = t.buffer.iter_at_offset(shown[..keep].chars().count() as i32);
+            let mut to = t.buffer.end_iter();
+            t.buffer.delete(&mut from, &mut to);
+            let mut at = t.buffer.end_iter();
+            t.buffer.insert(&mut at, &clean[keep..]);
+            *shown = clean.clone();
+        }
+    }
+    t.view.scroll_mark_onscreen(&t.end);
 
     let perms = transaction::new_permissions(&clean);
     if !perms.is_empty() {
@@ -308,6 +333,22 @@ fn show_text(t: &Rc<T>) {
     *t.waiting.borrow_mut() = p;
 }
 
+/// Keeps the output at its end when the view's height changes (a question or
+/// the permissions appearing under it), as slacker-gui does; someone who
+/// scrolled up to read stays where they are.
+fn stick_to_end(adj: &gtk::Adjustment) {
+    let at_end = Rc::new(Cell::new(true));
+    {
+        let at_end = at_end.clone();
+        adj.connect_value_changed(move |a| at_end.set(a.value() + a.page_size() >= a.upper() - 1.0));
+    }
+    adj.connect_changed(move |a| {
+        if at_end.get() {
+            a.set_value(a.upper() - a.page_size());
+        }
+    });
+}
+
 fn answer(t: &Rc<T>, yes: bool) {
     if !matches!(*t.waiting.borrow(), Some(Prompt::YesNo { .. })) {
         return;
@@ -344,11 +385,11 @@ fn stop_or_close(t: &Rc<T>) {
         return;
     }
     let body = if t.inst == Inst::System {
-        "flatpak is changing the system-wide Flatpak installation. Stopping it now can leave an update half done. \
+        "flatpak is changing the system-wide Flatpak installation. Stopping it now can leave the change half done. \
          The system helper runs as root and is not stopped by this; it may finish its current step.\n\n\
          Afterwards, `flatpak repair --system` checks the installation."
     } else {
-        "flatpak is changing your user's Flatpak installation. Stopping it now can leave an update half done.\n\n\
+        "flatpak is changing your user's Flatpak installation. Stopping it now can leave the change half done.\n\n\
          Afterwards, `flatpak repair --user` checks the installation."
     };
     let d = adw::AlertDialog::new(Some("Stop flatpak?"), Some(body));
@@ -423,6 +464,14 @@ fn finish(t: &Rc<T>, status: Option<std::process::ExitStatus>) {
     }
     if t.stopped.get() && t.said_yes.get() {
         msg.push_str(&format!("\nTo check the installation: {}", commands::display(&commands::repair(t.inst))));
+        if t.installing {
+            // flatpak installs one ref at a time and undoes none of them on a
+            // stop; repair checks files, it does not remove what was left.
+            msg.push_str(
+                "\nParts installed before the stop stay. Remove Unused (Installed, Show runtimes) takes away \
+                 the ones nothing needs.",
+            );
+        }
     }
     t.status.set_label(&msg);
     if (code != Some(0) && !t.said_no.get()) || !errors.is_empty() || t.stopped.get() {

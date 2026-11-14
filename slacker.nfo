@@ -1,6 +1,6 @@
     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
     ▒ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ▒
-    ▒          ██╗                ██╗ ░░slacker v0.14.0░░░ ▒
+    ▒          ██╗                ██╗ ░░slacker v0.14.1░░░ ▒
     ▒   ██████╗██║  █████╗ ██████╗██║ ██╗██████╗██╗████╗   ▒
     ▒   ██╔═══╝██║  ╚═══██╗██╔═══╝██║██╔╝██╔═██║████╔══╝   ▒
     ▒   ██████╗██║  ██████║██║    ████╔╝ ██████║██╔═╝      ▒
@@ -11,20 +11,21 @@
     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 
 ████ LOADING PACKAGE INFO ██████████████████████████████████████████████
-[0x01] PACKAGE   : slacker v0.14.0_beta.6  [OK]
-[0x02] TYPE      : APPLICATION (cli + gui)  [OK]
+[0x01] PACKAGE   : slacker v0.14.1_beta.7  [OK]
+[0x02] TYPE      : APPLICATION (cli + gui + flatpak gui)  [OK]
 [0x03] SIZE      : 2.8 MiB  [OK]
-[0x04] DATE      : 2026-10-11  [OK]
+[0x04] DATE      : 2026-11-14  [OK]
 [0x05] MD5       :   []
 [0x06] ARCH      : x86_64 i686  aarch64 [OK]
 [0x07] TARGET    : Slackware | development branch  [OK]
-[0x08] LANG      : Rust 1.89+  [OK]
+[0x08] LANG      : Rust 1.89+ (cli) | 1.92+ (gui, flatpak gui)  [OK]
 [0x09] DEVELOPER : rizitis
+[0x0A] REQUIRES  : flatpak (for slacker-flatpak)
 ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 
 ████ FILE MAP STREAM ███████████████████████████████████████████████████
 [0x0000] /.........................LOADING
-[0x1000] usr/bin/.................slacker | slacker-gui
+[0x1000] usr/bin/.................slacker | slacker-gui | slacker-flatpak
 [0x2000] etc/slacker/.............slacker.conf | repos | mirrors
 [0x2100] etc/slacker/.............blacklist | distro-upgrade.conf
 [0x2200] etc/slacker/.............credentials.* | templates/
@@ -69,7 +70,9 @@
 [CFG] BANNER="on"
 
 ████ NOTES & STATUS ████████████████████████████████████████████████████
-- usr/bin: slacker (cli) and slacker-gui
+- usr/bin: slacker (cli), slacker-gui and slacker-flatpak
+- slacker-flatpak: experimental; runs flatpak as the user, never as root;
+  flatpak itself is not part of this package
 - etc/slacker: shipped as .new, merged by doinst.sh config()
 - var/lib/slacker: trust anchors (GPG pins, quarantine); keep it
 - var/cache/slacker: disposable; slacker clean-cache empties packages/

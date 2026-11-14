@@ -78,6 +78,8 @@ struct Ui {
     frame: Frame,
     nav: adw::NavigationView,
     toasts: adw::ToastOverlay,
+    /// The short message on show, so the next one replaces it.
+    last_toast: RefCell<Option<adw::Toast>>,
     banner: adw::Banner,
     updates_page: adw::ViewStackPage,
     // Explore
@@ -215,6 +217,7 @@ pub fn build(app: &adw::Application) {
         frame,
         nav: adw::NavigationView::new(),
         toasts: adw::ToastOverlay::new(),
+        last_toast: RefCell::new(None),
         banner: adw::Banner::builder().button_label("Show").revealed(false).build(),
         updates_page,
         search,
@@ -579,6 +582,16 @@ fn tile_grid(ui: &Rc<Ui>) -> gtk::GridView {
             .justify(gtk::Justification::Center)
             .build();
         name.add_css_class("heading");
+        let check = gtk::Image::builder()
+            .icon_name("emblem-ok-symbolic")
+            .pixel_size(12)
+            .visible(false)
+            .tooltip_text("Verified by Flathub")
+            .build();
+        check.add_css_class("accent");
+        let name_row = gtk::Box::builder().spacing(4).halign(gtk::Align::Center).build();
+        name_row.append(&name);
+        name_row.append(&check);
         let summary = gtk::Label::builder()
             .wrap(true)
             .lines(2)
@@ -613,7 +626,7 @@ fn tile_grid(ui: &Rc<Ui>) -> gtk::GridView {
             .vexpand(true)
             .build();
         inner.append(&img);
-        inner.append(&name);
+        inner.append(&name_row);
         inner.append(&summary);
         inner.append(&badge);
         b.append(&inner);
@@ -636,7 +649,9 @@ fn tile_grid(ui: &Rc<Ui>) -> gtk::GridView {
                 c = w.next_sibling();
                 kids.push(w);
             }
-            let [img, name, summary, badge] = kids.as_slice() else { return };
+            let [img, name_row, summary, badge] = kids.as_slice() else { return };
+            let (Some(name), Some(check)) = (name_row.first_child(), name_row.last_child()) else { return };
+            check.set_visible(e.app.verified.is_some());
             if let Some(img) = img.downcast_ref::<gtk::Image>() {
                 set_icon(&ui, img, e.icon.as_deref(), TILE_ICON);
             }
@@ -968,6 +983,23 @@ fn summary_of(ui: &Ui, id: &str) -> String {
 }
 
 /// The catalog's web page for an application, if the catalog has one.
+/// The catalog's entry for an application, from the given remote when it is
+/// there, else from any remote.
+fn catalog_app(ui: &Ui, id: &str, remote: Option<&str>) -> Option<(String, parse::appstream::App)> {
+    let cat = ui.catalog.borrow();
+    let entries = &cat.as_ref()?.entries;
+    entries
+        .iter()
+        .find(|e| e.app.id == id && Some(e.remote.as_str()) == remote)
+        .or_else(|| entries.iter().find(|e| e.app.id == id))
+        .map(|e| (e.remote.clone(), e.app.clone()))
+}
+
+/// "25 Nov 2025" from seconds since the epoch.
+fn day(ts: i64) -> Option<String> {
+    glib::DateTime::from_unix_utc(ts).ok()?.format("%-d %b %Y").ok().map(|s| s.to_string())
+}
+
 fn homepage_of(ui: &Ui, id: &str) -> Option<String> {
     ui.catalog.borrow().as_ref().and_then(|c| c.entries.iter().find(|e| e.app.id == id).and_then(|e| e.app.homepage.clone()))
 }
@@ -1027,8 +1059,14 @@ fn launch(ui: &Rc<Ui>, inst: Inst, id: &str, branch: &str, title: &str) {
     }
 }
 
+/// A short message for 2 seconds. It replaces the previous short one at
+/// once instead of waiting in line behind it.
 fn toast(ui: &Ui, text: &str) {
-    ui.toasts.add_toast(adw::Toast::builder().title(glib::markup_escape_text(text)).timeout(4).build());
+    let t = adw::Toast::builder().title(glib::markup_escape_text(text)).timeout(2).build();
+    if let Some(old) = ui.last_toast.replace(Some(t.clone())) {
+        old.dismiss();
+    }
+    ui.toasts.add_toast(t);
 }
 
 /// A failure stays until it is closed, so it is not missed.
@@ -1071,9 +1109,30 @@ fn show_app(ui: &Rc<Ui>, t: Target) {
     }
     let words =
         gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).valign(gtk::Align::Center).hexpand(true).build();
+    let cat = if t.runtime { None } else { catalog_app(ui, &t.id, t.remote.as_deref()) };
+    let title_row = gtk::Box::builder().spacing(12).build();
     let name = gtk::Label::builder().label(&title).xalign(0.0).wrap(true).build();
     name.add_css_class("title-1");
-    words.append(&name);
+    title_row.append(&name);
+    // Verification belongs to the remote that says it (Flathub), so only an
+    // entry from this application's own remote counts.
+    if let Some((remote, app)) = &cat {
+        if let (Some(v), true) = (&app.verified, Some(remote) == t.remote.as_ref()) {
+            let tag = gtk::Label::builder().label("\u{2713} Verified").valign(gtk::Align::Center).build();
+            tag.add_css_class("caption-heading");
+            tag.add_css_class("success");
+            let mut tip = format!("{remote} verified the developer of this application");
+            if !v.method.is_empty() {
+                tip.push_str(&format!(" ({})", v.method.replace('_', " ")));
+            }
+            if let Some(d) = v.timestamp.and_then(day) {
+                tip.push_str(&format!(", {d}"));
+            }
+            tag.set_tooltip_text(Some(&tip));
+            title_row.append(&tag);
+        }
+    }
+    words.append(&title_row);
     if !summary.is_empty() {
         let s = gtk::Label::builder().label(&summary).xalign(0.0).wrap(true).build();
         s.add_css_class("dim-label");
@@ -1087,6 +1146,21 @@ fn show_app(ui: &Rc<Ui>, t: Target) {
     m.add_css_class("caption");
     m.add_css_class("dim-label");
     words.append(&m);
+    if let Some((_, app)) = &cat {
+        let mut more = Vec::new();
+        if !app.developer.is_empty() {
+            more.push(format!("by {}", app.developer));
+        }
+        if !app.license.is_empty() {
+            more.push(format!("license {}", app.license));
+        }
+        if !more.is_empty() {
+            let l = gtk::Label::builder().label(more.join("  \u{b7}  ")).xalign(0.0).wrap(true).build();
+            l.add_css_class("caption");
+            l.add_css_class("dim-label");
+            words.append(&l);
+        }
+    }
     // Read when the page opens: an installed app's row may have been made
     // before the catalog was read.
     let homepage = t.homepage.clone().or_else(|| homepage_of(ui, &t.id));
@@ -1557,6 +1631,9 @@ fn show_overview(ui: &Rc<Ui>) {
         page.append(&g);
     }
     page.append(&repair_group(ui, &d));
+    if let Some(g) = leftover_group(ui, &d) {
+        page.append(&g);
+    }
     if !d.notes.is_empty() {
         let g = group("Messages from flatpak", Some("As printed, with the command that printed them."));
         for (cmd, text) in &d.notes {
@@ -1614,6 +1691,103 @@ fn repair_group(ui: &Rc<Ui>, d: &Data) -> adw::PreferencesGroup {
     l.set_margin_top(6);
     g.add(&l);
     g
+}
+
+/// ~/.var/app: where flatpak keeps each application's data for this user.
+fn app_data_root() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".var/app")
+}
+
+/// Data folders of applications that are no longer installed (an uninstall
+/// keeps them), each with Delete after a confirmation. None when there are
+/// none.
+fn leftover_group(ui: &Rc<Ui>, d: &Data) -> Option<adw::PreferencesGroup> {
+    let installed: std::collections::HashSet<String> = d.apps.iter().map(|a| a.id.clone()).collect();
+    let root = app_data_root();
+    let left = checks::leftover_data(&root, &installed);
+    if left.is_empty() {
+        return None;
+    }
+    let g = group(
+        "Data of uninstalled applications",
+        Some("Folders in ~/.var/app whose application is not installed in either Flatpak. Uninstall keeps an \
+              application's data; delete it here only if you no longer want it. Deleting cannot be undone."),
+    );
+    let installed = Rc::new(installed);
+    // The group goes away with its last row.
+    let left_count = Rc::new(Cell::new(left.len()));
+    let mut rows = Vec::new();
+    for (id, path) in left {
+        let r = row(&id, &format!("{}  \u{b7}  counting\u{2026}", path.display()));
+        r.set_subtitle_selectable(false);
+        let b = gtk::Button::builder().label("Delete\u{2026}").valign(gtk::Align::Center).build();
+        b.add_css_class("destructive-action");
+        {
+            let (ui2, g2, r2, id2, root2, installed2) =
+                (ui.clone(), g.clone(), r.clone(), id.clone(), root.clone(), installed.clone());
+            let count2 = left_count.clone();
+            b.connect_clicked(move |_| {
+                let path = root2.join(&id2);
+                let dialog = adw::AlertDialog::new(
+                    Some(&format!("Delete the data of {id2}?")),
+                    Some(&format!(
+                        "This deletes {} and everything in it: the application's settings and files. It cannot be \
+                         undone. Nothing else is touched.",
+                        path.display()
+                    )),
+                );
+                dialog.add_responses(&[("cancel", "Cancel"), ("delete", "Delete")]);
+                dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+                dialog.set_default_response(Some("cancel"));
+                dialog.set_close_response("cancel");
+                let (ui3, g3, r3, id3, root3, installed3) =
+                    (ui2.clone(), g2.clone(), r2.clone(), id2.clone(), root2.clone(), installed2.clone());
+                let count3 = count2.clone();
+                dialog.connect_response(None, move |_, resp| {
+                    if resp != "delete" {
+                        return;
+                    }
+                    let (ui4, g4, r4, id4, root4, installed4) =
+                        (ui3.clone(), g3.clone(), r3.clone(), id3.clone(), root3.clone(), installed3.clone());
+                    let count4 = count3.clone();
+                    glib::spawn_future_local(async move {
+                        let (id5, root5) = (id4.clone(), root4.clone());
+                        // What is installed now, not when the page opened.
+                        let mut now: std::collections::HashSet<String> =
+                            ui4.data.borrow().apps.iter().map(|a| a.id.clone()).collect();
+                        now.extend(installed4.iter().cloned());
+                        let res = gio::spawn_blocking(move || checks::delete_leftover(&root5, &id5, &now))
+                            .await
+                            .unwrap_or_else(|_| Err("the delete did not finish".to_string()));
+                        match res {
+                            Ok(()) => {
+                                g4.remove(&r4);
+                                count4.set(count4.get().saturating_sub(1));
+                                if count4.get() == 0 {
+                                    g4.set_visible(false);
+                                }
+                                toast(&ui4, &format!("Deleted the data of {id4}"));
+                            }
+                            Err(e) => toast_error(&ui4, &e),
+                        }
+                    });
+                });
+                dialog.present(Some(&ui2.window));
+            });
+        }
+        r.add_suffix(&b);
+        g.add(&r);
+        rows.push((r, path));
+    }
+    // Sizes are counted off the main loop; a big folder takes a moment.
+    glib::spawn_future_local(async move {
+        for (r, path) in rows {
+            let p = path.clone();
+            let size = gio::spawn_blocking(move || checks::dir_size(&p)).await.unwrap_or(0);
+            r.set_subtitle(&glib::markup_escape_text(&format!("{}  \u{b7}  {}", path.display(), glib::format_size(size))));
+        }
+    });
+    Some(g)
 }
 
 fn show_remotes(ui: &Rc<Ui>) {

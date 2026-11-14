@@ -298,7 +298,7 @@ pub fn build(app: &adw::Application) {
         let announce = {
             let ctx = ctx.clone();
             move |percent: i32| {
-                ctx.toast(&match percent {
+                ctx.toast_short(&match percent {
                     100 => "Font size: the desktop's own".to_string(),
                     p => format!("Font size: {p}% of the desktop's"),
                 });

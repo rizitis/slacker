@@ -87,6 +87,16 @@ pub fn hint(text: &str) -> Option<&'static str> {
 
 /// Turns pty output into text for display: CR-LF becomes LF, and a bare CR
 /// (a progress line redrawn in place) starts the line over.
+/// Length in bytes of what `old` and `new` start with, cut back to a whole
+/// character.
+pub fn common_prefix(old: &str, new: &str) -> usize {
+    let mut n = old.bytes().zip(new.bytes()).take_while(|(a, b)| a == b).count();
+    while !old.is_char_boundary(n) || !new.is_char_boundary(n) {
+        n -= 1;
+    }
+    n
+}
+
 pub fn clean(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut line = String::new();
@@ -172,6 +182,22 @@ mod tests {
         assert_eq!(e.len(), 2);
         assert!(e[0].starts_with("Error updating:"));
         assert!(error_lines("Updates complete.\n").is_empty());
+    }
+
+    #[test]
+    fn a_redrawn_progress_line_keeps_everything_above_it() {
+        let old = "Installing 1/3\u{2026}\nDownloading  12%  1.2\u{a0}MB/s";
+        let new = "Installing 1/3\u{2026}\nDownloading  13%  1.3\u{a0}MB/s";
+        let n = common_prefix(old, new);
+        assert_eq!(&old[..n], "Installing 1/3\u{2026}\nDownloading  1");
+        // Never inside a character: here they differ inside the same char.
+        assert_eq!(common_prefix("a\u{e9}", "a\u{e8}"), 1);
+        assert_eq!(common_prefix("", "x"), 0);
+        assert_eq!(common_prefix("same", "same"), 4);
+        // What the window sees: clean() of a stream with \r redraws.
+        let a = clean("Downloading\n 1%\r 2%");
+        let b = clean("Downloading\n 1%\r 2%\r 3%");
+        assert_eq!(common_prefix(&a, &b), "Downloading\n ".len());
     }
 
     #[test]

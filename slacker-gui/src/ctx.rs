@@ -24,6 +24,8 @@ pub struct Ctx {
     pub runner: Runner,
     pub window: gtk::ApplicationWindow,
     toasts: adw::ToastOverlay,
+    /// The short message on show, so the next one replaces it.
+    last_short: Rc<RefCell<Option<adw::Toast>>>,
     changed: Handlers,
     pins_changed: Handlers,
     rules_changed: Handlers,
@@ -38,6 +40,7 @@ impl Ctx {
             runner,
             window,
             toasts,
+            last_short: Rc::default(),
             changed: Rc::default(),
             pins_changed: Rc::default(),
             rules_changed: Rc::default(),
@@ -48,6 +51,17 @@ impl Ctx {
     pub fn toast(&self, message: &str) {
         let toast = adw::Toast::new(&glib::markup_escape_text(message));
         toast.set_timeout(4);
+        self.toasts.add_toast(toast);
+    }
+
+    /// A short message (text size, copied) for 2 seconds. It replaces the
+    /// previous short one at once instead of waiting in line behind it.
+    pub fn toast_short(&self, message: &str) {
+        let toast = adw::Toast::new(&glib::markup_escape_text(message));
+        toast.set_timeout(2);
+        if let Some(old) = self.last_short.replace(Some(toast.clone())) {
+            old.dismiss();
+        }
         self.toasts.add_toast(toast);
     }
 
