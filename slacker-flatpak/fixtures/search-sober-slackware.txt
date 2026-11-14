@@ -1,0 +1,2 @@
+Sober	Play, chat & explore on Roblox	org.vinegarhq.Sober	1.1.0	master	sober
+Sober	Play, chat & explore on Roblox	org.vinegarhq.Sober	1.8.0	stable	flathub

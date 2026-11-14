@@ -1,0 +1,31 @@
+slacker-flatpak data
+====================
+
+Files installed with the binary:
+
+  data/nl.slackware.forge.rizitis.SlackerFlatpak.desktop
+                                      -> /usr/share/applications/
+  data/icons/hicolor/                 -> /usr/share/icons/hicolor/
+
+  e.g. in a SlackBuild:
+    install -Dm755 target/release/slacker-flatpak $PKG/usr/bin/slacker-flatpak
+    install -Dm644 data/nl.slackware.forge.rizitis.SlackerFlatpak.desktop \
+      $PKG/usr/share/applications/nl.slackware.forge.rizitis.SlackerFlatpak.desktop
+    mkdir -p $PKG/usr/share/icons
+    cp -a data/icons/hicolor $PKG/usr/share/icons/
+
+No polkit policy: slacker-flatpak never runs pkexec. Changes to the
+system-wide Flatpak go through flatpak's own system helper and its polkit
+rules.
+
+Icons: 16, 22, 24, 32, 48, 64, 128, 256, 512 px PNG plus scalable SVG, all
+named nl.slackware.forge.rizitis.SlackerFlatpak. 16-24 px come from a
+simplified drawing (data/icons/source/slacker-flatpak-small.svg); the rest and
+the scalable icon from data/icons/source/slacker-flatpak.svg. To regenerate:
+    for s in 16 22 24; do rsvg-convert -w $s -h $s data/icons/source/slacker-flatpak-small.svg \
+      -o data/icons/hicolor/${s}x${s}/apps/nl.slackware.forge.rizitis.SlackerFlatpak.png; done
+    for s in 32 48 64 128 256 512; do rsvg-convert -w $s -h $s data/icons/source/slacker-flatpak.svg \
+      -o data/icons/hicolor/${s}x${s}/apps/nl.slackware.forge.rizitis.SlackerFlatpak.png; done
+    cp data/icons/source/slacker-flatpak.svg \
+      data/icons/hicolor/scalable/apps/nl.slackware.forge.rizitis.SlackerFlatpak.svg
+Run uninstalled, the window finds no icon; that is expected.

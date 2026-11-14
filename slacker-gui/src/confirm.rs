@@ -522,7 +522,9 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
     }
     crate::widgets::present_fitted(&dialog, &ctx.window, (1040, 820));
 
-    let feed = Feed::new(&buffer);
+    // A finished download drops its "↓ NAME (size)" line here, as a terminal
+    // would (issue #25); the command log keeps every line.
+    let feed = Feed::tidying_downloads(&buffer);
     feed.line(&format!("$ {}", ctx.runner.argv(&action.spec).join(" ")));
 
     let input = Input::new();

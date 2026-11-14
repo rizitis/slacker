@@ -108,6 +108,21 @@ runs the slacker binary, reads what slacker prints, and lays it out.
 <video src="/attachments/17506fcd-1fd4-4781-a495-c5376302be2d" controls></video>
 ---
 
+---
+
+## slacker-flatpak -- Flatpak Slack-Store!
+
+> slacker-flatpak is **OPTIONAL**
+
+1. Explore to flathub and more remotes
+2. search, install, remove, run flatpaks
+
+<!-- αυτή η γραμμή δεν φαίνεται  ![repos](./slacker-gui/dev-docs/slacker-2.png) -->
+
+![slacker-flatpak](./slacker-flatpak/slacker-flatpak.png)
+---
+
+---
 ## slacker-src
 
 Does a slacker-src exists? Can slacker build packages from source code?
