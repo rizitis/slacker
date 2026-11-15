@@ -1,0 +1,1 @@
+org.test.Hello	Hello	5.0	stable	x86_64	system	testrepo	5.6?kB	16e19accec8f	org.test.Platform/x86_64/1	current,eol=Replaced by org.test.New, update to it

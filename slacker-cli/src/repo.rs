@@ -82,26 +82,35 @@ pub const CHANGELOG: &str = "ChangeLog.txt";
 /// repo root for third-party repos, or the per-arch subdir for the official
 /// one. The cached plain-text MANIFEST is dropped on each update so the next
 /// file-search re-fetches it.
-pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Result<(), String> {
+///
+/// With `check_consistency`, PACKAGES.TXT must match the md5 CHECKSUMS.md5
+/// lists for it (when it lists one); otherwise nothing is written and the
+/// error says so. Callers pass false only for a repo set to `verify=none`.
+pub fn update_repo(
+    repo: &Repo,
+    cache_root: &Path,
+    fetch_changelog: bool,
+    check_consistency: bool,
+) -> Result<(), String> {
     use std::io::Write;
     let dir = repo.cache_subdir(cache_root);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
 
-    let pkgs_path = dir.join(PACKAGES_TXT);
-    if pkgs_path.exists() {
-        let _ = std::fs::copy(&pkgs_path, dir.join(PACKAGES_PREV));
-    }
-
-    {
+    // Everything is fetched into memory first and written only after the
+    // consistency check below has passed, so a mirror that serves files from
+    // two different moments (mid-sync, or a stale copy cached on the way)
+    // leaves the cache exactly as it was. A half-written cache with a fresh
+    // ChangeLog and a stale PACKAGES.TXT would look "up-to-date" to every later
+    // update and offer the old packages as upgrades.
+    let packages = {
         let fname = PACKAGES_TXT;
         print!("  {fname} ... ");
         std::io::stdout().flush().ok();
         let url = repo.join_url(fname);
         let bytes = download::get_bytes(&url).map_err(|e| format!("fetch {url}: {e}"))?;
-        std::fs::write(dir.join(fname), &bytes)
-            .map_err(|e| format!("write {fname}: {e}"))?;
         println!("ok");
-    }
+        bytes
+    };
 
     // CHECKSUMS.md5 is best-effort like the signature: nearly every repo ships
     // it, but a repo could provide only sha. If none of the checksum files is
@@ -111,18 +120,48 @@ pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Res
     if fetch_changelog {
         meta.push(CHANGELOG);
     }
+    let mut fetched: Vec<(&str, Option<Vec<u8>>)> = Vec::with_capacity(meta.len());
     for fname in meta {
         print!("  {fname} ... ");
         std::io::stdout().flush().ok();
         let url = repo.join_url(fname);
         match download::get_bytes(&url) {
             Ok(bytes) => {
-                let _ = std::fs::write(dir.join(fname), &bytes);
                 println!("ok");
+                fetched.push((fname, Some(bytes)));
             }
             Err(_) => {
-                let _ = std::fs::remove_file(dir.join(fname));
                 println!("not present");
+                fetched.push((fname, None));
+            }
+        }
+    }
+
+    if check_consistency {
+        let checksums = fetched
+            .iter()
+            .find(|(f, _)| *f == CHECKSUMS)
+            .and_then(|(_, b)| b.as_ref())
+            .map(|b| String::from_utf8_lossy(b).into_owned());
+        if let Some(ck) = checksums {
+            if let Consistency::Mismatch { listed, actual } = packages_consistency(&packages, &ck) {
+                return Err(mismatch_message(&listed, &actual));
+            }
+        }
+    }
+
+    let pkgs_path = dir.join(PACKAGES_TXT);
+    if pkgs_path.exists() {
+        let _ = std::fs::copy(&pkgs_path, dir.join(PACKAGES_PREV));
+    }
+    std::fs::write(&pkgs_path, &packages).map_err(|e| format!("write {PACKAGES_TXT}: {e}"))?;
+    for (fname, bytes) in fetched {
+        match bytes {
+            Some(b) => {
+                let _ = std::fs::write(dir.join(fname), &b);
+            }
+            None => {
+                let _ = std::fs::remove_file(dir.join(fname));
             }
         }
     }
@@ -132,6 +171,69 @@ pub fn update_repo(repo: &Repo, cache_root: &Path, fetch_changelog: bool) -> Res
     // Drop any cached (now stale) MANIFEST so the next file-search re-fetches.
     let _ = std::fs::remove_file(dir.join(MANIFEST));
     Ok(())
+}
+
+/// Does a repo's PACKAGES.TXT match the md5 its own CHECKSUMS.md5 lists for
+/// it? Slackware's trees (and others) list `./PACKAGES.TXT` in CHECKSUMS.md5,
+/// the file the GPG signature covers, so a mismatch means the two files are
+/// not from the same moment: a mirror mid-sync, or a stale copy kept by a
+/// cache on the way. Such a PACKAGES.TXT must not be used: it can offer every
+/// package at an older version.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Consistency {
+    Match,
+    Mismatch { listed: String, actual: String },
+    /// CHECKSUMS.md5 has no `./PACKAGES.TXT` line: nothing to compare.
+    NotListed,
+}
+
+/// The md5 CHECKSUMS.md5 lists for the repo's own `./PACKAGES.TXT` (not for a
+/// PACKAGES.TXT in a subdirectory, e.g. `./extra/PACKAGES.TXT`).
+pub fn listed_packages_md5(checksums: &str) -> Option<String> {
+    checksums.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let (hash, path) = (parts.next()?, parts.next()?);
+        if parts.next().is_some() {
+            return None;
+        }
+        let is_ours = path == "./PACKAGES.TXT" || path == "PACKAGES.TXT";
+        (is_ours && hash.len() == 32 && hash.bytes().all(|c| c.is_ascii_hexdigit()))
+            .then(|| hash.to_ascii_lowercase())
+    })
+}
+
+pub fn packages_consistency(packages: &[u8], checksums: &str) -> Consistency {
+    use md5::{Digest, Md5};
+    let Some(listed) = listed_packages_md5(checksums) else {
+        return Consistency::NotListed;
+    };
+    let actual = format!("{:x}", Md5::digest(packages));
+    if actual == listed {
+        Consistency::Match
+    } else {
+        Consistency::Mismatch { listed, actual }
+    }
+}
+
+/// The same check on what is in the cache. None when either file is missing
+/// (nothing cached yet, or the repo ships no CHECKSUMS.md5).
+pub fn cached_consistency(repo: &Repo, cache_root: &Path) -> Option<Consistency> {
+    let dir = repo.cache_subdir(cache_root);
+    let packages = std::fs::read(dir.join(PACKAGES_TXT)).ok()?;
+    let checksums = read_text_lossy(&dir.join(CHECKSUMS)).ok()?;
+    Some(packages_consistency(&packages, &checksums))
+}
+
+/// How [`mismatch_message`] starts, so a caller can tell this failure from an
+/// unreachable mirror.
+pub const MISMATCH_PREFIX: &str = "PACKAGES.TXT does not match the md5 in CHECKSUMS.md5";
+
+pub fn mismatch_message(listed: &str, actual: &str) -> String {
+    format!(
+        "{MISMATCH_PREFIX} (listed {listed}, got {actual}): \
+         the mirror is serving files from different moments (mid-sync, or a stale cached copy). \
+         Nothing was changed; try again later or use another mirror"
+    )
 }
 
 /// Fetch a repo's ChangeLog.txt fresh and return its text. With `cache = true`
@@ -728,6 +830,78 @@ bar: bar (another thing)
         assert_eq!(pkgs[1].id.name, "bar");
         assert!(pkgs[1].conflicts.is_empty());
         assert!(pkgs[1].suggests.is_empty());
+    }
+
+    fn test_repo(name: &str) -> Repo {
+        Repo {
+            name: name.into(),
+            url: "https://m/slackware-current".into(),
+            priority: 100,
+            official: true,
+            immutable: false,
+            subtree: false,
+            verify: None,
+            credentials: None,
+            insecure: false,
+            dep: false,
+        }
+    }
+
+    // The real line from the 32-bit -current CHECKSUMS.md5 (2026-11-14),
+    // next to the lines for the subtrees' own lists, which must not be taken.
+    const CK: &str = "\
+These are the MD5 message digests for the files in this directory.
+
+MD5 message digest                Filename
+2d590fe68c175c26aa869797eb228993  ./extra/PACKAGES.TXT
+84b0ba4291bf68ffe27bbdf376b58188  ./PACKAGES.TXT
+5cfe2812367d56605ffe1c5376679422  ./patches/PACKAGES.TXT
+";
+
+    #[test]
+    fn listed_md5_is_only_the_repos_own_packages_txt() {
+        assert_eq!(listed_packages_md5(CK).as_deref(), Some("84b0ba4291bf68ffe27bbdf376b58188"));
+        // A subtree CHECKSUMS.md5 lists its own list as ./PACKAGES.TXT too.
+        assert_eq!(
+            listed_packages_md5("5CFE2812367D56605FFE1C5376679422  ./PACKAGES.TXT\n").as_deref(),
+            Some("5cfe2812367d56605ffe1c5376679422")
+        );
+        assert_eq!(listed_packages_md5("2d590fe68c175c26aa869797eb228993  ./extra/PACKAGES.TXT\n"), None);
+        assert_eq!(listed_packages_md5("nothexnothexnothexnothexnothexno  ./PACKAGES.TXT\n"), None);
+        assert_eq!(listed_packages_md5(""), None);
+    }
+
+    #[test]
+    fn a_package_list_not_the_one_listed_is_a_mismatch() {
+        let good = b"PACKAGES.TXT;  Sat Nov 14 22:39:03 UTC 2026\n";
+        let ck = format!("{:x}  ./PACKAGES.TXT\n", <md5::Md5 as md5::Digest>::digest(good));
+        assert_eq!(packages_consistency(good, &ck), Consistency::Match);
+        // What the i686 box got: an old list with a current CHECKSUMS.md5.
+        let stale = b"PACKAGES.TXT;  Sat Nov  2 21:19:54 UTC 2024\n";
+        assert!(matches!(packages_consistency(stale, &ck), Consistency::Mismatch { .. }));
+        // A repo that lists no PACKAGES.TXT cannot be checked.
+        assert_eq!(packages_consistency(stale, "abc  ./foo.txz\n"), Consistency::NotListed);
+    }
+
+    #[test]
+    fn cached_consistency_reads_the_cache() {
+        let root = std::env::temp_dir().join("slacker_consistency_test");
+        let _ = std::fs::remove_dir_all(&root);
+        let r = test_repo("slackware");
+        assert_eq!(cached_consistency(&r, &root), None); // nothing cached
+        let dir = r.cache_subdir(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = b"current list\n";
+        std::fs::write(dir.join(PACKAGES_TXT), good).unwrap();
+        std::fs::write(
+            dir.join(CHECKSUMS),
+            format!("{:x}  ./PACKAGES.TXT\n", <md5::Md5 as md5::Digest>::digest(good)),
+        )
+        .unwrap();
+        assert_eq!(cached_consistency(&r, &root), Some(Consistency::Match));
+        std::fs::write(dir.join(PACKAGES_TXT), b"old list\n").unwrap();
+        assert!(matches!(cached_consistency(&r, &root), Some(Consistency::Mismatch { .. })));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

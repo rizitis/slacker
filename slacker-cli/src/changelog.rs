@@ -46,7 +46,17 @@ pub enum UpdateStatus {
 /// Returns Unknown if the repo has never been updated (nothing cached), and
 /// Unreachable if its metadata could not be fetched — two different situations
 /// that callers must not present as the same thing.
-pub fn check_repo_updates(repo_: &Repo, cache_root: &Path) -> UpdateStatus {
+pub fn check_repo_updates(repo_: &Repo, cache_root: &Path, check_consistency: bool) -> UpdateStatus {
+    // A cached PACKAGES.TXT that does not match the md5 in the cached
+    // CHECKSUMS.md5 came from a mirror serving files from different moments.
+    // The ChangeLog/CHECKSUMS may already be current, so the comparisons below
+    // would call it up-to-date forever; report it pending so `update` fetches
+    // it again.
+    if check_consistency
+        && matches!(repo::cached_consistency(repo_, cache_root), Some(repo::Consistency::Mismatch { .. }))
+    {
+        return UpdateStatus::Pending;
+    }
     // Cheap path: compare ChangeLog, but only for the tracked (official) repo
     // whose ChangeLog `update` actually keeps current.
     if repo_.official {

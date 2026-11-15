@@ -18,11 +18,39 @@ pub struct Item {
     pub size: String,
     pub active: String,
     pub runtime: String,
+    /// flatpak's options cell, e.g. "current", "runtime",
+    /// "eol=REASON" (empty on output without the column).
+    pub options: String,
 }
 
 impl Item {
     pub fn inst(&self) -> Option<Inst> {
         Inst::from_label(&self.installation)
+    }
+
+    /// flatpak's end-of-life reason, if the ref is end-of-life. flatpak
+    /// writes it when the ref is installed or updated. The reason is free
+    /// text and may hold commas, so it runs to the end of the cell or to the
+    /// next option flatpak puts after it.
+    pub fn eol(&self) -> Option<&str> {
+        let o = &self.options;
+        let start = if let Some(r) = o.strip_prefix("eol=") {
+            o.len() - r.len()
+        } else {
+            o.find(",eol=")? + 5
+        };
+        let rest = &o[start..];
+        let end = [",eol-rebase=", ",alt-id=", ",partial"]
+            .iter()
+            .filter_map(|k| rest.find(k))
+            .min()
+            .unwrap_or(rest.len());
+        Some(rest[..end].trim())
+    }
+
+    /// "ID/ARCH/BRANCH", as an application's runtime cell names a runtime.
+    pub fn runtime_ref(&self) -> String {
+        format!("{}/{}/{}", self.id, self.arch, self.branch)
     }
 
     /// The name if flatpak gave one, else the ID.
@@ -39,7 +67,7 @@ pub fn parse(out: &str) -> Vec<Item> {
     out.lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| {
-            let c = super::cells(l, 10);
+            let c = super::cells(l, 11);
             if c[0].is_empty() {
                 return None;
             }
@@ -54,6 +82,7 @@ pub fn parse(out: &str) -> Vec<Item> {
                 size: c[7].clone(),
                 active: c[8].clone(),
                 runtime: c[9].clone(),
+                options: c[10].clone(),
             })
         })
         .collect()
@@ -132,6 +161,29 @@ mod tests {
         // Different commits: the 1.14 test repo, user one updated, system not.
         let test = parse(include_str!("../../fixtures/list-app-1.14.txt"));
         assert!(differ(&duplicates(&test)[0]));
+    }
+
+    #[test]
+    fn end_of_life_from_real_flatpak_1_14_output() {
+        let apps = parse(include_str!("../../fixtures/list-app-eol-1.14.txt"));
+        assert_eq!(apps[0].options, "current,eol=Replaced by org.test.New, update to it");
+        // The comma in the reason does not cut it.
+        assert_eq!(apps[0].eol(), Some("Replaced by org.test.New, update to it"));
+        assert_eq!(apps[0].runtime, "org.test.Platform/x86_64/1");
+
+        // A runtime: the empty runtime cell stays, options is the 11th.
+        let rts = parse(include_str!("../../fixtures/list-runtime-eol-1.14.txt"));
+        assert_eq!(rts[0].runtime, "");
+        assert_eq!(rts[0].eol(), Some("Use org.test.Platform//2"));
+        assert_eq!(rts[0].runtime_ref(), apps[0].runtime);
+
+        // Not end-of-life, and the old output without the column.
+        let old = parse(include_str!("../../fixtures/list-app-1.14.txt"));
+        assert_eq!(old[0].eol(), None);
+        let it = |o: &str| Item { options: o.into(), ..old[0].clone() };
+        assert_eq!(it("current").eol(), None);
+        assert_eq!(it("runtime,eol=Old, use 2,eol-rebase=org.x.New").eol(), Some("Old, use 2"));
+        assert_eq!(it("current,noteol=x").eol(), None);
     }
 
     #[test]

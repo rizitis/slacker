@@ -2155,6 +2155,46 @@ fn enforce_arch_match(cfg: &Config, plan: &[PlanItem], allow: bool) -> Result<()
     ))
 }
 
+/// Refuse a plan taking packages from a repo whose cached PACKAGES.TXT does
+/// not match the md5 its CHECKSUMS.md5 lists for it. No --yes override: the
+/// plan itself is not trustworthy, so there is nothing to confirm.
+fn enforce_package_list(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut bad: Vec<(String, String, String)> = Vec::new(); // (repo, listed, actual)
+    for it in plan {
+        if seen.contains(&it.pkg.repo.as_str()) {
+            continue;
+        }
+        seen.push(&it.pkg.repo);
+        let Some(r) = cfg.repo_by_name(&it.pkg.repo) else {
+            continue;
+        };
+        if !r.checks_packages_txt(&cfg.verify) {
+            continue;
+        }
+        if let Some(repo::Consistency::Mismatch { listed, actual }) = repo::cached_consistency(r, &cfg.cache_dir) {
+            bad.push((r.name.clone(), listed, actual));
+        }
+    }
+    if bad.is_empty() {
+        return Ok(());
+    }
+    for (name, listed, actual) in &bad {
+        println!(
+            "{}",
+            ui::red(&format!(
+                "package list mismatch: '{name}' PACKAGES.TXT md5 {actual}, its CHECKSUMS.md5 lists {listed}"
+            ))
+        );
+    }
+    Err(format!(
+        "refusing: the cached package list of {} is not the one its CHECKSUMS.md5 describes \
+         (a mirror mid-sync or a stale cached copy), so the versions above cannot be trusted. \
+         Nothing was changed. Run `slacker update` and try again.",
+        bad.iter().map(|b| b.0.as_str()).collect::<Vec<_>>().join(", ")
+    ))
+}
+
 fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -> Result<(), String> {
     if plan.is_empty() {
         return Ok(());
@@ -2166,6 +2206,13 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
 
     // Architecture-mismatch guard (fail-closed; the same --yes is a quiet override).
     enforce_arch_match(cfg, plan, allow_release_mismatch)?;
+
+    // Package-list guard (fail-closed, NO override): every repo the plan takes
+    // packages from must have a PACKAGES.TXT that matches the md5 its own
+    // CHECKSUMS.md5 lists for it. Otherwise the plan was built from a package
+    // list the repo did not publish (a mirror mid-sync or a stale cached copy),
+    // and could replace the whole system with older packages.
+    enforce_package_list(cfg, plan)?;
 
     // Resolve repo + safe destination for every item first. A repo-lookup miss
     // or an unsafe (path-traversal) filename is a hard error, not a transient
@@ -2807,6 +2854,8 @@ struct UpdateOutcomes {
     soft_frozen: Vec<String>,
     /// Actively distrusted (malicious / bad signature) — needs `trust-repo`.
     hard_frozen: Vec<String>,
+    /// PACKAGES.TXT did not match its CHECKSUMS.md5; cache left unchanged.
+    inconsistent: Vec<String>,
 }
 
 fn update_one_repo(
@@ -2822,7 +2871,15 @@ fn update_one_repo(
     // NOT freeze it; an untrusted one (newly added / never vetted) is vetted now.
     let trusted = repo::is_trusted(&cfg.state_dir, &r.name);
 
-    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, track_changelog) {
+    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, track_changelog, r.checks_packages_txt(&cfg.verify)) {
+        if e.starts_with(repo::MISMATCH_PREFIX) {
+            // The mirror answered, but with files from different moments.
+            // Nothing was written, so the cache is as it was and the next
+            // update tries again. Not a reason to freeze the repo.
+            println!("{}", ui::red(&format!("  FAILED: {e}")));
+            out.inconsistent.push(r.name.clone());
+            return;
+        }
         if trusted {
             // Established repo: most likely a transient network problem.
             println!("{}", ui::red(&format!("  FAILED: {e}")));
@@ -3003,7 +3060,7 @@ fn vet_repo(cfg: &Config, r: &config::Repo) -> Vec<String> {
     }
 
     // 2. Fetch metadata only (downloads are size-capped; no packages fetched).
-    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, r.official) {
+    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, r.official, r.checks_packages_txt(&cfg.verify)) {
         issues.push(format!("could not fetch metadata: {e}"));
         return issues; // nothing else is checkable without metadata
     }

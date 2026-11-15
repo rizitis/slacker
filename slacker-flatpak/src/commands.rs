@@ -44,7 +44,7 @@ impl Inst {
 
 /// The columns asked of `flatpak list`, in this order. parse::list reads them
 /// back in the same order.
-pub const LIST_COLUMNS: &str = "application,name,version,branch,arch,installation,origin,size,active,runtime";
+pub const LIST_COLUMNS: &str = "application,name,version,branch,arch,installation,origin,size,active,runtime,options";
 
 /// The columns asked of `flatpak remotes`.
 pub const REMOTE_COLUMNS: &str = "name,title,url,priority,options";
@@ -101,6 +101,12 @@ pub fn check_updates(inst: Inst, remote: &str) -> Result<Vec<String>, String> {
 /// `flatpak update --user|--system`: everything in one installation.
 pub fn update(inst: Inst) -> Vec<String> {
     args(&["update", inst.flag()])
+}
+
+/// `flatpak update --user|--system ID//BRANCH`: one application or runtime
+/// (flatpak adds what it needs and lists everything before asking).
+pub fn update_one(inst: Inst, id: &str, branch: &str) -> Result<Vec<String>, String> {
+    Ok(args(&["update", inst.flag(), &app_ref(id, branch)?]))
 }
 
 /// `flatpak uninstall --user|--system ID//BRANCH`. The application's data in

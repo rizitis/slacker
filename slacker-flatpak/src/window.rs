@@ -926,6 +926,13 @@ fn items(ui: &Rc<Ui>, page: &gtk::Box, d: &Data, items: &[Item], runtimes: bool)
                 let other = if inst == Inst::User { Inst::System } else { Inst::User };
                 r.add_suffix(&tag(&format!("also in {}", other.words()), true));
             }
+            if let Some(why) = item.eol() {
+                let t = tag("end of life", true);
+                // Apart from an "also in ..." tag next to it.
+                t.set_margin_start(12);
+                t.set_tooltip_text(Some(&format!("flatpak: {why}")));
+                r.add_suffix(&t);
+            }
             if runtimes {
                 if let Some(pattern) = d.pinned(item, inst) {
                     let t = tag("pinned", false);
@@ -1460,6 +1467,13 @@ fn render_updates(ui: &Rc<Ui>) {
             if !u.download.is_empty() {
                 r.add_suffix(&tag(&u.download, false));
             }
+            if let Ok(argv) = commands::update_one(inst, &u.id, &u.branch) {
+                let b = gtk::Button::builder().label("Update\u{2026}").valign(gtk::Align::Center).build();
+                b.set_tooltip_text(Some(&commands::display(&argv)));
+                let (ui2, title) = (ui.clone(), format!("Update {}, {}", u.title(), inst.words()));
+                b.connect_clicked(move |_| start(&ui2, txn::Spec { title: title.clone(), inst, argv: argv.clone() }));
+                r.add_suffix(&b);
+            }
             g.add(&r);
         }
         page.append(&g);
@@ -1630,6 +1644,9 @@ fn show_overview(ui: &Rc<Ui>) {
         }
         page.append(&g);
     }
+    if let Some(g) = eol_group(&d) {
+        page.append(&g);
+    }
     page.append(&repair_group(ui, &d));
     if let Some(g) = leftover_group(ui, &d) {
         page.append(&g);
@@ -1646,6 +1663,42 @@ fn show_overview(ui: &Rc<Ui>) {
     page.append(&commands_footer(&ran));
     drop(d);
     push(ui, "Overview and Checks", scrolled(&page).upcast_ref());
+}
+
+/// Installed applications and runtimes that flatpak marks end-of-life, with
+/// its reason and, for a runtime, the applications that use it. Information
+/// only. None when there are none.
+fn eol_group(d: &Data) -> Option<adw::PreferencesGroup> {
+    let all: Vec<(&Item, bool)> = d.apps.iter().map(|i| (i, false)).chain(d.runtimes.iter().map(|i| (i, true))).collect();
+    if !all.iter().any(|(i, _)| i.eol().is_some()) {
+        return None;
+    }
+    let g = group(
+        "End of life",
+        Some("No longer updated by their developers, as flatpak recorded at the last install or update. \
+              Usually the application moves to a newer runtime in an update; flatpak removes an end-of-life \
+              runtime once nothing uses it."),
+    );
+    for (item, is_runtime) in all {
+        let Some(why) = item.eol() else { continue };
+        let inst = item.inst().map(|i| i.words().to_string()).unwrap_or_else(|| item.installation.clone());
+        let mut sub = format!("{}//{}  \u{b7}  {inst}\nflatpak: {why}", item.id, item.branch);
+        if is_runtime {
+            let rref = item.runtime_ref();
+            let mut users: Vec<&str> = d.apps.iter().filter(|a| a.runtime == rref).map(|a| a.title()).collect();
+            users.sort_unstable();
+            users.dedup();
+            sub.push_str(&if users.is_empty() {
+                "\nNo installed application uses it.".to_string()
+            } else {
+                format!("\nUsed by: {}", users.join(", "))
+            });
+        }
+        let r = row(item.title(), &sub);
+        r.add_prefix(&gtk::Image::from_icon_name("dialog-information-symbolic"));
+        g.add(&r);
+    }
+    Some(g)
 }
 
 /// Check each installation with `flatpak repair --dry-run`, which changes
