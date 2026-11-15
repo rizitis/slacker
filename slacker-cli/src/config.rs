@@ -219,6 +219,13 @@ impl Repo {
     pub fn verify_policy<'a>(&'a self, global: &'a VerifyPolicy) -> &'a VerifyPolicy {
         self.verify.as_ref().unwrap_or(global)
     }
+
+    /// Should this repo's PACKAGES.TXT be checked against the md5 its
+    /// CHECKSUMS.md5 lists for it? Always, except for a repo the user set to
+    /// `verify=none` (no checking at all, by explicit choice).
+    pub fn checks_packages_txt(&self, global: &VerifyPolicy) -> bool {
+        !matches!(self.verify_policy(global), VerifyPolicy::None)
+    }
 }
 
 /// A priority assigned to packages by their build tag, for sources that are not

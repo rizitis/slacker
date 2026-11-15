@@ -1141,6 +1141,54 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         srow(&ok, "Metadata", &ui::dim(&format!("cached for all repos (oldest {age} old)")));
     }
 
+    // PACKAGES.TXT against the md5 its own CHECKSUMS.md5 lists for it. A
+    // mismatch means the cached package list is not the one the repo signed
+    // (a mirror mid-sync or a stale cached copy): upgrade-all would offer the
+    // wrong versions, possibly every package at an older one.
+    let mut list_mismatch: Vec<String> = Vec::new();
+    let mut list_checked = 0usize;
+    let mut list_unlisted: Vec<String> = Vec::new();
+    for r in &repos {
+        if !r.checks_packages_txt(&cfg.verify) {
+            continue;
+        }
+        match repo::cached_consistency(r, &cfg.cache_dir) {
+            Some(repo::Consistency::Match) => list_checked += 1,
+            Some(repo::Consistency::Mismatch { .. }) => list_mismatch.push(r.name.clone()),
+            Some(repo::Consistency::NotListed) => list_unlisted.push(r.name.clone()),
+            None => {}
+        }
+    }
+    if !list_mismatch.is_empty() {
+        srow(
+            &bad,
+            "Metadata",
+            &ui::red(&format!(
+                "PACKAGES.TXT does not match its CHECKSUMS.md5: {} — run `slacker update`; \
+                 nothing will be installed from it until then",
+                list_mismatch.join(", ")
+            )),
+        );
+        pending = true;
+    } else if list_checked > 0 {
+        let extra = if list_unlisted.is_empty() {
+            String::new()
+        } else {
+            format!(" (not listed by {})", list_unlisted.join(", "))
+        };
+        srow(
+            &ok,
+            "Metadata",
+            &ui::dim(&format!("PACKAGES.TXT matches CHECKSUMS.md5 in {list_checked} repo(s){extra}")),
+        );
+    } else if !list_unlisted.is_empty() {
+        srow(
+            &info,
+            "Metadata",
+            &ui::dim(&format!("not checkable: CHECKSUMS.md5 lists no PACKAGES.TXT ({})", list_unlisted.join(", "))),
+        );
+    }
+
     // Blacklist — show valid rules, and surface any the parser had to skip so a
     // typo'd rule is visible instead of silently vanishing. The comment/blank
     // handling mirrors config's own parse_lines, so the count matches the loader.
@@ -1418,7 +1466,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
                     );
                     let cached_file = std::fs::read(repo::meta_path(r, &cfg.cache_dir, file)).ok();
                     match cached_file {
-                        Some(local) if local == remote => {
+                        Some(local) if local == remote && !list_mismatch.contains(&r.name) => {
                             srow(&ok, "Updates", &ui::green(&format!("{} is up to date", r.name)))
                         }
                         Some(_) => {
@@ -1501,6 +1549,12 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     }
     // Advisories: real issues that are not a command to run in this sequence.
     let mut notes: Vec<String> = Vec::new();
+    if !list_mismatch.is_empty() {
+        notes.push(format!(
+            "the cached package list of {} is not the one its CHECKSUMS.md5 describes (a mirror mid-sync or a stale cached copy) — `slacker update` fetches it again; installs and upgrades from it are refused until then",
+            list_mismatch.join(", ")
+        ));
+    }
     if !tampered.is_empty() {
         notes.push(format!(
             "BAD GPG signature for {} — possible tampering; do NOT install from it until resolved",
@@ -1574,7 +1628,7 @@ pub(crate) fn cmd_check_updates(cfg: &Config) -> Result<Outcome, String> {
     let mut any_pending = false;
     let mut any_unknown = false;
     for r in cfg.repos_by_priority() {
-        let label = match changelog::check_repo_updates(r, &cfg.cache_dir) {
+        let label = match changelog::check_repo_updates(r, &cfg.cache_dir, r.checks_packages_txt(&cfg.verify)) {
             changelog::UpdateStatus::UpToDate => ui::green("up-to-date"),
             changelog::UpdateStatus::Pending => {
                 any_pending = true;
