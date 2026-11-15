@@ -25,3 +25,12 @@ remote-info-baobab-slackware.txt
 appstream-1.14.xml
                   real appstream.xml that flatpak 1.14.6 built for the
                   throwaway test repo (org.test.Hello).
+list-app-eol-1.14.txt
+list-runtime-eol-1.14.txt
+                  real output from flatpak 1.14.6 with the options column,
+                  after the throwaway test repo marked org.test.Hello and
+                  org.test.Platform//1 end-of-life (flatpak
+                  build-commit-from --end-of-life=REASON) and the system
+                  installation was updated. The reason of Hello has a comma
+                  on purpose. Captured as root in the C locale, so the
+                  no-break space in the size shows as "?".

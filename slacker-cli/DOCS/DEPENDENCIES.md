@@ -26,7 +26,7 @@ On Slackware the headers come in the same packages; there are no separate -dev p
 | Dependency | slacker-cli | slacker-gui | slacker-flatpak | Why |
 |---|---|---|---|---|
 | glibc | ✓ | ✓ | ✓ | `libc`, `libm`, loader |
-| libgcc_s (gcc) | ✓ | ✓ | ✓ | |
+| libgcc_s (aaa_libraries or gcc) | ✓ | ✓ | ✓ | `libgcc_s.so.1` is in both packages |
 | pkgtools | ✓ | | | `installpkg`, `upgradepkg`, `removepkg` |
 | gnupg2 | ✓ | | | `gpg`/`gpg2`, signature checks |
 | coreutils | ✓ | | | `sha256sum`, `uname`, `id`, `date`, `df` |
@@ -53,7 +53,7 @@ On Slackware the headers come in the same packages; there are no separate -dev p
   installation needs no polkit.
 - The "Website" link opens with the session's default application for
   http(s) (GTK). If none is set, the link opens nothing.
-- As far as I know `libgcc_s.so.1` is also in `aaa_libraries`, not only in
-  gcc; this has not been checked on Slackware.
-- The slacker-cli column was not re-checked now; slacker-gui 7.0.0 and
-  slacker-flatpak 0.6.0 were checked with `readelf`.
+- `libgcc_s.so.1` is in both `aaa_libraries` and `gcc` (checked in
+  `/var/lib/pkgtools/packages`). `aaa_libraries` is enough to run the
+  binaries; gcc is needed only to build.
+- Libraries checked with `readelf -d`: slacker-cli (`libc`, `libm`, `libgcc_s`), slacker-gui 7.0.0 and slacker-flatpak 0.6.0.

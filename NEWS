@@ -30,46 +30,21 @@ Version Beta 0.14.1
     - The sidebar header shows the small slacker-gui icon instead of the diamond (the diamond stays when there is no SVG loader).
 - Update: slacker-cli
     - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.
-- Add: slacker-flatpak (Version 0.N.0, experimental)
-    - a separate GTK4/libadwaita front-end for Flatpak, for both your user's
-      and the system-wide Flatpak. It runs flatpak as your user, never as
-      root; changes to the system-wide Flatpak get their privileges from
-      flatpak's system helper and polkit. It refuses to start as root.
-    - Explore: every application your remotes offer, with icons and
-      categories, read from the appstream data flatpak keeps on disk
-      (nothing is downloaded). The search bar filters by name, description
-      or ID as you type.
-    - each application has a page with its information and permissions, and
-      Open, Install or Uninstall for each installation. The same actions are
-      shown as terminal commands.
-    - Installed: applications per installation, with Open; runtimes behind a
-      switch, with Remove Unused. Updates: check every remote and update each
-      installation.
-    - install, update and uninstall run flatpak on a pty and show its own
-      questions with Yes/No buttons; nothing is answered for you (no -y).
-      Stop is always available.
-    - Remotes: all remotes, disabled ones too, with a switch to enable or
-      disable each (remote-modify). Remotes made by .flatpak files have no
-      switch. Flathub Beta and Fedora are suggested as commands to copy;
-      adding or removing remotes is done from a terminal.
-    - Overview and Checks: flatpak version, system helper, installations,
-      and warnings (exports not on XDG_DATA_DIRS, an app installed twice, an
-      enabled remote without GPG). A banner says when there is something.
-        - Installed: runtimes that flatpak keeps on purpose are tagged "pinned"
-      (Remove Unused never removes them).
-    - each application page links to its website (appstream homepage,
-      http/https only).
-    - Overview: Check runs flatpak repair --dry-run for each installation
-      (changes nothing); repairing itself is left to a terminal.
-    - Update: slacker-flatpak (Version 0.6.0, experimental)
-    - an application's page says "Verified" when its remote (Flathub) has
-      verified the developer, with how and when; tiles on Explore carry a
-      small check mark.
-    - the page shows the developer and the license, from appstream.
-    - The Stop question now says the change can be left half done (it said "update").
-    - After a stopped install, a line says that parts installed before the stop stay, and that Remove Unused takes away the ones nothing needs.
-    - Overview and Checks lists the data of applications that are no longer installed (~/.var/app), with its size, and deletes a folder only after you confirm.
-    - Short messages show for 2 seconds, and a new one replaces the previous one. Errors still stay until closed.
+- Add: slacker-flatpak (Version 0.6.0, experimental)
+    - a separate GTK4/libadwaita front-end for Flatpak, for your user's and the
+      system-wide installation. It runs flatpak as your user, never as root;
+      system-wide changes get their privileges from flatpak's system helper
+      and polkit.
+    - Explore, Installed and Updates in one window. Explore reads the appstream
+      data flatpak already keeps on disk: icons, categories, search as you type.
+    - each application has a page with its information, permissions, developer,
+      license, website and Flathub "Verified", and Open, Install, Update or
+      Uninstall. The same actions are shown as terminal commands.
+    - every change runs flatpak itself and shows its own questions with Yes/No
+      buttons; nothing is answered for you. Stop is always available.
+    - Remotes: enable or disable each remote. Overview and Checks: warnings,
+      end-of-life applications and runtimes, a read-only check of the
+      installations, and the data left behind by uninstalled applications.
 - Update: wiki
 - Update: scripts/
     - Add: check-msrv.sh (SlackBuild use it now before build)

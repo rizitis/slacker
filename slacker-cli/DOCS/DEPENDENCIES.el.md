@@ -26,7 +26,7 @@
 | Εξάρτηση | slacker-cli | slacker-gui | slacker-flatpak | Γιατί |
 |---|---|---|---|---|
 | glibc | ✓ | ✓ | ✓ | `libc`, `libm`, loader |
-| libgcc_s (gcc) | ✓ | ✓ | ✓ | |
+| libgcc_s (aaa_libraries ή gcc) | ✓ | ✓ | ✓ | το `libgcc_s.so.1` υπάρχει και στα δύο πακέτα |
 | pkgtools | ✓ | | | `installpkg`, `upgradepkg`, `removepkg` |
 | gnupg2 | ✓ | | | `gpg`/`gpg2`, έλεγχος υπογραφών |
 | coreutils | ✓ | | | `sha256sum`, `uname`, `id`, `date`, `df` |
@@ -54,7 +54,7 @@
   του χρήστη δεν χρειάζεται polkit.
 - Ο σύνδεσμος «Website» ανοίγει με την προεπιλεγμένη εφαρμογή του session
   για http(s) (GTK). Αν δεν έχει οριστεί καμία, ο σύνδεσμος δεν ανοίγει τίποτα.
-- Το `libgcc_s.so.1` υπάρχει, όσο ξέρω, και στο `aaa_libraries`, όχι μόνο
-  στο gcc· δεν το έχω ελέγξει σε Slackware.
-- Η στήλη του slacker-cli δεν ξαναελέγχθηκε τώρα· ελέγχθηκαν με `readelf`
-  τα slacker-gui 7.0.0 και slacker-flatpak 0.6.0.
+- Το `libgcc_s.so.1` υπάρχει και στο `aaa_libraries` και στο `gcc`
+  (ελέγχθηκε στο `/var/lib/pkgtools/packages`). Για να τρέξουν τα binaries
+  αρκεί το `aaa_libraries`· το gcc χρειάζεται μόνο για το build.
+- Οι βιβλιοθήκες ελέγχθηκαν με `readelf -d`: slacker-cli (`libc`, `libm`, `libgcc_s`), slacker-gui 7.0.0 και slacker-flatpak 0.6.0.
