@@ -1164,7 +1164,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
             &bad,
             "Metadata",
             &ui::red(&format!(
-                "PACKAGES.TXT does not match its CHECKSUMS.md5: {} — run `slacker update`; \
+                "the cached PACKAGES.TXT does not match its CHECKSUMS.md5: {} — run `slacker update`; \
                  nothing will be installed from it until then",
                 list_mismatch.join(", ")
             )),
@@ -1551,7 +1551,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     let mut notes: Vec<String> = Vec::new();
     if !list_mismatch.is_empty() {
         notes.push(format!(
-            "the cached package list of {} is not the one its CHECKSUMS.md5 describes (a mirror mid-sync or a stale cached copy) — `slacker update` fetches it again; installs and upgrades from it are refused until then",
+            "the cached package list of {} is not the one its CHECKSUMS.md5 describes (a stale local copy, or files fetched while the mirror was mid-sync) — `slacker update` fetches both again; installs and upgrades from it are refused until then. This check reads only the local cache: if `slacker update` fails with the same error, the repo's server is serving inconsistent files",
             list_mismatch.join(", ")
         ));
     }
