@@ -289,8 +289,7 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
             "{}",
             ui::blue(
                 "The mirror is mid-sync or serves a stale cached copy. Their previous metadata was \
-                 kept; installs and upgrades from them are refused while it does not match. Run \
-                 `slacker update` again later, or choose another mirror."
+                 kept unchanged. Run `slacker update` again later, or choose another mirror."
             )
         );
     }

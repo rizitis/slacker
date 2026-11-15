@@ -29,8 +29,9 @@ Version Beta 0.14.1
     - The font size and "Copied" messages show for 2 seconds, and a new one replaces the previous one instead of waiting behind it.
     - The sidebar header shows the small slacker-gui icon instead of the diamond (the diamond stays when there is no SVG loader).
 - Update: slacker-cli
+    - Fix bug: slacker status print a valid time message `Freshness  mirror is in sync with upstream`
     - Fix bug (security): update now checks PACKAGES.TXT against the md5 its signed CHECKSUMS.md5 lists for it, and keeps the old metadata if they differ (a mirror mid-sync or a stale cached copy). Before, such a list was accepted and upgrade-all could offer every package at an older version.
-- installs and upgrades are refused while a repo's cached PACKAGES.TXT does not match its CHECKSUMS.md5 (no --yes override); status shows it under Metadata, and update fetches it again.
+    - installs and upgrades are refused while a repo's cached PACKAGES.TXT does not match its CHECKSUMS.md5 (no --yes override); status shows it under Metadata, and update fetches it again.
     - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.
 - Add: slacker-flatpak (Version 0.6.0, experimental)
     - a separate GTK4/libadwaita front-end for Flatpak, for your user's and the
