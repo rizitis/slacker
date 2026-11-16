@@ -1,0 +1,12 @@
+com.obsproject.Studio	OBS Studio	33.0.1	stable	x86_64	user	flathub	593.5 MB	28b32b8f9e50	org.freedesktop.Platform/x86_64/26.08
+com.xronlinux.BreezyDesktop	Breezy Desktop		master	x86_64	user	breezydesktop-origin	2.7 MB	556634d1d271	org.gnome.Platform/x86_64/46
+de.z_ray.OptimusUI	OptimusUI		master	x86_64	user	optimusui-origin	54.3 kB	1751e507b48a	org.gnome.Platform/x86_64/47
+dev.zed.Zed	Zed	v1.28.1	stable	x86_64	user	flathub	248.5 MB	64f165ae6fe0	org.freedesktop.Sdk/x86_64/26.08
+dev.zed.Zed-Preview	Zed Preview	v1.29.1-pre	stable	x86_64	user	flathub	249.5 MB	d29f5c84165b	org.freedesktop.Sdk/x86_64/26.08
+in.bharatkalluri.shortcircuit	Short Circuit	0.2	stable	x86_64	user	flathub	3.6 MB	0575443397a2	org.gnome.Platform/x86_64/50
+io.github.nokse22.minitext	Mini Text	1.0.0	stable	x86_64	user	flathub	199.7 kB	9b5286b77a98	org.gnome.Platform/x86_64/50
+io.gitlab.liferooter.TextPieces	Text Pieces	4.3.2	stable	x86_64	user	flathub	6.6 MB	1ad66da4d438	org.gnome.Platform/x86_64/51
+org.gnome.baobab	Disk Usage Analyzer	50.0	stable	x86_64	user	flathub	1.8 MB	29cbb087a181	org.gnome.Platform/x86_64/51
+org.vinegarhq.Sober	Sober	1.8.0	stable	x86_64	system	flathub	18.3 MB	a611b863277f	org.gnome.Platform/x86_64/51
+org.vinegarhq.Sober	Sober	1.8.0	stable	x86_64	user	flathub	18.3 MB	a611b863277f	org.gnome.Platform/x86_64/51
+page.codeberg.JakobDev.jdSystemMonitor	jdSystemMonitor	2.0	stable	x86_64	user	flathub	12.0 MB	9a4fc7968c52	org.kde.Platform/x86_64/6.11

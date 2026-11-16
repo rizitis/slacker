@@ -142,7 +142,7 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
     println!("Checking repositories for updates ...");
     let statuses: Vec<changelog::UpdateStatus> = repos
         .iter()
-        .map(|r| changelog::check_repo_updates(r, &cfg.cache_dir))
+        .map(|r| changelog::check_repo_updates(r, &cfg.cache_dir, r.checks_packages_txt(&cfg.verify)))
         .collect();
 
     // An unreachable repo is still offered: the failure may be transient, and
@@ -272,6 +272,24 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
             ui::blue(
                 "If you trust one, set `verify=none` (or `verify=md5`) for it in the repos file, \
                  or import its key with `slacker update gpg`, then run `slacker update` again."
+            )
+        );
+    }
+    if !out.inconsistent.is_empty() {
+        println!(
+            "\n{}",
+            ui::red(&format!(
+                "{} repo(s) were NOT updated: the mirror served a PACKAGES.TXT that does not match \
+                 its CHECKSUMS.md5: {}.",
+                out.inconsistent.len(),
+                out.inconsistent.join(", ")
+            ))
+        );
+        println!(
+            "{}",
+            ui::blue(
+                "The mirror is mid-sync or serves a stale cached copy. Their previous metadata was \
+                 kept unchanged. Run `slacker update` again later, or choose another mirror."
             )
         );
     }

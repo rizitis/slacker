@@ -1,0 +1,2 @@
+testrepo	-	file:///srv/testrepo	1	system,no-gpg-verify
+testrepo	-	file:///srv/testrepo	1	user,disabled,no-gpg-verify

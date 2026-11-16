@@ -1383,6 +1383,20 @@ fn print_plan(plan: &[PlanItem]) {
 /// not a safe basename. This is the second line of defence behind the parser
 /// filter: even if a path-like filename ever reached here, slacker (as root)
 /// must never write or install through it.
+/// Refuse to write through a symlink at `path` (so a planted symlink cannot
+/// redirect a config write elsewhere).
+pub(crate) fn refuse_through_symlink(path: &std::path::Path) -> Result<(), String> {
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to write through symlink {}; remove it first",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn package_dest(cfg: &Config, repo: &str, filename: &str) -> Result<std::path::PathBuf, String> {
     if !pkg::is_safe_filename(filename) {
         return Err(format!(
@@ -2097,7 +2111,7 @@ fn arch_family(a: &str) -> &str {
 /// True for x86_64 and every 32-bit x86 token: the architectures the official
 /// Slackware tree (and its mirror list) carries. Slackware ARM (aarch64, arm) is
 /// a separate port with its own trees and mirrors.
-fn is_x86_arch(a: &str) -> bool {
+pub(crate) fn is_x86_arch(a: &str) -> bool {
     a == "x86_64" || arch_family(a) == "x86"
 }
 
@@ -2155,6 +2169,46 @@ fn enforce_arch_match(cfg: &Config, plan: &[PlanItem], allow: bool) -> Result<()
     ))
 }
 
+/// Refuse a plan taking packages from a repo whose cached PACKAGES.TXT does
+/// not match the md5 its CHECKSUMS.md5 lists for it. No --yes override: the
+/// plan itself is not trustworthy, so there is nothing to confirm.
+fn enforce_package_list(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut bad: Vec<(String, String, String)> = Vec::new(); // (repo, listed, actual)
+    for it in plan {
+        if seen.contains(&it.pkg.repo.as_str()) {
+            continue;
+        }
+        seen.push(&it.pkg.repo);
+        let Some(r) = cfg.repo_by_name(&it.pkg.repo) else {
+            continue;
+        };
+        if !r.checks_packages_txt(&cfg.verify) {
+            continue;
+        }
+        if let Some(repo::Consistency::Mismatch { listed, actual }) = repo::cached_consistency(r, &cfg.cache_dir) {
+            bad.push((r.name.clone(), listed, actual));
+        }
+    }
+    if bad.is_empty() {
+        return Ok(());
+    }
+    for (name, listed, actual) in &bad {
+        println!(
+            "{}",
+            ui::red(&format!(
+                "package list mismatch: '{name}' PACKAGES.TXT md5 {actual}, its CHECKSUMS.md5 lists {listed}"
+            ))
+        );
+    }
+    Err(format!(
+        "refusing: the cached package list of {} is not the one its CHECKSUMS.md5 describes \
+         (a mirror mid-sync or a stale cached copy), so the versions above cannot be trusted. \
+         Nothing was changed. Run `slacker update` and try again.",
+        bad.iter().map(|b| b.0.as_str()).collect::<Vec<_>>().join(", ")
+    ))
+}
+
 fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -> Result<(), String> {
     if plan.is_empty() {
         return Ok(());
@@ -2166,6 +2220,13 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
 
     // Architecture-mismatch guard (fail-closed; the same --yes is a quiet override).
     enforce_arch_match(cfg, plan, allow_release_mismatch)?;
+
+    // Package-list guard (fail-closed, NO override): every repo the plan takes
+    // packages from must have a PACKAGES.TXT that matches the md5 its own
+    // CHECKSUMS.md5 lists for it. Otherwise the plan was built from a package
+    // list the repo did not publish (a mirror mid-sync or a stale cached copy),
+    // and could replace the whole system with older packages.
+    enforce_package_list(cfg, plan)?;
 
     // Resolve repo + safe destination for every item first. A repo-lookup miss
     // or an unsafe (path-traversal) filename is a hard error, not a transient
@@ -2735,12 +2796,12 @@ fn priority_display(prio: i32) -> String {
 // packages, where there is no candidate to fall through to.
 
 /// Is an installed package blacklisted (frozen)? Matched against its full id,
-/// the series looked up from the db, and its source repo — the official repo
-/// for an empty build tag, otherwise the repo it came from (`repo_for_installed`).
-/// `db` may be None when a command hasn't loaded it; then only plain regex rules
-/// can match.
+/// its official series (`series_of_installed`; none for a non-official build)
+/// and its source repo — the official repo for an empty build tag, otherwise
+/// the repo it came from (`repo_for_installed`). `db` may be None when a
+/// command hasn't loaded it; then only plain regex rules can match.
 fn bl_installed(cfg: &Config, db: Option<&PkgDb>, i: &pkg::PkgId) -> bool {
-    let series = db.and_then(|d| d.series_of(&i.name));
+    let series = db.and_then(|d| d.series_of_installed(i));
     let tag = i.build_tag();
     let repo = if tag.is_empty() {
         cfg.official_repo_name()
@@ -2807,14 +2868,19 @@ struct UpdateOutcomes {
     soft_frozen: Vec<String>,
     /// Actively distrusted (malicious / bad signature) — needs `trust-repo`.
     hard_frozen: Vec<String>,
+    /// PACKAGES.TXT did not match its CHECKSUMS.md5; cache left unchanged.
+    inconsistent: Vec<String>,
 }
 
+/// Refresh one repo's metadata. Returns true when the repo ended up with a
+/// fresh, usable package list; false on any failure (the reason is printed and,
+/// where it applies, recorded in `out`).
 fn update_one_repo(
     cfg: &Config,
     r: &config::Repo,
     track_changelog: bool,
     out: &mut UpdateOutcomes,
-) {
+) -> bool {
     println!("{}", ui::blue(&format!("Updating '{}' (priority {}):", r.name, r.priority)));
 
     // Has this repo already been accepted (vetted, or trusted by the user)? An
@@ -2822,7 +2888,15 @@ fn update_one_repo(
     // NOT freeze it; an untrusted one (newly added / never vetted) is vetted now.
     let trusted = repo::is_trusted(&cfg.state_dir, &r.name);
 
-    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, track_changelog) {
+    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, track_changelog, r.checks_packages_txt(&cfg.verify)) {
+        if e.starts_with(repo::MISMATCH_PREFIX) {
+            // The mirror answered, but with files from different moments.
+            // Nothing was written, so the cache is as it was and the next
+            // update tries again. Not a reason to freeze the repo.
+            println!("{}", ui::red(&format!("  FAILED: {e}")));
+            out.inconsistent.push(r.name.clone());
+            return false;
+        }
         if trusted {
             // Established repo: most likely a transient network problem.
             println!("{}", ui::red(&format!("  FAILED: {e}")));
@@ -2847,7 +2921,7 @@ fn update_one_repo(
             );
             out.soft_frozen.push(r.name.clone());
         }
-        return;
+        return false;
     }
 
     // A repo advertising path-traversal filenames is malicious — HARD-freeze it
@@ -2869,7 +2943,7 @@ fn update_one_repo(
             ))
         );
         out.hard_frozen.push(r.name.clone());
-        return;
+        return false;
     }
 
     // Reachable and not malicious: clear any prior (soft) quarantine and trust
@@ -2905,7 +2979,7 @@ fn update_one_repo(
                 println!("{}", ui::red(&format!("  GPG: {m}")));
                 println!("{}", ui::red(&format!("  '{}' has been FROZEN (possible tampering).", r.name)));
                 out.hard_frozen.push(r.name.clone());
-                return;
+                return false;
             }
             Err(gpg::ImportError::Other(m)) => {
                 if requires_gpg {
@@ -2913,7 +2987,7 @@ fn update_one_repo(
                     println!("{}", ui::red("  this repo's metadata was discarded and will NOT be used."));
                     repo::invalidate_metadata(r, &cfg.cache_dir);
                     out.failed_verify.push(r.name.clone());
-                    return;
+                    return false;
                 }
                 // best-effort: couldn't (re-)fetch the key; if we already have it
                 // in the keyring, verification below still works, else md5.
@@ -2929,9 +3003,9 @@ fn update_one_repo(
                     println!("{}", ui::red("  GPG: required signature is missing — this repo will NOT be used."));
                     repo::invalidate_metadata(r, &cfg.cache_dir);
                     out.failed_verify.push(r.name.clone());
-                } else {
-                    println!("  {}", ui::dim("GPG: no signature provided (skipped)"));
+                    return false;
                 }
+                println!("  {}", ui::dim("GPG: no signature provided (skipped)"));
             }
             Ok(gpg::Verify::Tampered(m)) => {
                 // Bad signature / key-substitution: hostile regardless of policy.
@@ -2945,27 +3019,30 @@ fn update_one_repo(
                 println!("{}", ui::red(&format!("  GPG: {m}")));
                 println!("{}", ui::red(&format!("  '{}' has been FROZEN (possible tampering).", r.name)));
                 out.hard_frozen.push(r.name.clone());
+                return false;
             }
             Ok(gpg::Verify::Unverifiable(m)) => {
                 if requires_gpg {
                     println!("{}", ui::red(&format!("  GPG: {m} — this repo will NOT be used.")));
                     repo::invalidate_metadata(r, &cfg.cache_dir);
                     out.failed_verify.push(r.name.clone());
-                } else {
-                    // Can't authenticate, but not proven hostile: fall back to md5.
-                    println!("  {}", ui::dim(&format!("GPG: {m} — using md5")));
+                    return false;
                 }
+                // Can't authenticate, but not proven hostile: fall back to md5.
+                println!("  {}", ui::dim(&format!("GPG: {m} — using md5")));
             }
             Err(e) => {
                 // gpg itself failed to run — treat as a verification failure.
                 println!("{}", ui::red(&format!("  GPG: {e}")));
                 repo::invalidate_metadata(r, &cfg.cache_dir);
                 out.failed_verify.push(r.name.clone());
+                return false;
             }
         }
     } else {
         println!("  {}", ui::dim("GPG: skipped (verify policy)"));
     }
+    true
 }
 
 /// Count how many `PACKAGE NAME:` entries in a repo's cached PACKAGES.TXT carry
@@ -3003,7 +3080,7 @@ fn vet_repo(cfg: &Config, r: &config::Repo) -> Vec<String> {
     }
 
     // 2. Fetch metadata only (downloads are size-capped; no packages fetched).
-    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, r.official) {
+    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, r.official, r.checks_packages_txt(&cfg.verify)) {
         issues.push(format!("could not fetch metadata: {e}"));
         return issues; // nothing else is checkable without metadata
     }
@@ -4336,5 +4413,28 @@ mod foundational_tests {
         ] {
             assert!(!is_display_socket(path), "should not be a display socket: {path}");
         }
+    }
+}
+
+#[cfg(test)]
+mod symlink_guard_tests {
+    use super::refuse_through_symlink;
+
+    #[test]
+    fn config_writes_refuse_a_symlink_only() {
+        let dir = std::env::temp_dir().join(format!("slacker-symlink-guard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("blacklist");
+        let link = dir.join("blacklist-link");
+        let dangling = dir.join("dangling");
+        std::fs::write(&real, "x\n").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        std::os::unix::fs::symlink(dir.join("nothing-here"), &dangling).unwrap();
+        assert!(refuse_through_symlink(&real).is_ok()); // a regular file
+        assert!(refuse_through_symlink(&dir.join("new-file")).is_ok()); // not there yet
+        assert!(refuse_through_symlink(&link).is_err());
+        assert!(refuse_through_symlink(&dangling).is_err()); // even a dangling one
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

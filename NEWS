@@ -1,3 +1,77 @@
+Version Beta 0.14.1
+=====
+- Update: slacker-gui (Version _beta.7)
+    - CMD `slacker upgrade-all`: a finished download's "↓ name (size)" line is removed
+      from the window when its "✓"/"✗" line arrives, as in a terminal
+      (issue #25, reported by @gegechris99). The command log keeps every line.
+    - the output in the transaction window stays at its last line when a
+      question appears under it, so the end of the list being asked about is
+      visible (issue #25, reported by @gegechris99).
+    - the main window now gets its title bar and the minimize, maximize and
+      close buttons from the window manager, like every other window on the
+      desktop (KWin, Xfwm4, ...). On GNOME it keeps libadwaita's own header bar.
+      To pick one yourself, set SLACKER_GUI_FRAME=system or SLACKER_GUI_FRAME=app.
+    - dialogs that the window manager shows as separate windows (package
+      details, Dependencies, Command output, the transaction window) can be
+      resized.
+    - Dependencies opens one window only. Going deeper into a package opens a
+      new page in the same window with a back button, instead of one more window
+      every time.
+    - narrow window: below ~760 px the sidebar folds away and the stat tiles on
+      the Repositories page wrap to the next line. The window has a minimum size
+      of 540x420.
+    - no more GTK layout warnings ("Allocating size ...", "exceeds
+      AdwBreakpointBin width") printed in the terminal.
+    - refactoring: the main window is a plain gtk::ApplicationWindow instead of
+      adw::ApplicationWindow, because libadwaita always draws its own frame.
+      Everything inside it is still GTK4/libadwaita.
+    - Fix: correct minimum rust version in Cargo.toml (highest needed by Cargo.lock: 1.92 (pango-sys 0.22.9) )
+    - The font size and "Copied" messages show for 2 seconds, and a new one replaces the previous one instead of waiting behind it.
+    - The sidebar header shows the small slacker-gui icon instead of the diamond (the diamond stays when there is no SVG loader).
+- Update: slacker-cli
+    - Fix bug: slacker status print a valid time message `Freshness  mirror is in sync with upstream`
+    - Fix bug (security): update now checks PACKAGES.TXT against the md5 its signed CHECKSUMS.md5 lists for it, and keeps the old metadata if they differ (a mirror mid-sync or a stale cached copy). Before, such a list was accepted and upgrade-all could offer every package at an older version.
+    - installs and upgrades are refused while a repo's cached PACKAGES.TXT does not match its CHECKSUMS.md5 (no --yes override); status shows it under Metadata, and update fetches it again.
+    - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.
+    - CMD `slacker remove`: `remove SERIES/` (with the trailing /, e.g. `remove kde/`) removes the installed official packages of that series of the official tree. A series that does not exist there is an error; without the / the word is matched as before.
+    - Fix bug: `remove` ignored a `series/` freeze, and a series rule froze a same-named package from another repo (e.g. `which` from SBo/ponce with `a/` in the blacklist). Only an official build (no tag or _slackNN) is in a series now; clean-system and remove follow it.
+    - Fix bug (security): commands that write a config file (frozen, unfrozen, pin, unpin, nodep, undep, add-repo, del-repo, pri-repo, add-tag, del-tag, generate-template) refuse to write through a symlink, as upgrade-dist already did.
+    - Fix bug (security): a credentials prefix covers a URL only up to a whole path segment; before, [https://lab] also sent the login to https://lab.evil and [.../repo] to [.../repo-other/].
+    - CMD `slacker unfrozen` with no argument lists the rules and exits 0, as unpin does (it exited 1).
+    - Fix bug: upgrade-dist went on when the target's package lists could not be fetched, built the plan from the old release's lists and reported "complete". Now it stops when the official repo or its patches subtree cannot be refreshed, and any stop before the first package is installed puts mirrors, repos and blacklist back from the escape kit.
+- Add: slacker-flatpak (Version 1.0.0, testing)
+    - a separate GTK4/libadwaita front-end for Flatpak, for your user's and the
+      system-wide installation. It runs flatpak as your user, never as root;
+      system-wide changes get their privileges from flatpak's system helper
+      and polkit.
+    - Explore, Installed and Updates in one window. Explore reads the appstream
+      data flatpak already keeps on disk: icons, categories, search as you type.
+    - each application has a page with its information, permissions, developer,
+      license, website and Flathub "Verified", and Open, Install, Update or
+      Uninstall. The same actions are shown as terminal commands.
+    - every change runs flatpak itself and shows its own questions with Yes/No
+      buttons; nothing is answered for you. Stop is always available.
+    - Remotes: enable or disable each remote. Overview and Checks: warnings,
+      end-of-life applications and runtimes, a read-only check of the
+      installations, and the data left behind by uninstalled applications.
+- Update: wiki, man page (exit code 2, the meaning of 0/1/20/100, the package-list check,
+      remove SERIES/, series freezes, credentials prefixes, upgrade-dist stop and restore), ARCHITECTURE.md
+- Update: scripts/
+    - Add: check-msrv.sh (SlackBuild use it now before build for slacker developers)
+**NOTES (0.14.1_beta.7 + slacker-flatpak-1.0.0)**:
+    - I'm stopping promoting binaries on the release page.
+    - You can install slacker from @conraid repo (slackware64-current) or build your own!
+      So from now on [slacker releases page](https://forge.slackware.nl/rizitis/slacker/releases) will be 3 source tarballs:
+        - slacker-VERSION-source.tar.gz - This is what you already know and what @conraid is building (slacker + slacker gui)
+        - slacker-cli-VERSION-source.tar.gz (minimal only slacker-cli no gui)
+        - slacker-flatpak-VERSION-source.tar.gz (Full slacker installation cli+gui+flatpak)
+      For **aarch64** @n4t3r will decide what binaries to promote on [releases page](https://forge.slackware.nl/rizitis/slacker/releases)
+      The main branch`s SlackBuild now can build: `GUI=NO` `FLATPAK=NO`, by default builds everything.
+    - `slacker-flatpak` is **testing** and it has 1 extra requirement out of Slackware stock packages (flatpak).
+      if you use it I suggest install flatpak from @conraid repo because it is very well builded and flatpak setup for users is ready after installation finsh by default.
+      There is **none** good reason to add this external dependency and its dependencies in slacker it self, better is to split slacker in 3 source tarballs in order a user build-install what he need only.
+---
+
 Version Beta 0.14.0
 =====
 SEMANTIC CHANGES (slacker.conf need update)

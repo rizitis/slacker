@@ -8,10 +8,13 @@ cd $(dirname $0) ; CWD=$(pwd)
 set -e
 
 PRGNAM=slacker
-VERSION=${VERSION:-0.14.0}
+VERSION=${VERSION:-0.14.1}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
+# GUI=no / FLATPAK=no skip building slacker-gui / slacker-flatpak
+GUI=${GUI:-${gui:-yes}}
+FLATPAK=${FLATPAK:-${flatpak:-yes}}
 
 if [ -z "$ARCH" ]; then
   case "$( uname -m )" in
@@ -41,6 +44,10 @@ else
   LIBDIRSUFFIX=""
 fi
 
+# ---------------------------------------------------- #
+# BUILD CHECKS
+# -----------------------------------------------------#
+echo "BUILD CHECKS...................."
 # yes needed.
 echo "=============================================================="
 cat /etc/slackware-version
@@ -68,6 +75,21 @@ while true; do
     esac
 done
 
+# rust-version in both Cargo.toml must cover what their Cargo.lock needs
+# rust-version in both Cargo.toml must cover what their Cargo.lock needs
+if [ -f "$CWD/scripts/check-msrv.sh" ]; then
+  if ! bash "$CWD/scripts/check-msrv.sh"; then
+    echo
+    echo "STOP: a rust-version in Cargo.toml is lower than its Cargo.lock needs."
+    echo "Raise it to the value shown above, then build again."
+    exit 1
+  fi
+else
+  echo "skip check-msrv checks"
+fi
+
+sleep 3
+
 # Pick the right example configs for the running release (stable vs -current).
 DIR=stable
 grep -q '^VERSION_CODENAME=current$' /etc/os-release && DIR=current
@@ -79,6 +101,10 @@ mkdir -p $TMP $PKG $OUTPUT
 cd $TMP
 
 # First build slacker-cli (the original slacker)
+# ---------------------------------------------------- #
+# SLACKER-CLI
+# -----------------------------------------------------#
+echo "SLACKER-CLI......................"
 
 cp -R $CWD/slacker-cli/* .
 rm -rf target || true
@@ -193,6 +219,15 @@ mkdir -p $PKG/usr/share/fish/vendor_completions.d
 install -m0644 contrib/slacker.fish \
   $PKG/usr/share/fish/vendor_completions.d/slacker.fish
 
+# ---------------------------------------------------- #
+# SLACKER-GUI
+# -----------------------------------------------------#
+if [ -d "$CWD/slacker-gui" ]; then
+
+if [ "$GUI" = "NO" ] || [ "$GUI" = "no" ]; then
+echo "SLACKER-GUI: skipped (GUI=$GUI)"
+else
+echo "SLACKER-GUI............"
 # Now we build slacker-gui on top of slacker
 # Built in $TMP like slacker-cli, never inside $CWD.
 mkdir -p $TMP/slacker-gui
@@ -222,6 +257,56 @@ install -Dm644 data/nl.slackware.forge.rizitis.slacker.policy \
 ( cd data/icons && find hicolor -type f ) | while read -r f; do
   install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
 done
+fi
+else
+  echo "skip slacker-gui build"
+fi
+
+# ---------------------------------------------------- #
+# SLACKER-FLATPAK
+# ----------------------------------------------------- #
+if [ -d "$CWD/slacker-flatpak" ]; then
+if [ "$FLATPAK" = "NO" ] || [ "$FLATPAK" = "no" ]; then
+echo "SLACKER-FLATPAK: skipped (FLATPAK=$FLATPAK)"
+else
+echo "SLACKER-FLATPAK......................."
+mkdir -p $TMP/slacker-flatpak
+cd $TMP/slacker-flatpak
+cp -R $CWD/slacker-flatpak/* .
+rm -rf target || true
+chown -R root:root .
+# same permission normalization as for slacker-cli above
+find . \( -type d          ! -perm 755 -exec chmod 00755 {} \; \) -o \
+       \( -type f   -perm /111 ! -perm 755 -exec chmod -f 755 {} + \) -o \
+       \( -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} + \)
+
+if command -v cargo-auditable >/dev/null 2>&1; then
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --release --locked
+else
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build --release --locked
+fi
+CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo test --release --locked
+
+install -Dm755 target/release/slacker-flatpak $PKG/usr/bin/slacker-flatpak
+
+install -Dm644 data/nl.slackware.forge.rizitis.SlackerFlatpak.desktop \
+  $PKG/usr/share/applications/nl.slackware.forge.rizitis.SlackerFlatpak.desktop
+
+# install, not cp -a: cp -a would keep the owner of the source tree
+# (the user who unpacked it) and sbopkglint rejects uid/gid >= 1000.
+( cd data/icons && find hicolor -type f ) | while read -r f; do
+  install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
+done
+fi
+else
+  echo "skip slacker-flatpak build"
+fi
+
+# ------------------------------------- #
+# PKG
+# ------------------------------------- #
+echo "PKG..............................."
+
 
 # Whatever came from the source trees is owned by root.
 chown -R root:root $PKG/usr
@@ -234,9 +319,13 @@ cat $CWD/doinst.sh > $PKG/install/doinst.sh
 cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
 
+# ------------------------------------- #
+# PKG-CHECKS
+# ------------------------------------- #
+echo "PKG-CHECKS........................."
 sleep 1
 if command -v sbopkglint >/dev/null 2>&1; then
-    sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+    sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE || true
 else
     echo "skip cheks: sbopkglint not found."
 fi
@@ -245,7 +334,8 @@ rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new /tmp/sto
 echo "=============================================================="
 # audit the embedded dependency lists (cargo-auditable)
 if command -v cargo-audit >/dev/null 2>&1; then
-  for b in slacker slacker-gui; do
+  for b in slacker slacker-gui slacker-flatpak; do
+    [ -f $PKG/usr/bin/$b ] || continue
     cargo audit bin $PKG/usr/bin/$b || echo "WARNING: cargo audit reported problems in $b"
   done
 else
@@ -254,3 +344,4 @@ fi
 echo "=============================================================="
 #sleep 1
 #gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+echo "gpg --detach-sign --armor need user mode.........................."

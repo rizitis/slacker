@@ -3,7 +3,7 @@
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{
-    arch_family, bl_installed, current_uid, humanize_lag, migrate_state, mirror_is_stale,
+    arch_family, bl_installed, current_uid, humanize_lag, migrate_state,
     osuosl_tree_prefix, parse_packages_date, repo_release_token, system_release,
     unverified_repo_names, warn_unverified_repos, Outcome, FRESHNESS_TIMEOUT_SECS,
 };
@@ -810,14 +810,20 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
             .ok()
             .and_then(|l| parse_packages_date(&l));
         match (up, mine) {
-            (Some(up), Some(mine)) if mirror_is_stale(up, mine) => srow(
-                &warn,
-                "Freshness",
-                &ui::yellow(&format!(
-                    "your mirror is {} behind upstream — run `slacker find-mirror`",
-                    humanize_lag(up - mine)
-                )),
-            ),
+            (Some(up), Some(mine)) if up != mine => {
+                let d = (up - mine).abs();
+                let lag = if d < 60 {
+                    "under 1m".to_string()
+                } else {
+                    humanize_lag(d)
+                };
+                let msg = if up > mine {
+                    format!("your mirror is {lag} behind upstream — run `slacker find-mirror`")
+                } else {
+                    format!("your mirror is {lag} ahead of upstream (unexpected) — run `slacker find-mirror`")
+                };
+                srow(&warn, "Freshness", &ui::yellow(&msg))
+            }
             (Some(_), Some(_)) => {
                 srow(&ok, "Freshness", &ui::dim("mirror is in sync with upstream"))
             }
@@ -1141,6 +1147,54 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         srow(&ok, "Metadata", &ui::dim(&format!("cached for all repos (oldest {age} old)")));
     }
 
+    // PACKAGES.TXT against the md5 its own CHECKSUMS.md5 lists for it. A
+    // mismatch means the cached package list is not the one the repo signed
+    // (a mirror mid-sync or a stale cached copy): upgrade-all would offer the
+    // wrong versions, possibly every package at an older one.
+    let mut list_mismatch: Vec<String> = Vec::new();
+    let mut list_checked = 0usize;
+    let mut list_unlisted: Vec<String> = Vec::new();
+    for r in &repos {
+        if !r.checks_packages_txt(&cfg.verify) {
+            continue;
+        }
+        match repo::cached_consistency(r, &cfg.cache_dir) {
+            Some(repo::Consistency::Match) => list_checked += 1,
+            Some(repo::Consistency::Mismatch { .. }) => list_mismatch.push(r.name.clone()),
+            Some(repo::Consistency::NotListed) => list_unlisted.push(r.name.clone()),
+            None => {}
+        }
+    }
+    if !list_mismatch.is_empty() {
+        srow(
+            &bad,
+            "Metadata",
+            &ui::red(&format!(
+                "the cached PACKAGES.TXT does not match its CHECKSUMS.md5: {} — run `slacker update`; \
+                 nothing will be installed from it until then",
+                list_mismatch.join(", ")
+            )),
+        );
+        pending = true;
+    } else if list_checked > 0 {
+        let extra = if list_unlisted.is_empty() {
+            String::new()
+        } else {
+            format!(" (not listed by {})", list_unlisted.join(", "))
+        };
+        srow(
+            &ok,
+            "Metadata",
+            &ui::dim(&format!("PACKAGES.TXT matches CHECKSUMS.md5 in {list_checked} repo(s){extra}")),
+        );
+    } else if !list_unlisted.is_empty() {
+        srow(
+            &info,
+            "Metadata",
+            &ui::dim(&format!("not checkable: CHECKSUMS.md5 lists no PACKAGES.TXT ({})", list_unlisted.join(", "))),
+        );
+    }
+
     // Blacklist — show valid rules, and surface any the parser had to skip so a
     // typo'd rule is visible instead of silently vanishing. The comment/blank
     // handling mirrors config's own parse_lines, so the count matches the loader.
@@ -1418,7 +1472,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
                     );
                     let cached_file = std::fs::read(repo::meta_path(r, &cfg.cache_dir, file)).ok();
                     match cached_file {
-                        Some(local) if local == remote => {
+                        Some(local) if local == remote && !list_mismatch.contains(&r.name) => {
                             srow(&ok, "Updates", &ui::green(&format!("{} is up to date", r.name)))
                         }
                         Some(_) => {
@@ -1501,6 +1555,12 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     }
     // Advisories: real issues that are not a command to run in this sequence.
     let mut notes: Vec<String> = Vec::new();
+    if !list_mismatch.is_empty() {
+        notes.push(format!(
+            "the cached package list of {} is not the one its CHECKSUMS.md5 describes (a stale local copy, or files fetched while the mirror was mid-sync) — `slacker update` fetches both again; installs and upgrades from it are refused until then. This check reads only the local cache: if `slacker update` fails with the same error, the repo's server is serving inconsistent files",
+            list_mismatch.join(", ")
+        ));
+    }
     if !tampered.is_empty() {
         notes.push(format!(
             "BAD GPG signature for {} — possible tampering; do NOT install from it until resolved",
@@ -1574,7 +1634,7 @@ pub(crate) fn cmd_check_updates(cfg: &Config) -> Result<Outcome, String> {
     let mut any_pending = false;
     let mut any_unknown = false;
     for r in cfg.repos_by_priority() {
-        let label = match changelog::check_repo_updates(r, &cfg.cache_dir) {
+        let label = match changelog::check_repo_updates(r, &cfg.cache_dir, r.checks_packages_txt(&cfg.verify)) {
             changelog::UpdateStatus::UpToDate => ui::green("up-to-date"),
             changelog::UpdateStatus::Pending => {
                 any_pending = true;

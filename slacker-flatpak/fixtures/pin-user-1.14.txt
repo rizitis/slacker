@@ -1,0 +1,2 @@
+  org.gnome.Platform//47
+  runtime/org.test.Platform/x86_64/1

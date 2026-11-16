@@ -201,6 +201,18 @@ pub fn present_fitted(dialog: &adw::Dialog, window: &impl IsA<gtk::Window>, leas
         }
     };
     fit(window.width(), window.height());
+    dialog.present(Some(&window));
+
+    // Over a plain GTK window (the window manager's frame, see window.rs)
+    // libadwaita shows the dialog as a window of its own, which it makes fixed
+    // in size. Let it be resized like any other window; it no longer follows
+    // the main window's size.
+    if let Some(own) = dialog.root().and_downcast::<gtk::Window>() {
+        if own != window {
+            own.set_resizable(true);
+            return;
+        }
+    }
     if let Some(surface) = window.surface() {
         // The surface has its new size before the window's widgets are laid out
         // again, so the size is read from it.
@@ -216,7 +228,6 @@ pub fn present_fitted(dialog: &adw::Dialog, window: &impl IsA<gtk::Window>, leas
             }
         });
     }
-    dialog.present(Some(&window));
 }
 
 pub fn flat_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {

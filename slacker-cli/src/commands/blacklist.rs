@@ -4,7 +4,7 @@
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
-use crate::{closest, confirm, Outcome};
+use crate::{closest, confirm, refuse_through_symlink, Outcome};
 use crate::{config, repo, ui};
 use std::collections::HashSet;
 
@@ -220,6 +220,7 @@ pub(crate) fn cmd_frozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Ou
         body.push_str(raw);
         body.push('\n');
     }
+    refuse_through_symlink(&path)?;
     std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
     let added: Vec<&str> = to_add.iter().map(|(r, _)| r.as_str()).collect();
     println!("Frozen (added to blacklist): {}", added.join(", "));
@@ -275,17 +276,24 @@ pub(crate) fn cmd_unfrozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<
             .collect();
         if rules.is_empty() {
             println!("The blacklist has no rules.");
+            println!(
+                "  {}",
+                ui::dim("to add a rule: `frozen <rule>`, e.g. `frozen vlc`, `frozen kde/`")
+            );
             return Ok(Outcome::Ok);
         }
         println!("{}", ui::blue("Current blacklist rules:"));
         for r in &rules {
             println!("  {}", ui::white(r));
         }
-        return Err(
-            "unfrozen: give one or more rules to remove, EXACTLY as shown above \
-             (quote rules with spaces or shell-special characters)"
-                .into(),
+        println!(
+            "  {}",
+            ui::dim(
+                "to remove a rule: `unfrozen <rule>`, EXACTLY as shown above \
+                 (quote rules with spaces or shell-special characters)"
+            )
         );
+        return Ok(Outcome::Ok);
     }
 
     // Canonicalise the requested rules the same way a file line is canonicalised,
@@ -314,6 +322,7 @@ pub(crate) fn cmd_unfrozen(cli: &Cli, cfg: &Config, names: &[String]) -> Result<
         return Ok(Outcome::Ok);
     }
 
+    refuse_through_symlink(&path)?;
     std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
     println!(
         "Unfrozen (removed from blacklist): {}",
@@ -495,6 +504,7 @@ pub(crate) fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Out
     }
     text.push_str(&line);
     text.push('\n');
+    refuse_through_symlink(&path)?;
     std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
     println!("{}", ui::green(&format!("Pinned: {name} -> {repo}")));
     Ok(Outcome::Ok)
@@ -543,6 +553,7 @@ pub(crate) fn cmd_unpin(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Out
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
+    refuse_through_symlink(&path)?;
     std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
     let summary: Vec<String> =
         removed.iter().map(|(p, r)| format!("{p} (was -> {r})")).collect();
@@ -724,6 +735,7 @@ pub(crate) fn cmd_nodep(cli: &Cli, cfg: &Config, specs: &[String]) -> Result<Out
         text.push_str(line);
         text.push('\n');
     }
+    refuse_through_symlink(&path)?;
     std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
     let added: Vec<&str> = to_add.iter().map(|(l, _, _)| l.as_str()).collect();
     println!("{}", ui::green(&format!("Added: {}", added.join(", "))));
@@ -815,6 +827,7 @@ pub(crate) fn cmd_undep(cli: &Cli, cfg: &Config, names: &[String]) -> Result<Out
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
+    refuse_through_symlink(&path)?;
     std::fs::write(&path, new_text).map_err(|e| format!("write {}: {e}", path.display()))?;
     println!("{}", ui::green(&format!("Removed: {}", removed.join(", "))));
     report_missing();

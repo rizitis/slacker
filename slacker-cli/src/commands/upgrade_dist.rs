@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{
     collect, in_graphical_session, install_counter, package_dest, parallel_fetch, report_batch_failures,
-    slackware_dir, summarize_outcomes, update_one_repo, upgrade_last, DlItem, InstallAction, Outcome,
+    refuse_through_symlink, slackware_dir, summarize_outcomes, update_one_repo, upgrade_last, DlItem, InstallAction, Outcome,
     PlanItem, UpdateOutcomes,
 };
 use crate::{banner, changelog, config, dist, download, pkg, system, template, ui};
@@ -290,6 +290,7 @@ fn dist_execute(
     critical: &[PlanItem],
     install_new: &[PlanItem],
     upgrades: &[PlanItem],
+    started: &mut bool,
 ) -> Result<DistReport, String> {
     let noncore: Vec<&PlanItem> = install_new.iter().chain(upgrades.iter()).collect();
     if critical.is_empty() && noncore.is_empty() {
@@ -343,6 +344,7 @@ fn dist_execute(
         // ---- Phase 0: install core serially, ABORT on failure, with a
         //      post-install record check. ----
         println!("{}", ui::blue("Phase 0 — core packages (in order):"));
+        *started = true;
         for (i, it) in citems.iter().enumerate() {
             install_counter(i + 1, citems.len(), critical[i].action, &it.pkg.id.tag());
             do_install(&it.dest, critical[i].action).map_err(|e| {
@@ -399,6 +401,7 @@ fn dist_execute(
                 continue; // download/verify failed; counted in dl_failed
             }
             install_counter(gi + 1, total_noncore, noncore[gi].action, &it.pkg.id.tag());
+            *started = true;
             match do_install(&it.dest, noncore[gi].action) {
                 Ok(()) => done += 1,
                 Err(e) => install_failed.push((it.pkg.id.name.clone(), e)),
@@ -423,6 +426,9 @@ fn dist_execute(
 /// the target, take the target's version of every package (priority bypassed),
 /// and install core-first, then install-new, then the rest.
 pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome, String> {
+    // Slackware ARM (aarch64) is not supported, by decision: refused before
+    // anything is read or touched. Fail-closed, so only the x86 trees pass.
+    dist_arch_supported(&cfg.arch)?;
     // A little ceremony for the distribution-scale operation on the official tree.
     if config::banner_enabled(&cfg.config_dir) {
         banner::show();
@@ -559,12 +565,40 @@ pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Res
     // a template of the installed packages, so there is always something to fall
     // back on if the upgrade goes wrong. Best-effort: a backup failure warns but
     // does not stop the upgrade.
-    if let Err(e) = dist_backup(cfg) {
-        println!("{}", ui::yellow(&format!("escape-kit backup incomplete: {e} (continuing)")));
-    }
+    let bak_existed = cfg.config_dir.join("blacklist.bak").exists();
+    let kit = match dist_backup(cfg) {
+        Ok(d) => Some(d),
+        Err(e) => {
+            println!(
+                "{}",
+                ui::yellow(&format!(
+                    "escape-kit backup incomplete: {e} (continuing; a stop before the first \
+                     install cannot restore the config files)"
+                ))
+            );
+            None
+        }
+    };
+    // Until the first package is installed, any stop puts the rewritten config
+    // files back from the kit.
+    let restore = |msg: String, after_update: bool| -> String {
+        println!();
+        println!("{}", ui::red("stopping before any package was installed — the system is untouched."));
+        dist_restore(&cfg.config_dir, kit.as_deref(), bak_existed);
+        if after_update {
+            format!(
+                "{msg}\nthe package lists in the cache may now be from the target release: \
+                 run `slacker update` before anything else."
+            )
+        } else {
+            msg
+        }
+    };
 
     // Apply the transform for real.
-    dist_transform(cfg, &running_seg, &target_seg, local_mirror, false)?;
+    if let Err(e) = dist_transform(cfg, &running_seg, &target_seg, local_mirror, false) {
+        return Err(restore(e, false));
+    }
     println!(
         "{}",
         ui::green(&format!("re-pointed mirror/repos to {target_seg}; blacklist backed up + emptied."))
@@ -572,8 +606,10 @@ pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Res
 
     // The repos file changed, so re-read the configuration before doing anything
     // that depends on it (metadata refresh, plan building).
-    let cfg = Config::load_dir(&cfg.config_dir)
-        .map_err(|e| format!("reload config after transform: {e}"))?;
+    let cfg = match Config::load_dir(&cfg.config_dir) {
+        Ok(c) => c,
+        Err(e) => return Err(restore(format!("reload config after transform: {e}"), false)),
+    };
 
     // Refresh metadata for the target release (the cache still holds the old
     // release's PACKAGES.TXT until now). The user already committed at the point
@@ -604,30 +640,48 @@ pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Res
         t.is_empty() || t == "y" || t == "yes" // default YES
     };
     if !proceed {
-        println!(
-            "{}",
-            ui::blue(
-                "aborted — the mirror/repos were already re-pointed; restore from the escape kit \
-                 (printed above) to undo."
-            )
-        );
+        println!("{}", ui::blue("aborted."));
+        dist_restore(&cfg.config_dir, kit.as_deref(), bak_existed);
         return Ok(Outcome::Ok);
     }
-    // Update ALL active repos non-interactively (best-effort: an empty
-    // current/patches printing FAILED must not abort the dist).
+    // Update ALL active repos non-interactively. The official tree and its
+    // patches subtree MUST come back fresh: the plan is built from them, and a
+    // stale list left from the running release (patches outranks slackware)
+    // would be taken as the target. Any other repo failing is only reported.
     let changelog_repo = changelog::changelog_repo(&cfg.repos).map(|r| r.name.clone());
     let mut up = UpdateOutcomes::default();
+    let mut not_fresh: Vec<String> = Vec::new();
     for r in &cfg.repos {
         let track = changelog_repo.as_deref() == Some(r.name.as_str());
-        update_one_repo(&cfg, r, track, &mut up);
+        let fresh = update_one_repo(&cfg, r, track, &mut up);
+        if !fresh && (r.official || (r.subtree && r.url.contains("/patches"))) {
+            not_fresh.push(r.name.clone());
+        }
+    }
+    if !not_fresh.is_empty() {
+        return Err(restore(
+            format!(
+                "the package list of {} could not be refreshed for {target_seg} — \
+                 a distribution upgrade needs the target's lists.",
+                not_fresh.join(", ")
+            ),
+            true,
+        ));
     }
 
     // Build the dist plan against the refreshed cache: the target's version of
     // every installed package (priority bypassed), plus the target's new packages.
-    let db = PkgDb::load(&cfg)?;
-    let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let (critical, upgrades) = dist_upgrade_sets(&db, &installed);
-    let install_new = dist_install_new(&cfg, &db, &installed)?;
+    let plan = (|| -> Result<_, String> {
+        let db = PkgDb::load(&cfg)?;
+        let installed = system::installed_packages(&cfg.pkg_db_dir)?;
+        let (critical, upgrades) = dist_upgrade_sets(&db, &installed);
+        let install_new = dist_install_new(&cfg, &db, &installed)?;
+        Ok((critical, upgrades, install_new))
+    })();
+    let (critical, upgrades, install_new) = match plan {
+        Ok(p) => p,
+        Err(e) => return Err(restore(e, true)),
+    };
 
     let self_upgrade = critical
         .iter()
@@ -646,10 +700,17 @@ pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Res
     );
     // Plan-aware disk pre-flight that STOPS if there is clearly not enough room
     // (safe to re-run: the transform is idempotent).
-    dist_disk_preflight(&cfg, &install_new, &upgrades)?;
+    if let Err(e) = dist_disk_preflight(&cfg, &install_new, &upgrades) {
+        return Err(restore(e, true));
+    }
 
     // Download (staged in batches) + install core-first -> install-new -> rest.
-    let report = dist_execute(&cfg, &critical, &install_new, &upgrades)?;
+    let mut started = false;
+    let report = match dist_execute(&cfg, &critical, &install_new, &upgrades, &mut started) {
+        Ok(r) => r,
+        Err(e) if !started => return Err(restore(e, true)),
+        Err(e) => return Err(e),
+    };
 
     if report.clean() {
         // ---- Phase 3: remove packages no longer in the distribution ----
@@ -671,7 +732,7 @@ pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Res
         let installed2 = system::installed_packages(&cfg.pkg_db_dir)?;
         let (critical2, upgrades2) = dist_upgrade_sets(&db2, &installed2);
         let new2 = dist_install_new(&cfg, &db2, &installed2)?;
-        let _ = dist_execute(&cfg, &critical2, &new2, &upgrades2)?;
+        let _ = dist_execute(&cfg, &critical2, &new2, &upgrades2, &mut true)?;
     } else {
         // Some packages failed to download or install: the system is only
         // partially upgraded. Skip clean-system and the second pass — pruning a
@@ -778,9 +839,9 @@ pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Res
 ///    `generate-template`), written to the normal `templates/` dir AND copied into
 ///    the backup dir — a manifest of what was installed, reusable via
 ///    `install-template`.
-/// Must be called while the repos still point at the running release. Best-effort
-/// at the call site (a failure warns, the upgrade continues).
-fn dist_backup(cfg: &Config) -> Result<(), String> {
+/// Must be called while the repos still point at the running release. Returns the
+/// backup dir once the config files are saved; a template failure only warns.
+fn dist_backup(cfg: &Config) -> Result<std::path::PathBuf, String> {
     let stamp = backup_stamp();
     let dir = cfg.config_dir.join(format!("dist-backup-{stamp}"));
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
@@ -796,30 +857,49 @@ fn dist_backup(cfg: &Config) -> Result<(), String> {
     }
 
     // 2) template of the installed set known to a repo (skip orphans)
-    let db = PkgDb::load(cfg)?;
-    let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    let orphans: HashSet<&str> =
-        db.orphans(&installed).into_iter().map(|p| p.name.as_str()).collect();
-    let names: Vec<String> = installed
-        .iter()
-        .map(|p| p.name.clone())
-        .filter(|n| !orphans.contains(n.as_str()))
-        .collect();
     let tmpl_name = format!("dist-backup-{stamp}");
-    let tmpl_path = template::generate(&cfg.config_dir, &tmpl_name, &names)?;
-    // self-contained kit: also drop the template inside the backup dir
-    let _ = std::fs::copy(&tmpl_path, dir.join(format!("{tmpl_name}.template")));
+    let tmpl = (|| -> Result<usize, String> {
+        let db = PkgDb::load(cfg)?;
+        let installed = system::installed_packages(&cfg.pkg_db_dir)?;
+        let orphans: HashSet<&str> =
+            db.orphans(&installed).into_iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<String> = installed
+            .iter()
+            .map(|p| p.name.clone())
+            .filter(|n| !orphans.contains(n.as_str()))
+            .collect();
+        let tmpl_path = template::generate(&cfg.config_dir, &tmpl_name, &names)?;
+        // self-contained kit: also drop the template inside the backup dir
+        let _ = std::fs::copy(&tmpl_path, dir.join(format!("{tmpl_name}.template")));
+        Ok(names.len())
+    })();
 
-    println!(
-        "{}",
-        ui::green(&format!(
-            "Escape kit saved to {}: configs ({}), template '{}' ({} packages).",
-            dir.display(),
-            saved.join(", "),
-            tmpl_name,
-            names.len()
-        ))
-    );
+    match &tmpl {
+        Ok(n) => println!(
+            "{}",
+            ui::green(&format!(
+                "Escape kit saved to {}: configs ({}), template '{}' ({} packages).",
+                dir.display(),
+                saved.join(", "),
+                tmpl_name,
+                n
+            ))
+        ),
+        Err(e) => {
+            println!(
+                "{}",
+                ui::green(&format!(
+                    "Escape kit saved to {}: configs ({}).",
+                    dir.display(),
+                    saved.join(", ")
+                ))
+            );
+            println!(
+                "{}",
+                ui::yellow(&format!("  template of the installed packages not written: {e}"))
+            );
+        }
+    }
     println!(
         "  {}",
         ui::dim(&format!(
@@ -828,7 +908,48 @@ fn dist_backup(cfg: &Config) -> Result<(), String> {
             cfg.config_dir.display()
         ))
     );
-    Ok(())
+    Ok(dir)
+}
+
+/// Put back the files the transform rewrote (mirrors, repos, blacklist) from the
+/// escape kit, and drop a blacklist.bak that this run created. Used when the
+/// upgrade stops before the first package is installed. Never fails: what could
+/// not be restored is printed.
+fn dist_restore(config_dir: &Path, kit: Option<&Path>, bak_existed: bool) {
+    let Some(kit) = kit else {
+        println!(
+            "{}",
+            ui::red("no escape kit was saved — mirrors, repos and blacklist were NOT restored; fix them by hand.")
+        );
+        return;
+    };
+    let mut restored: Vec<&str> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    for f in ["mirrors", "repos", "blacklist"] {
+        let src = kit.join(f);
+        if !src.exists() {
+            continue;
+        }
+        let dst = config_dir.join(f);
+        let r = refuse_through_symlink(&dst)
+            .and_then(|_| std::fs::copy(&src, &dst).map(|_| ()).map_err(|e| e.to_string()));
+        match r {
+            Ok(()) => restored.push(f),
+            Err(e) => failed.push(format!("{f}: {e}")),
+        }
+    }
+    if !bak_existed && restored.contains(&"blacklist") {
+        let _ = std::fs::remove_file(config_dir.join("blacklist.bak"));
+    }
+    if !restored.is_empty() {
+        println!(
+            "{}",
+            ui::green(&format!("restored from {}: {}", kit.display(), restored.join(", ")))
+        );
+    }
+    for f in &failed {
+        println!("{}", ui::red(&format!("could not restore {f}")));
+    }
 }
 
 /// A sortable, human-readable timestamp for backup names (`YYYYmmdd-HHMMSS`).
@@ -1087,23 +1208,32 @@ fn comment_nonmirror_repos(text: &str) -> (String, Vec<String>) {
     (joined, disabled)
 }
 
-/// Refuse to write through a symlink at `path` (so a planted symlink cannot
-/// redirect a config write elsewhere).
-fn refuse_through_symlink(path: &std::path::Path) -> Result<(), String> {
-    if let Ok(meta) = std::fs::symlink_metadata(path) {
-        if meta.file_type().is_symlink() {
-            return Err(format!(
-                "refusing to write through symlink {}; remove it first",
-                path.display()
-            ));
-        }
+/// upgrade-dist runs only on the x86 trees (x86_64 and 32-bit x86). Slackware
+/// ARM is not supported.
+fn dist_arch_supported(arch: &str) -> Result<(), String> {
+    if crate::is_x86_arch(arch) {
+        Ok(())
+    } else {
+        Err(format!(
+            "upgrade-dist is not supported on {arch} (Slackware ARM). \
+             For -current updates use `slacker upgrade-all`."
+        ))
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upgrade_dist_is_refused_on_arm() {
+        assert!(super::dist_arch_supported("x86_64").is_ok());
+        assert!(super::dist_arch_supported("i686").is_ok());
+        assert!(super::dist_arch_supported("i586").is_ok());
+        let e = super::dist_arch_supported("aarch64").unwrap_err();
+        assert!(e.contains("not supported on aarch64"));
+        assert!(super::dist_arch_supported("arm").is_err());
+    }
 
     #[test]
     fn dist_rewrite_swaps_release_segment() {

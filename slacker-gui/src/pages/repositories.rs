@@ -57,7 +57,16 @@ pub fn page(ctx: &Ctx) -> Page {
 
 fn render(ctx: &Ctx, body: &gtk::Box, r: &Repos) {
     // Summary strip.
-    let strip = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    // A flow box, so the tiles wrap onto two lines in a narrow window instead
+    // of setting how narrow the window may get.
+    let strip = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .homogeneous(true)
+        .min_children_per_line(2)
+        .max_children_per_line(4)
+        .column_spacing(12)
+        .row_spacing(12)
+        .build();
     strip.add_css_class("stat-strip");
     let stat = |value: String, label: &str| {
         let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -69,7 +78,7 @@ fn render(ctx: &Ctx, body: &gtk::Box, r: &Repos) {
         l.add_css_class("stat-label");
         b.append(&v);
         b.append(&l);
-        strip.append(&b);
+        strip.insert(&b, -1);
     };
     stat(r.repos.len().to_string(), "repositories");
     stat(r.tags.len().to_string(), "build-tag rules");

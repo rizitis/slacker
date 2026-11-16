@@ -131,7 +131,7 @@ pub struct Config {
     /// (TERSE, default off).
     pub terse: bool,
     /// What happens when a command leaves new .new config files behind
-    /// (NEWCONFIG_AFTER, default ask).
+    /// (NEWCONFIG_AFTER, default off).
     pub newconfig_after: NewConfigAfter,
     /// `search` lists every package whose name contains the word (SEARCH=partial)
     /// instead of the exact name only (the default).
@@ -218,6 +218,13 @@ impl Repo {
     /// present, otherwise the global default.
     pub fn verify_policy<'a>(&'a self, global: &'a VerifyPolicy) -> &'a VerifyPolicy {
         self.verify.as_ref().unwrap_or(global)
+    }
+
+    /// Should this repo's PACKAGES.TXT be checked against the md5 its
+    /// CHECKSUMS.md5 lists for it? Always, except for a repo the user set to
+    /// `verify=none` (no checking at all, by explicit choice).
+    pub fn checks_packages_txt(&self, global: &VerifyPolicy) -> bool {
+        !matches!(self.verify_policy(global), VerifyPolicy::None)
     }
 }
 
@@ -829,6 +836,13 @@ impl BlacklistRule {
     /// (parent, dep) for a dependency exclusion `!parent:dep`, else None.
     pub fn nodep(&self) -> Option<(&str, &str)> {
         self.nodep.as_ref().map(|(p, d)| (p.as_str(), d.as_str()))
+    }
+
+    /// A freeze rule that needs the repos' package lists to match an installed
+    /// package: a series rule, or an `@repo` one (series and source repo come
+    /// from PACKAGES.TXT, never from the pkgtools record).
+    pub fn needs_package_lists(&self) -> bool {
+        !self.pin && self.nodep.is_none() && (self.series.is_some() || self.repo.is_some())
     }
 
     /// The `@repo` scope of this rule, if any.
@@ -1827,6 +1841,17 @@ mod tests {
     fn blacklist_lines() {
         let b = parse_lines("# skip these\nkernel-generic\n\nkernel-huge # comment\n");
         assert_eq!(b, vec!["kernel-generic", "kernel-huge"]);
+    }
+
+    #[test]
+    fn rules_needing_package_lists() {
+        // series and @repo freezes need PACKAGES.TXT to match an installed package
+        assert!(parse_blacklist_rule("a/").unwrap().needs_package_lists());
+        assert!(parse_blacklist_rule("@alienbob vlc").unwrap().needs_package_lists());
+        // a plain name rule, a pin and a dependency exclusion do not
+        assert!(!parse_blacklist_rule("which").unwrap().needs_package_lists());
+        assert!(!parse_blacklist_rule("@alienbob 100% vlc").unwrap().needs_package_lists());
+        assert!(!parse_blacklist_rule("!foo:bar").unwrap().needs_package_lists());
     }
 
     #[test]

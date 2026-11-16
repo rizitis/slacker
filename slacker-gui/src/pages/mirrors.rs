@@ -241,7 +241,7 @@ fn copy_button(ctx: &Ctx, text: &str) -> gtk::Button {
     let (ctx, text) = (ctx.clone(), text.to_string());
     b.connect_clicked(move |btn| {
         btn.clipboard().set_text(&text);
-        ctx.toast("Copied to the clipboard");
+        ctx.toast_short("Copied to the clipboard");
     });
     b
 }

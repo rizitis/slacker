@@ -23,6 +23,7 @@ pub fn generate(config_dir: &Path, name: &str, pkg_names: &[String]) -> Result<P
     let dir = templates_dir(config_dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     let path = template_path(config_dir, name);
+    crate::refuse_through_symlink(&path)?;
     let mut body = String::new();
     body.push_str(&format!("# slacker template '{name}'\n"));
     for n in pkg_names {
