@@ -1,3 +1,15 @@
+- Update: slacker-cli
+    - probe timeouts (FRESHNESS_TIMEOUT_SECS, PROBE_TIMEOUT_SECS, status
+      Freshness, build_agent) do not cover the connect, which is ureq's 30 s
+- Update: slacker-gui
+    - check-updates runs when the Updates page is opened or refresh is
+      pressed, and not twice at the same time
+    - install-new and upgrade-all do not re-run it (they cannot change it)
+    - after update the page says the lists may have changed instead of
+      checking every repository again
+    - neutral (calm) style for that note
+---
+
 Version Beta 0.14.1
 =====
 - Update: slacker-gui (Version _beta.7)

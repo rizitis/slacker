@@ -49,6 +49,9 @@ fn user_agent() -> String {
 /// Mozilla CA roots bundled (ureq's `tls` feature), so there is no dependency
 /// on a system OpenSSL. Goes through a proxy when PROXY in slacker.conf sets
 /// one for `url` (see `proxy_var` and `proxy_for`).
+/// `timeout` bounds the whole request once connected. It does not shorten the
+/// connect: ureq keeps its own `timeout_connect` (30 s by default) and that one
+/// wins, so a host that does not answer costs 30 s whatever `timeout` says.
 fn build_agent(timeout: Duration, url: &str) -> Result<ureq::Agent, String> {
     let mut b = ureq::AgentBuilder::new().timeout(timeout).user_agent(&user_agent());
     if let Some(p) = proxy_for(url, &proxy_var)? {

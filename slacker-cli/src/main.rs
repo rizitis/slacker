@@ -3296,7 +3296,9 @@ pub(crate) fn is_current_codename(codename: Option<&str>) -> bool {
 /// A mirror lagging upstream by more than this is reported as stale.
 pub(crate) const FRESHNESS_MAX_LAG_SECS: i64 = 48 * 3600;
 
-/// How long to wait on each freshness probe before giving up (fail-open).
+/// How long to wait on each freshness probe, once connected, before giving up
+/// (fail-open). Connecting is not covered: ureq waits up to its own 30 s for
+/// that (see download::build_agent), so a mirror that is down costs 30 s here.
 const FRESHNESS_TIMEOUT_SECS: u64 = 8;
 
 /// Parse the timestamp from a PACKAGES.TXT header line into epoch seconds.
