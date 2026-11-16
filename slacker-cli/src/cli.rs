@@ -154,10 +154,10 @@ pub(crate) enum Cmd {
     NewConfig,
     /// Check every configured repo for pending updates (exit 100 if any).
     CheckUpdates,
-    /// Print a repo's cached ChangeLog.
+    /// Print a repo's ChangeLog, fetched from the repo.
     ///
-    /// With no argument, the official (tracked) repo; name a repo to fetch and
-    /// show that one instead.
+    /// With no argument, the official (tracked) repo; name a repo to show that one
+    /// instead. A cached copy is shown only when the repo cannot be reached.
     ShowChangelog { repo: Option<String> },
     /// Show a chronological log of package changes, newest first.
     ///

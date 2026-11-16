@@ -131,7 +131,7 @@ pub struct Config {
     /// (TERSE, default off).
     pub terse: bool,
     /// What happens when a command leaves new .new config files behind
-    /// (NEWCONFIG_AFTER, default ask).
+    /// (NEWCONFIG_AFTER, default off).
     pub newconfig_after: NewConfigAfter,
     /// `search` lists every package whose name contains the word (SEARCH=partial)
     /// instead of the exact name only (the default).
