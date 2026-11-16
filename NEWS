@@ -54,7 +54,8 @@ Version Beta 0.14.1
     - Remotes: enable or disable each remote. Overview and Checks: warnings,
       end-of-life applications and runtimes, a read-only check of the
       installations, and the data left behind by uninstalled applications.
-- Update: wiki, man page (exit code 2, the meaning of 0/1/20/100, the package-list check, remove SERIES/, series freezes, credentials prefixes, upgrade-dist stop and restore), ARCHITECTURE.md
+- Update: wiki, man page (exit code 2, the meaning of 0/1/20/100, the package-list check,
+      remove SERIES/, series freezes, credentials prefixes, upgrade-dist stop and restore), ARCHITECTURE.md
 - Update: scripts/
     - Add: check-msrv.sh (SlackBuild use it now before build)
 ---
