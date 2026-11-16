@@ -1,3 +1,19 @@
+- Update: slacker-flatpak
+    - Overview: "Data of uninstalled applications" now runs
+      `flatpak uninstall --delete-data` in the transaction window; flatpak
+      finds the unowned data and asks [y/n] for each. Our own scan, sizes
+      and delete are removed.
+    - Overview: "Repair..." for the user installation runs
+      `flatpak repair --user` after a confirmation dialog (repair asks
+      nothing itself). System repair stays a terminal command: without
+      root flatpak turns it into --dry-run.
+    - txn::Spec gains `confirmed`, so Stop warns as after a yes when the
+      user already agreed in our dialog.
+    - Installed: "Largest first" switch, ordered by the size flatpak
+      lists for each ref. No total: runtimes share files.
+    - A refresh asked for while one is running now runs again after it.
+    - Fix doc comments placed above the wrong functions.
+    - DESIGN.md updated.
 - Update: slacker-cli
     - probe timeouts (FRESHNESS_TIMEOUT_SECS, PROBE_TIMEOUT_SECS, status
       Freshness, build_agent) do not cover the connect, which is ureq's 30 s
