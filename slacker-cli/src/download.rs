@@ -294,12 +294,23 @@ pub fn set_auth(registry: Vec<(String, String)>) {
     }
 }
 
+/// Does a credential `prefix` cover `url`? Only at a boundary: the URL is the
+/// prefix itself, the prefix ends in `/`, or the URL goes on with `/`. So
+/// `https://repo.example.com` never covers `https://repo.example.com.evil.net/`
+/// (another host) and `.../rizitis` never covers `.../rizitis2/`.
+fn prefix_covers(prefix: &str, url: &str) -> bool {
+    match url.strip_prefix(prefix) {
+        Some(rest) => rest.is_empty() || prefix.ends_with('/') || rest.starts_with('/'),
+        None => false,
+    }
+}
+
 /// The `Authorization` header for a URL, if a credential rule matches. Longest
 /// prefix wins, so a specific repo rule beats a broader catalog prefix.
 fn auth_for(url: &str) -> Option<String> {
     let reg = AUTH_REGISTRY.read().ok()?;
     reg.iter()
-        .filter(|(prefix, _)| url.starts_with(prefix.as_str()))
+        .filter(|(prefix, _)| prefix_covers(prefix, url))
         .max_by_key(|(prefix, _)| prefix.len())
         .map(|(_, header)| header.clone())
 }
@@ -692,6 +703,25 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credentials_only_cover_their_own_url() {
+        let p = "https://repo.example.com";
+        assert!(prefix_covers(p, "https://repo.example.com"));
+        assert!(prefix_covers(p, "https://repo.example.com/x/PACKAGES.TXT"));
+        // another host, or the same text going on
+        assert!(!prefix_covers(p, "https://repo.example.com.evil.net/PACKAGES.TXT"));
+        assert!(!prefix_covers(p, "https://repo.example.com@evil.net/PACKAGES.TXT"));
+        assert!(!prefix_covers(p, "https://repo.example.com:8443/PACKAGES.TXT"));
+        let f = "https://forge.slackware.nl/rizitis";
+        assert!(prefix_covers(f, "https://forge.slackware.nl/rizitis/repo/PACKAGES.TXT"));
+        assert!(!prefix_covers(f, "https://forge.slackware.nl/rizitis2/PACKAGES.TXT"));
+        // a prefix that ends in `/`
+        assert!(prefix_covers("https://host/repo/", "https://host/repo/PACKAGES.TXT"));
+        assert!(!prefix_covers("https://host/repo/", "https://host/repo-other/PACKAGES.TXT"));
+        assert!(!prefix_covers("https://host/repo", "https://host/repo-other/PACKAGES.TXT"));
+        assert!(!prefix_covers("https://host/repo", "http://host/repo/PACKAGES.TXT"));
+    }
     use std::io::Write;
 
     fn env_of<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {

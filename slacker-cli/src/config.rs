@@ -838,6 +838,13 @@ impl BlacklistRule {
         self.nodep.as_ref().map(|(p, d)| (p.as_str(), d.as_str()))
     }
 
+    /// A freeze rule that needs the repos' package lists to match an installed
+    /// package: a series rule, or an `@repo` one (series and source repo come
+    /// from PACKAGES.TXT, never from the pkgtools record).
+    pub fn needs_package_lists(&self) -> bool {
+        !self.pin && self.nodep.is_none() && (self.series.is_some() || self.repo.is_some())
+    }
+
     /// The `@repo` scope of this rule, if any.
     pub fn repo(&self) -> Option<&str> {
         self.repo.as_deref()
@@ -1834,6 +1841,17 @@ mod tests {
     fn blacklist_lines() {
         let b = parse_lines("# skip these\nkernel-generic\n\nkernel-huge # comment\n");
         assert_eq!(b, vec!["kernel-generic", "kernel-huge"]);
+    }
+
+    #[test]
+    fn rules_needing_package_lists() {
+        // series and @repo freezes need PACKAGES.TXT to match an installed package
+        assert!(parse_blacklist_rule("a/").unwrap().needs_package_lists());
+        assert!(parse_blacklist_rule("@alienbob vlc").unwrap().needs_package_lists());
+        // a plain name rule, a pin and a dependency exclusion do not
+        assert!(!parse_blacklist_rule("which").unwrap().needs_package_lists());
+        assert!(!parse_blacklist_rule("@alienbob 100% vlc").unwrap().needs_package_lists());
+        assert!(!parse_blacklist_rule("!foo:bar").unwrap().needs_package_lists());
     }
 
     #[test]

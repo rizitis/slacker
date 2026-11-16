@@ -33,6 +33,12 @@ Version Beta 0.14.1
     - Fix bug (security): update now checks PACKAGES.TXT against the md5 its signed CHECKSUMS.md5 lists for it, and keeps the old metadata if they differ (a mirror mid-sync or a stale cached copy). Before, such a list was accepted and upgrade-all could offer every package at an older version.
     - installs and upgrades are refused while a repo's cached PACKAGES.TXT does not match its CHECKSUMS.md5 (no --yes override); status shows it under Metadata, and update fetches it again.
     - Fix: upgrade-dist on arm-aarch is unsupported, make sure it will print correct message and stop action.
+    - CMD `slacker remove`: `remove SERIES/` (with the trailing /, e.g. `remove kde/`) removes the installed official packages of that series of the official tree. A series that does not exist there is an error; without the / the word is matched as before.
+    - Fix bug: `remove` ignored a `series/` freeze, and a series rule froze a same-named package from another repo (e.g. `which` from SBo/ponce with `a/` in the blacklist). Only an official build (no tag or _slackNN) is in a series now; clean-system and remove follow it.
+    - Fix bug (security): commands that write a config file (frozen, unfrozen, pin, unpin, nodep, undep, add-repo, del-repo, pri-repo, add-tag, del-tag, generate-template) refuse to write through a symlink, as upgrade-dist already did.
+    - Fix bug (security): a credentials prefix covers a URL only up to a whole path segment; before, [https://lab] also sent the login to https://lab.evil and [.../repo] to [.../repo-other/].
+    - CMD `slacker unfrozen` with no argument lists the rules and exits 0, as unpin does (it exited 1).
+    - Fix bug: upgrade-dist went on when the target's package lists could not be fetched, built the plan from the old release's lists and reported "complete". Now it stops when the official repo or its patches subtree cannot be refreshed, and any stop before the first package is installed puts mirrors, repos and blacklist back from the escape kit.
 - Add: slacker-flatpak (Version 0.6.0, experimental)
     - a separate GTK4/libadwaita front-end for Flatpak, for your user's and the
       system-wide installation. It runs flatpak as your user, never as root;
@@ -48,7 +54,7 @@ Version Beta 0.14.1
     - Remotes: enable or disable each remote. Overview and Checks: warnings,
       end-of-life applications and runtimes, a read-only check of the
       installations, and the data left behind by uninstalled applications.
-- Update: wiki
+- Update: wiki, man page (exit code 2, the meaning of 0/1/20/100, the package-list check, remove SERIES/, series freezes, credentials prefixes, upgrade-dist stop and restore), ARCHITECTURE.md
 - Update: scripts/
     - Add: check-msrv.sh (SlackBuild use it now before build)
 ---

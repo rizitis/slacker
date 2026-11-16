@@ -151,6 +151,26 @@ impl PkgDb {
         self.all.iter().find(|p| p.id.name == name).map(|p| p.series.as_str())
     }
 
+    /// Is this a series (directory) of the official tree? Only the official
+    /// repo has series (a, ap, kde, ...).
+    pub fn has_series(&self, series: &str) -> bool {
+        self.all.iter().any(|p| self.is_official_repo(&p.repo) && p.series == series)
+    }
+
+    /// The series of an INSTALLED package. Only the official tree has series,
+    /// so only an official build has one: the series the official repo gives
+    /// that name. A third-party or SBo build of the same name (a tagged build)
+    /// has none, so `a/` never takes or freezes a non-official `which`.
+    pub fn series_of_installed(&self, inst: &PkgId) -> Option<&str> {
+        if !inst.is_official_build() {
+            return None;
+        }
+        self.all
+            .iter()
+            .find(|p| self.is_official_repo(&p.repo) && p.id.name == inst.name)
+            .map(|p| p.series.as_str())
+    }
+
     /// Which repo a (non-empty) build tag belongs to: the repo shipping the
     /// most packages with that exact tag (a tie goes to the higher priority).
     /// Not "the first repo found": a tag can be shared, e.g. Slackware's extra/
@@ -1474,6 +1494,37 @@ mod series_match_tests {
             ],
             &[("slackware", 100), ("alienbob", 10)],
         )
+    }
+
+    #[test]
+    fn only_official_builds_have_a_series() {
+        let mut priority = HashMap::new();
+        priority.insert("slackware".to_string(), 100);
+        priority.insert("patches".to_string(), 200);
+        priority.insert("ponce".to_string(), 50);
+        let db = PkgDb {
+            all: vec![
+                av("which-2.25-x86_64-2", "slackware", "a"),
+                av("bash-5.3-x86_64-1", "slackware", "a"),
+                av("openssl-3.5-x86_64-1", "slackware", "n"),
+                av("openssl-3.5-x86_64-2_slack15.0", "patches", "packages"),
+                av("which-2.26-x86_64-1_SBo", "ponce", "system"),
+            ],
+            priority,
+            official_priority: Some(100),
+            pins: HashMap::new(),
+        };
+        let p = |s: &str| PkgId::parse(s).unwrap();
+        // the official build: series a
+        assert_eq!(db.series_of_installed(&p("which-2.25-x86_64-2")), Some("a"));
+        // a stable patch keeps the official series, not patches/'s directory
+        assert_eq!(db.series_of_installed(&p("openssl-3.5-x86_64-2_slack15.0")), Some("n"));
+        // an SBo/ponce build of the same name: no series
+        assert_eq!(db.series_of_installed(&p("which-2.25-x86_64-1_SBo")), None);
+        // only the official tree has series
+        assert!(db.has_series("a"));
+        assert!(!db.has_series("system"));
+        assert!(!db.has_series("packages"));
     }
 
     #[test]

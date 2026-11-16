@@ -1,6 +1,6 @@
 # slacker: code structure, rules and refactor history
 
-Last updated: 12 Nov 2026. Covers `slacker-cli` 0.14.1, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
+Last updated: 16 Nov 2026. Covers `slacker-cli` 0.14.1, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
 
 This document is for anyone, human or AI, opening the code for the first time. It says **what lives where, why it lives there, and what must not change**. If anything here disagrees with the code, the code wins and this document gets fixed.
 
@@ -69,7 +69,7 @@ Order inside `run()` (in `main.rs`):
 6. For commands that modify the system or the cache (`requires_privilege`): root is required (membership in `wheel` only changes the error message), plus the exclusive lock. Read-only commands also run as a normal user.
 7. Dispatch: one `match` that calls the command's `cmd_*`.
 
-**Exit codes** (`enum Outcome`): `0` Ok, `20` NothingFound, `50` SelfUpgrade (slacker upgraded itself, run it again), `100` Pending (check-updates found updates), `1` error. `slacker-gui` and scripts may depend on these: **they do not change**.
+**Exit codes** (`enum Outcome`): `0` Ok, `20` NothingFound, `50` SelfUpgrade (slacker upgraded itself, run it again), `100` Pending (check-updates found updates), `1` error. `2` comes from clap (unknown command or option) and from the shell-glob refusal in `clap_error_exit`. `slacker-gui` and scripts may depend on these: **they do not change**.
 
 Global flags (all commands): `--config-dir`, `-y/--yes`, `--dry-run`, `--no-deps`.
 
@@ -81,7 +81,7 @@ Global flags (all commands): `--config-dir`, `-y/--yes`, `--dry-run`, `--no-deps
 
 | file | lines | contents |
 |---|---|---|
-| `main.rs` | 4,338 | entry point (`main`, `run`, `Outcome`, lock, privilege checks, `migrate_state`) **and the shared core** (see 5.3), with its tests |
+| `main.rs` | 4,440 | entry point (`main`, `run`, `Outcome`, lock, privilege checks, `migrate_state`) **and the shared core** (see 5.3), with its tests |
 | `cli.rs` | 271 | `Cli`, `Cmd` (every command, clap derive), `HELP_STYLES`. The first paragraph of each doc comment is the short help line; the whole doc comment is `<cmd> --help`. |
 | `commands.rs` | 15 | declares the `commands/` modules |
 
@@ -102,7 +102,7 @@ Each file holds the `pub(crate) fn cmd_*` of one group of commands, plus the hel
 | `new_config.rs` | new-config | writes into `/etc`. `PROTECTED_CONFIGS` (passwd, shadow, group, rc.inet1.conf, rc.local, rc.local_shutdown) are never replaced by the menu or by a glob. The `NEWCONFIG_*` rules (`preset_for`, `apply_presets`, `glob_match`) run before the menu; `preset_key` names the rule for a file, for the list the package commands print. |
 | `update.rs` | update, update gpg | the per-repo processing (`update_one_repo`) is in the core |
 | `status.rs` | status, list-repos, check-updates | `status` is the setup doctor |
-| `upgrade_dist.rs` | upgrade-dist | the most dangerous one. Phases: escape kit -> transform -> update -> core (serial, with a package-database check) -> install-new -> the rest in batches -> clean-system -> second pass -> new-config -> status. |
+| `upgrade_dist.rs` | upgrade-dist | the most dangerous one. Phases: escape kit -> transform -> update -> core (serial, with a package-database check) -> install-new -> the rest in batches -> clean-system -> second pass -> new-config -> status. The official repo and its patches subtree must refresh (`update_one_repo` returns whether the list is fresh); any stop before the first install puts `mirrors`, `repos`, `blacklist` back from the escape kit (`dist_restore`; `dist_execute` sets `started` before the first install). |
 | `install.rs` | install, upgrade, reinstall, remove, download, upgrade-all, install-new | the resolver they use is in the core. `report_pending_configs` (also called by install-template and revert-pkg) lists the `.new` files a run left and, with `NEWCONFIG_AFTER`, asks to run new-config or runs it (`after_configs`). `pending_configs` takes the `.new` files and their stamps before the packages are applied; `is_fresh_config` tells which ones this run wrote. |
 
 ### 5.3 The shared core (stays in `main.rs`, on purpose)
@@ -113,10 +113,10 @@ Used by several groups at once (package commands, upgrade-dist, install-template
 - **Install order:** `upgrade_order` (called at the end of `expand_with_deps`, so the plan table shows the order packages are installed in), `UPGRADE_FIRST`, `upgrade_last` (also used by upgrade-dist).
 - **Plans and tables:** `PlanItem`, `InstallAction`, `PlanRow`, `print_table`, `show_plan`, `print_plan`, `report_pinned_in_plan`, `hint_freeze_pin`, `note_optional_suggests`, conflicts (`detect_conflicts`, `report_conflicts`, `confirm_conflicts`).
 - **Execution:** `execute_plan`, `install_counter` (`[ 37/245 ] upgrading ...`), `parallel_fetch` (with the live download line: `live_line`, `DlLive`, `term_width`, `DL_TICK`, `DL_STALL`, `DL_ANNOUNCE`), `fetch_and_verify`/`fetch_and_verify_metered`, `package_dest`, `DlItem`, `summarize_outcomes`, `report_batch_failures`, `enforce_release_match`, `enforce_arch_match`, kernel and perl reminders.
-- **Package selection:** `collect`, `collect_prefers`, `validate_selector`, `reject_mixed_selectors`, `guard_shell_expansion`, `closest`, `edit_distance`, `at_prefix_hint`, `parse_selection`, `bl_installed`, `priority_display`, `installed_source_label`.
+- **Package selection:** `collect`, `collect_prefers`, `validate_selector`, `reject_mixed_selectors`, `guard_shell_expansion`, `closest`, `edit_distance`, `at_prefix_hint`, `parse_selection`, `bl_installed` (a series only for an official build: `PkgDb::series_of_installed`), `priority_display`, `installed_source_label`.
 - **Repos:** `update_one_repo`, `UpdateOutcomes`, `malicious_filename_count`, `vet_repo`, `apply_vet`, `reload_repo`, `warn_unverified_repos`, `unverified_repo_names`.
 - **Release/arch/mirrors:** `slackware_dir`, `is_current_codename`, `repo_release_token`, `system_release`, `arch_family`, `arch_compatible`, `is_x86_arch`, `osuosl_tree_prefix`, `parse_packages_date`, `mirror_is_stale`, `humanize_lag`, `FRESHNESS_*`.
-- **Misc:** `confirm`, `hilite_keys`, `is_foundational`, `in_graphical_session`, `migrate_state`.
+- **Misc:** `confirm`, `hilite_keys`, `is_foundational`, `in_graphical_session`, `migrate_state`, `refuse_through_symlink` (every config write).
 
 ### 5.4 Helper modules (`src/*.rs`, other than `main`/`cli`/`commands`)
 
@@ -131,7 +131,7 @@ Mostly pure logic and system integration. They know nothing about commands.
 | `system.rs` | the live system: installed packages, os-release, pkgtools calls (argv only, never `sh -c`; `--terse` first when `TERSE=on`) |
 | `download.rs` | downloads (http/https/file), size limits, md5/sha256, HTTP auth; `Meter`, the byte count of a running download that `parallel_fetch` shows; the proxy (`set_proxy`, `proxy_var`, `proxy_for`, `no_proxy_matches`, `describe_proxy` for `status`) |
 | `gpg.rs` | private keyring, TOFU pinning of every fingerprint, signature checks |
-| `credentials.rs` | HTTP Basic (zypper-style): `credentials.d/`, `credentials.cat`, root:0600 only, https only |
+| `credentials.rs` | HTTP Basic (zypper-style): `credentials.d/`, `credentials.cat`, root:0600 only, https only. The prefix match is in `download.rs` (`prefix_covers`: whole path segments only) |
 | `changelog.rs` | ChangeLog.txt, check-updates |
 | `history.rs` | the package change log (pure) |
 | `revert.rs` | pure helpers for revert-pkg |
@@ -168,7 +168,7 @@ Mostly pure logic and system integration. They know nothing about commands.
 - **Path traversal:** `is_safe_filename` / `is_safe_location`. A repo advertising a suspicious package name -> hard quarantine.
 - **Size limits:** metadata 512 MiB, package 8 GiB.
 - **Never `sh -c`.** Every external call uses argv.
-- **Never write through a symlink** for config files and download destinations.
+- **Never write through a symlink** for config files and download destinations (`refuse_through_symlink` before every config write).
 - **Credentials over https only**, files root:0600 only.
 - **Proxy, off by default.** Unset or `PROXY=off`: direct, and the environment's proxy variables are ignored, so an environment kept through sudo cannot route root's downloads. `PROXY=http://...` uses that proxy for every http and https download; `PROXY=env` takes `https_proxy`/`http_proxy`/`all_proxy`/`no_proxy` from the environment (lowercase, then uppercase, as wget and curl). `NO_PROXY` replaces the environment's `no_proxy`. Only http:// proxies: https goes through them as a CONNECT tunnel, so TLS and the certificate check still run end to end with the mirror. A proxy of another kind is an error, never a silent direct connection. ureq's own `try_proxy_from_env` is not used: one variable for every scheme and no `no_proxy`.
 - **The proxy password goes only to the proxy**, in the CONNECT that ureq sends for an https URL. **Never add a `Proxy-Authorization` header to a request:** ureq keeps custom headers across redirects (it drops only `Authorization`, `Cookie` and `Content-Length`), so a mirror, or anyone on a plain-http path, could redirect to a host of its choosing and receive the password inside the tunnel. An earlier draft did this for http mirrors; it was removed before release. Consequence: an http mirror behind a proxy that asks for a password fails (407); use https. Passwords never appear in messages or in `status` (`hide_password`).
@@ -274,15 +274,15 @@ The 0.12.x line is no longer maintained, so there is no normal branch to keep in
 
 The first change after the refactor was the plan label (see 7). The second was issue #11 (source attribution and `remove @repo`, see 7), with 2 tests. The third was `BANNER` (issue #12, see 4), with 1 test. The fourth was the dependency exclusion (see 7), with 4 tests. The fifth was the download progress line (issue #14, see 7), with 2 tests. These five are 0.13.0.
 
-0.14.0 added, each with its tests: "Preparing the plan" with the parallel, cached `.dep` reading, and the official tree no longer asked for `.dep`; `TERSE` and the install counter; the install order of UPGRADE.TXT with the kernel last, in every plan and in upgrade-dist; the `NEWCONFIG_*` rules of new-config; `NEWCONFIG_AFTER`, and `NEWCONFIG_KEEP` in upgrade-dist; the proxy (`PROXY`/`NO_PROXY`, off by default, with a `Proxy` line in `status`); `search --partial` and `SEARCH` (issue #22); and clean-system keeping the `make-kernel-backup` kernel (all see 7). 0.14.1: `rusqlite` 0.42 (MSRV 1.89), upgrade-dist refused on aarch64, and the no-match hint of `search` naming `--partial`. Every new key defaults to the behaviour from before it existed. After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
+0.14.0 added, each with its tests: "Preparing the plan" with the parallel, cached `.dep` reading, and the official tree no longer asked for `.dep`; `TERSE` and the install counter; the install order of UPGRADE.TXT with the kernel last, in every plan and in upgrade-dist; the `NEWCONFIG_*` rules of new-config; `NEWCONFIG_AFTER`, and `NEWCONFIG_KEEP` in upgrade-dist; the proxy (`PROXY`/`NO_PROXY`, off by default, with a `Proxy` line in `status`); `search --partial` and `SEARCH` (issue #22); and clean-system keeping the `make-kernel-backup` kernel (all see 7). 0.14.1: update checks PACKAGES.TXT against CHECKSUMS.md5 and keeps the old metadata on a mismatch, and every plan is refused while a cached list does not match (`enforce_package_list`, no `--yes` override); the `status` Freshness fix; upgrade-dist refused on aarch64. Then (16 Nov 2026): `remove series/` and `remove` honouring `series/` and `@repo` freezes (`PkgDb::has_series`, `series_of_installed`, `BlacklistRule::needs_package_lists`); config writes refuse a symlink (`refuse_through_symlink`, moved to `main.rs`); credential prefixes match whole path segments only (`prefix_covers`); `unfrozen` with no argument lists the rules and exits 0; upgrade-dist stops when the official repo or its patches subtree cannot be refreshed, and any stop before the first install restores `mirrors`, `repos`, `blacklist` from the escape kit (`dist_restore`). Every new key defaults to the behaviour from before it existed. After any change: `cargo build --release --locked` with no warnings, `cargo test --release --locked`, and the checks the SlackBuild runs (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Before a release: a run on a real system by the maintainer.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **253 passed, 1 ignored** (254 in total).
-- Per file: `main.rs` 50, `config.rs` 38, `pkgdb.rs` 35, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (one ignored: a live TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 5, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, and one each in `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
-- Test modules in `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (with the `av()` and `fixture()` fixtures), `freshness_tests`, `foundational_tests`.
+- `cargo test`: **261 passed, 1 ignored** (262 in total).
+- Per file: `main.rs` 51, `config.rs` 39, `pkgdb.rs` 36, `repo.rs` 15, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 9 (one ignored: a live TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 7, `system.rs` 5, `commands/upgrade_dist.rs` 5, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, and one each in `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
+- Test modules in `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (with the `av()` and `fixture()` fixtures), `freshness_tests`, `foundational_tests`, `symlink_guard_tests`.
 
 ---
 
