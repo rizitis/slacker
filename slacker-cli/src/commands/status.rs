@@ -3,7 +3,7 @@
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{
-    arch_family, bl_installed, current_uid, humanize_lag, migrate_state, mirror_is_stale,
+    arch_family, bl_installed, current_uid, humanize_lag, migrate_state,
     osuosl_tree_prefix, parse_packages_date, repo_release_token, system_release,
     unverified_repo_names, warn_unverified_repos, Outcome, FRESHNESS_TIMEOUT_SECS,
 };
@@ -810,14 +810,20 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
             .ok()
             .and_then(|l| parse_packages_date(&l));
         match (up, mine) {
-            (Some(up), Some(mine)) if mirror_is_stale(up, mine) => srow(
-                &warn,
-                "Freshness",
-                &ui::yellow(&format!(
-                    "your mirror is {} behind upstream — run `slacker find-mirror`",
-                    humanize_lag(up - mine)
-                )),
-            ),
+            (Some(up), Some(mine)) if up != mine => {
+                let d = (up - mine).abs();
+                let lag = if d < 60 {
+                    "under 1m".to_string()
+                } else {
+                    humanize_lag(d)
+                };
+                let msg = if up > mine {
+                    format!("your mirror is {lag} behind upstream — run `slacker find-mirror`")
+                } else {
+                    format!("your mirror is {lag} ahead of upstream (unexpected) — run `slacker find-mirror`")
+                };
+                srow(&warn, "Freshness", &ui::yellow(&msg))
+            }
             (Some(_), Some(_)) => {
                 srow(&ok, "Freshness", &ui::dim("mirror is in sync with upstream"))
             }

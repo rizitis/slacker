@@ -1383,6 +1383,20 @@ fn print_plan(plan: &[PlanItem]) {
 /// not a safe basename. This is the second line of defence behind the parser
 /// filter: even if a path-like filename ever reached here, slacker (as root)
 /// must never write or install through it.
+/// Refuse to write through a symlink at `path` (so a planted symlink cannot
+/// redirect a config write elsewhere).
+pub(crate) fn refuse_through_symlink(path: &std::path::Path) -> Result<(), String> {
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to write through symlink {}; remove it first",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn package_dest(cfg: &Config, repo: &str, filename: &str) -> Result<std::path::PathBuf, String> {
     if !pkg::is_safe_filename(filename) {
         return Err(format!(
@@ -2782,12 +2796,12 @@ fn priority_display(prio: i32) -> String {
 // packages, where there is no candidate to fall through to.
 
 /// Is an installed package blacklisted (frozen)? Matched against its full id,
-/// the series looked up from the db, and its source repo — the official repo
-/// for an empty build tag, otherwise the repo it came from (`repo_for_installed`).
-/// `db` may be None when a command hasn't loaded it; then only plain regex rules
-/// can match.
+/// its official series (`series_of_installed`; none for a non-official build)
+/// and its source repo — the official repo for an empty build tag, otherwise
+/// the repo it came from (`repo_for_installed`). `db` may be None when a
+/// command hasn't loaded it; then only plain regex rules can match.
 fn bl_installed(cfg: &Config, db: Option<&PkgDb>, i: &pkg::PkgId) -> bool {
-    let series = db.and_then(|d| d.series_of(&i.name));
+    let series = db.and_then(|d| d.series_of_installed(i));
     let tag = i.build_tag();
     let repo = if tag.is_empty() {
         cfg.official_repo_name()
@@ -2858,12 +2872,15 @@ struct UpdateOutcomes {
     inconsistent: Vec<String>,
 }
 
+/// Refresh one repo's metadata. Returns true when the repo ended up with a
+/// fresh, usable package list; false on any failure (the reason is printed and,
+/// where it applies, recorded in `out`).
 fn update_one_repo(
     cfg: &Config,
     r: &config::Repo,
     track_changelog: bool,
     out: &mut UpdateOutcomes,
-) {
+) -> bool {
     println!("{}", ui::blue(&format!("Updating '{}' (priority {}):", r.name, r.priority)));
 
     // Has this repo already been accepted (vetted, or trusted by the user)? An
@@ -2878,7 +2895,7 @@ fn update_one_repo(
             // update tries again. Not a reason to freeze the repo.
             println!("{}", ui::red(&format!("  FAILED: {e}")));
             out.inconsistent.push(r.name.clone());
-            return;
+            return false;
         }
         if trusted {
             // Established repo: most likely a transient network problem.
@@ -2904,7 +2921,7 @@ fn update_one_repo(
             );
             out.soft_frozen.push(r.name.clone());
         }
-        return;
+        return false;
     }
 
     // A repo advertising path-traversal filenames is malicious — HARD-freeze it
@@ -2926,7 +2943,7 @@ fn update_one_repo(
             ))
         );
         out.hard_frozen.push(r.name.clone());
-        return;
+        return false;
     }
 
     // Reachable and not malicious: clear any prior (soft) quarantine and trust
@@ -2962,7 +2979,7 @@ fn update_one_repo(
                 println!("{}", ui::red(&format!("  GPG: {m}")));
                 println!("{}", ui::red(&format!("  '{}' has been FROZEN (possible tampering).", r.name)));
                 out.hard_frozen.push(r.name.clone());
-                return;
+                return false;
             }
             Err(gpg::ImportError::Other(m)) => {
                 if requires_gpg {
@@ -2970,7 +2987,7 @@ fn update_one_repo(
                     println!("{}", ui::red("  this repo's metadata was discarded and will NOT be used."));
                     repo::invalidate_metadata(r, &cfg.cache_dir);
                     out.failed_verify.push(r.name.clone());
-                    return;
+                    return false;
                 }
                 // best-effort: couldn't (re-)fetch the key; if we already have it
                 // in the keyring, verification below still works, else md5.
@@ -2986,9 +3003,9 @@ fn update_one_repo(
                     println!("{}", ui::red("  GPG: required signature is missing — this repo will NOT be used."));
                     repo::invalidate_metadata(r, &cfg.cache_dir);
                     out.failed_verify.push(r.name.clone());
-                } else {
-                    println!("  {}", ui::dim("GPG: no signature provided (skipped)"));
+                    return false;
                 }
+                println!("  {}", ui::dim("GPG: no signature provided (skipped)"));
             }
             Ok(gpg::Verify::Tampered(m)) => {
                 // Bad signature / key-substitution: hostile regardless of policy.
@@ -3002,27 +3019,30 @@ fn update_one_repo(
                 println!("{}", ui::red(&format!("  GPG: {m}")));
                 println!("{}", ui::red(&format!("  '{}' has been FROZEN (possible tampering).", r.name)));
                 out.hard_frozen.push(r.name.clone());
+                return false;
             }
             Ok(gpg::Verify::Unverifiable(m)) => {
                 if requires_gpg {
                     println!("{}", ui::red(&format!("  GPG: {m} — this repo will NOT be used.")));
                     repo::invalidate_metadata(r, &cfg.cache_dir);
                     out.failed_verify.push(r.name.clone());
-                } else {
-                    // Can't authenticate, but not proven hostile: fall back to md5.
-                    println!("  {}", ui::dim(&format!("GPG: {m} — using md5")));
+                    return false;
                 }
+                // Can't authenticate, but not proven hostile: fall back to md5.
+                println!("  {}", ui::dim(&format!("GPG: {m} — using md5")));
             }
             Err(e) => {
                 // gpg itself failed to run — treat as a verification failure.
                 println!("{}", ui::red(&format!("  GPG: {e}")));
                 repo::invalidate_metadata(r, &cfg.cache_dir);
                 out.failed_verify.push(r.name.clone());
+                return false;
             }
         }
     } else {
         println!("  {}", ui::dim("GPG: skipped (verify policy)"));
     }
+    true
 }
 
 /// Count how many `PACKAGE NAME:` entries in a repo's cached PACKAGES.TXT carry
@@ -4393,5 +4413,28 @@ mod foundational_tests {
         ] {
             assert!(!is_display_socket(path), "should not be a display socket: {path}");
         }
+    }
+}
+
+#[cfg(test)]
+mod symlink_guard_tests {
+    use super::refuse_through_symlink;
+
+    #[test]
+    fn config_writes_refuse_a_symlink_only() {
+        let dir = std::env::temp_dir().join(format!("slacker-symlink-guard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("blacklist");
+        let link = dir.join("blacklist-link");
+        let dangling = dir.join("dangling");
+        std::fs::write(&real, "x\n").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        std::os::unix::fs::symlink(dir.join("nothing-here"), &dangling).unwrap();
+        assert!(refuse_through_symlink(&real).is_ok()); // a regular file
+        assert!(refuse_through_symlink(&dir.join("new-file")).is_ok()); // not there yet
+        assert!(refuse_through_symlink(&link).is_err());
+        assert!(refuse_through_symlink(&dangling).is_err()); // even a dangling one
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

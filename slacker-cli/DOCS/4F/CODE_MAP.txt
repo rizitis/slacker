@@ -226,6 +226,10 @@ This is where most behavioural bugs live — read carefully before changing.
   series_of / repo_for_tag   look up an installed package's series and source
                    repo (used to evaluate `series/` and `@repo` blacklist rules
                    against installed packages, which carry no series themselves)
+  series_of_installed / has_series   the series of an INSTALLED package (only an
+                   official build, tagless or _slackNN, has one: the one the
+                   official repo gives that name) and whether the official tree
+                   has a series at all; used by bl_installed and `remove set/`
   newly_added      HISTORICAL (#[allow(dead_code)]): the old .prev-diff for
                    install-new; the command now offers every not-installed name
                    its repos provide (see cmd_install_new)
@@ -264,7 +268,8 @@ The only module that talks to the network (via ureq + rustls).
   set_auth         install/replace the credential registry (called from run(),
                    and again after add-repo rewrites repos so the new repo's
                    credentials apply when it is vetted)
-  auth_for         longest-prefix match of a URL against the registry
+  auth_for         longest-prefix match of a URL against the registry; a prefix
+                   covers a URL only up to a whole path segment (prefix_covers)
   with_auth        attach the matching Authorization header to a request
   get_bytes        fetch a URL into memory (used for keys, .dep, small files)
   download_to      stream a URL to a destination path

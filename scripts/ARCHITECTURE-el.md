@@ -1,6 +1,6 @@
 # slacker: δομή του κώδικα, κανόνες και ιστορικό του refactor
 
-Τελευταία ενημέρωση: 12 Νοε 2026. Αφορά το `slacker-cli` 0.14.1, τον κώδικα μετά το refactor (βήματα 1–14) και τις αλλαγές που έγιναν πάνω του από τότε (βλ. 8.5). Συντηρητής: Ioannis Anagnostakis (`rizitis`).
+Τελευταία ενημέρωση: 16 Νοε 2026. Αφορά το `slacker-cli` 0.14.1, τον κώδικα μετά το refactor (βήματα 1–14) και τις αλλαγές που έγιναν πάνω του από τότε (βλ. 8.5). Συντηρητής: Ioannis Anagnostakis (`rizitis`).
 
 Το έγγραφο απευθύνεται σε όποιον (άνθρωπο ή AI) πιάνει τον κώδικα για πρώτη φορά. Λέει **τι είναι πού, γιατί είναι εκεί, και τι δεν αλλάζει**. Αν κάτι εδώ διαφωνεί με τον κώδικα, ισχύει ο κώδικας, και διορθώνεται το έγγραφο.
 
@@ -69,7 +69,7 @@ slacker/
 6. Για όσες εντολές αλλάζουν το σύστημα ή το cache (`requires_privilege`): απαιτείται root (το `wheel` αλλάζει μόνο το μήνυμα σφάλματος), και αποκλειστικό lock. Οι read-only εντολές τρέχουν και ως απλός χρήστης.
 7. Dispatch: ένα `match` που καλεί το `cmd_*` της εντολής.
 
-**Κωδικοί εξόδου** (`enum Outcome`): `0` Ok, `20` NothingFound, `50` SelfUpgrade (το slacker αναβάθμισε τον εαυτό του, ξανατρέξε το), `100` Pending (check-updates βρήκε ενημερώσεις), `1` σφάλμα. Το `slacker-gui` και scripts μπορεί να βασίζονται σε αυτούς: **δεν αλλάζουν**.
+**Κωδικοί εξόδου** (`enum Outcome`): `0` Ok, `20` NothingFound, `50` SelfUpgrade (το slacker αναβάθμισε τον εαυτό του, ξανατρέξε το), `100` Pending (check-updates βρήκε ενημερώσεις), `1` σφάλμα. Το `2` το δίνει το clap (άγνωστη εντολή ή επιλογή) και η άρνηση για shell glob στο `clap_error_exit`. Το `slacker-gui` και scripts μπορεί να βασίζονται σε αυτούς: **δεν αλλάζουν**.
 
 Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, `--dry-run`, `--no-deps`.
 
@@ -81,7 +81,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 
 | αρχείο | γραμμές | τι |
 |---|---|---|
-| `main.rs` | 4.338 | είσοδος (`main`, `run`, `Outcome`, lock, δικαιώματα, `migrate_state`) **και ο κοινός πυρήνας** (βλ. 5.3), με τα tests του |
+| `main.rs` | 4.440 | είσοδος (`main`, `run`, `Outcome`, lock, δικαιώματα, `migrate_state`) **και ο κοινός πυρήνας** (βλ. 5.3), με τα tests του |
 | `cli.rs` | 271 | `Cli`, `Cmd` (όλες οι εντολές, clap derive), `HELP_STYLES`. Η πρώτη παράγραφος κάθε doc comment είναι το σύντομο help, όλο το doc comment το `<cmd> --help`. |
 | `commands.rs` | 15 | δηλώνει τα modules του `commands/` |
 
@@ -102,7 +102,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 | `new_config.rs` | new-config | γράφει στο `/etc`. Τα `PROTECTED_CONFIGS` (passwd, shadow, group, rc.inet1.conf, rc.local, rc.local_shutdown) δεν αντικαθίστανται ποτέ από το μενού ούτε από glob. Οι κανόνες `NEWCONFIG_*` (`preset_for`, `apply_presets`, `glob_match`) εφαρμόζονται πριν από το μενού. Το `preset_key` δίνει τον κανόνα ενός αρχείου, για τη λίστα που τυπώνουν οι εντολές πακέτων. |
 | `update.rs` | update, update gpg | η επεξεργασία κάθε repo (`update_one_repo`) είναι στον πυρήνα |
 | `status.rs` | status, list-repos, check-updates | το `status` είναι ο «γιατρός» της εγκατάστασης |
-| `upgrade_dist.rs` | upgrade-dist | το πιο επικίνδυνο. Φάσεις: escape kit -> transform -> update -> core (σειριακά, με έλεγχο εγγραφής) -> install-new -> υπόλοιπα σε batches -> clean-system -> δεύτερο πέρασμα -> new-config -> status. |
+| `upgrade_dist.rs` | upgrade-dist | το πιο επικίνδυνο. Φάσεις: escape kit -> transform -> update -> core (σειριακά, με έλεγχο εγγραφής) -> install-new -> υπόλοιπα σε batches -> clean-system -> δεύτερο πέρασμα -> new-config -> status. Το official repo και το patches subtree του πρέπει να ανανεωθούν (το `update_one_repo` επιστρέφει αν η λίστα είναι φρέσκια)· κάθε στάση πριν από την πρώτη εγκατάσταση επαναφέρει `mirrors`, `repos`, `blacklist` από το escape kit (`dist_restore`· το `dist_execute` θέτει το `started` πριν από την πρώτη εγκατάσταση). |
 | `install.rs` | install, upgrade, reinstall, remove, download, upgrade-all, install-new | ο resolver που χρησιμοποιούν είναι στον πυρήνα. Το `report_pending_configs` (το καλούν και τα install-template και revert-pkg) δείχνει τα `.new` που άφησε η εκτέλεση και, με το `NEWCONFIG_AFTER`, ρωτά αν θα τρέξει το new-config ή το τρέχει (`after_configs`). Το `pending_configs` παίρνει τα `.new` και τα stamps τους πριν εφαρμοστούν τα πακέτα, και το `is_fresh_config` λέει ποια έγραψε αυτή η εκτέλεση. |
 
 ### 5.3 Ο κοινός πυρήνας (μένει στο `main.rs`, σκόπιμα)
@@ -113,10 +113,10 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 - **Σειρά εγκατάστασης:** `upgrade_order` (καλείται στο τέλος του `expand_with_deps`, ώστε ο πίνακας του πλάνου να δείχνει τη σειρά με την οποία εγκαθίστανται τα πακέτα), `UPGRADE_FIRST`, `upgrade_last` (το χρησιμοποιεί και το upgrade-dist).
 - **Σχέδιο και πίνακες:** `PlanItem`, `InstallAction`, `PlanRow`, `print_table`, `show_plan`, `print_plan`, `report_pinned_in_plan`, `hint_freeze_pin`, `note_optional_suggests`, conflicts (`detect_conflicts`, `report_conflicts`, `confirm_conflicts`).
 - **Εκτέλεση:** `execute_plan`, `install_counter` (`[ 37/245 ] upgrading ...`), `parallel_fetch` (με τη γραμμή προόδου των λήψεων: `live_line`, `DlLive`, `term_width`, `DL_TICK`, `DL_STALL`, `DL_ANNOUNCE`), `fetch_and_verify`/`fetch_and_verify_metered`, `package_dest`, `DlItem`, `summarize_outcomes`, `report_batch_failures`, `enforce_release_match`, `enforce_arch_match`, υπενθυμίσεις kernel και perl.
-- **Επιλογή πακέτων:** `collect`, `collect_prefers`, `validate_selector`, `reject_mixed_selectors`, `guard_shell_expansion`, `closest`, `edit_distance`, `at_prefix_hint`, `parse_selection`, `bl_installed`, `priority_display`, `installed_source_label`.
+- **Επιλογή πακέτων:** `collect`, `collect_prefers`, `validate_selector`, `reject_mixed_selectors`, `guard_shell_expansion`, `closest`, `edit_distance`, `at_prefix_hint`, `parse_selection`, `bl_installed` (series μόνο για επίσημο build: `PkgDb::series_of_installed`), `priority_display`, `installed_source_label`.
 - **Repos:** `update_one_repo`, `UpdateOutcomes`, `malicious_filename_count`, `vet_repo`, `apply_vet`, `reload_repo`, `warn_unverified_repos`, `unverified_repo_names`.
 - **Release/arch/mirrors:** `slackware_dir`, `is_current_codename`, `repo_release_token`, `system_release`, `arch_family`, `arch_compatible`, `is_x86_arch`, `osuosl_tree_prefix`, `parse_packages_date`, `mirror_is_stale`, `humanize_lag`, `FRESHNESS_*`.
-- **Διάφορα:** `confirm`, `hilite_keys`, `is_foundational`, `in_graphical_session`, `migrate_state`.
+- **Διάφορα:** `confirm`, `hilite_keys`, `is_foundational`, `in_graphical_session`, `migrate_state`, `refuse_through_symlink` (σε κάθε εγγραφή ρυθμίσεων).
 
 ### 5.4 Βοηθητικά modules (`src/*.rs`, εκτός `main`/`cli`/`commands`)
 
@@ -131,7 +131,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 | `system.rs` | ζωντανό σύστημα: εγκατεστημένα πακέτα, os-release, κλήσεις pkgtools (μόνο argv, ποτέ `sh -c`· πρώτο το `--terse` όταν `TERSE=on`) |
 | `download.rs` | λήψεις (http/https/file), όρια μεγέθους, md5/sha256, HTTP auth. Το `Meter`, τα bytes μιας λήψης σε εξέλιξη, που δείχνει το `parallel_fetch`. Ο proxy (`set_proxy`, `proxy_var`, `proxy_for`, `no_proxy_matches`, και το `describe_proxy` για το `status`). |
 | `gpg.rs` | ιδιωτικό keyring, TOFU pin όλων των fingerprints, έλεγχος υπογραφών |
-| `credentials.rs` | HTTP Basic (σαν το zypper): `credentials.d/`, `credentials.cat`, μόνο root:0600, μόνο https |
+| `credentials.rs` | HTTP Basic (σαν το zypper): `credentials.d/`, `credentials.cat`, μόνο root:0600, μόνο https. Το ταίριασμα του prefix είναι στο `download.rs` (`prefix_covers`: μόνο ολόκληρα κομμάτια του path) |
 | `changelog.rs` | ChangeLog.txt, check-updates |
 | `history.rs` | το ημερολόγιο αλλαγών πακέτων (pure) |
 | `revert.rs` | pure helpers για revert-pkg |
@@ -168,7 +168,7 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 - **Path traversal:** `is_safe_filename` / `is_safe_location`. Repo με ύποπτο όνομα πακέτου -> hard quarantine.
 - **Όρια μεγέθους:** metadata 512 MiB, πακέτο 8 GiB.
 - **Ποτέ `sh -c`.** Όλες οι εξωτερικές κλήσεις με argv.
-- **Ποτέ εγγραφή μέσα από symlink** σε αρχεία ρύθμισης και στον προορισμό λήψης.
+- **Ποτέ εγγραφή μέσα από symlink** σε αρχεία ρύθμισης και στον προορισμό λήψης (`refuse_through_symlink` πριν από κάθε εγγραφή ρυθμίσεων).
 - **Credentials μόνο πάνω από https**, αρχεία μόνο root:0600.
 - **Proxy, κλειστός από default.** Χωρίς `PROXY` ή με `PROXY=off`: απευθείας σύνδεση, και οι μεταβλητές proxy του περιβάλλοντος αγνοούνται, ώστε ένα περιβάλλον που περνάει μέσα από το sudo να μην μπορεί να στείλει τις λήψεις του root αλλού. Το `PROXY=http://...` χρησιμοποιεί αυτόν τον proxy για κάθε λήψη http και https. Το `PROXY=env` παίρνει τα `https_proxy`/`http_proxy`/`all_proxy`/`no_proxy` από το περιβάλλον (πρώτα τα πεζά, μετά τα κεφαλαία, όπως το wget και το curl). Το `NO_PROXY` αντικαθιστά το `no_proxy` του περιβάλλοντος. Μόνο http:// proxies: το https περνάει από αυτούς ως tunnel CONNECT, οπότε το TLS και ο έλεγχος πιστοποιητικού γίνονται μέχρι το mirror. Proxy άλλου τύπου είναι σφάλμα, ποτέ σιωπηλή απευθείας σύνδεση. Το `try_proxy_from_env` του ureq δεν χρησιμοποιείται: μία μεταβλητή για όλα τα schemes και καθόλου `no_proxy`.
 - **Ο κωδικός του proxy πάει μόνο στον proxy**, στο CONNECT που στέλνει το ureq για URL https. **Ποτέ header `Proxy-Authorization` σε αίτηση:** το ureq κρατάει τα δικά μας headers στα redirects (σβήνει μόνο τα `Authorization`, `Cookie` και `Content-Length`), οπότε ένα mirror, ή όποιος είναι στη διαδρομή ενός http, θα μπορούσε να κάνει redirect σε host της επιλογής του και να πάρει τον κωδικό μέσα στο tunnel. Ένα πρώτο προσχέδιο το έκανε για τα http mirrors και αφαιρέθηκε πριν από το release. Συνέπεια: ένα http mirror πίσω από proxy που ζητά κωδικό αποτυγχάνει (407), οπότε https. Οι κωδικοί δεν εμφανίζονται ποτέ σε μηνύματα ούτε στο `status` (`hide_password`).
@@ -274,15 +274,15 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 
 Η πρώτη αλλαγή μετά το refactor ήταν η ετικέτα του πλάνου (βλ. 7). Η δεύτερη ήταν το issue #11 (από πού ήρθε ένα εγκατεστημένο πακέτο, και `remove @repo`, βλ. 7), με 2 tests. Η τρίτη ήταν το `BANNER` (issue #12, βλ. 4), με 1 test. Η τέταρτη ήταν η εξαίρεση εξάρτησης (βλ. 7), με 4 tests. Η πέμπτη ήταν η γραμμή προόδου των λήψεων (issue #14, βλ. 7), με 2 tests. Αυτές οι πέντε είναι η 0.13.0.
 
-Η 0.14.0 πρόσθεσε, η καθεμιά με τα tests της: το «Preparing the plan» με το παράλληλο διάβασμα των `.dep` που κρατιούνται στη μνήμη, και τη διακοπή των αιτημάτων `.dep` προς το επίσημο δέντρο· το `TERSE` και τον μετρητή εγκατάστασης· τη σειρά εγκατάστασης του UPGRADE.TXT με τον kernel τελευταίο, σε κάθε πλάνο και στο upgrade-dist· τους κανόνες `NEWCONFIG_*` του new-config· το `NEWCONFIG_AFTER` και το `NEWCONFIG_KEEP` στο upgrade-dist· τον proxy (`PROXY`/`NO_PROXY`, κλειστός από default, με γραμμή `Proxy` στο `status`)· το `search --partial` και το `SEARCH` (issue #22)· και ότι το clean-system κρατά τον kernel του `make-kernel-backup` (όλα στο 7). Η 0.14.1: `rusqlite` 0.42 (MSRV 1.89), άρνηση του upgrade-dist σε aarch64, και η υπόδειξη του `search` όταν δεν βρίσκει όνομα αναφέρει το `--partial`. Κάθε νέο κλειδί έχει για default τη συμπεριφορά που υπήρχε πριν από αυτό. Μετά από κάθε αλλαγή: `cargo build --release --locked` χωρίς warnings, `cargo test --release --locked`, και οι έλεγχοι που τρέχει το SlackBuild (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Πριν από release: ένα τρέξιμο σε πραγματικό σύστημα από τον συντηρητή.
+Η 0.14.0 πρόσθεσε, η καθεμιά με τα tests της: το «Preparing the plan» με το παράλληλο διάβασμα των `.dep` που κρατιούνται στη μνήμη, και τη διακοπή των αιτημάτων `.dep` προς το επίσημο δέντρο· το `TERSE` και τον μετρητή εγκατάστασης· τη σειρά εγκατάστασης του UPGRADE.TXT με τον kernel τελευταίο, σε κάθε πλάνο και στο upgrade-dist· τους κανόνες `NEWCONFIG_*` του new-config· το `NEWCONFIG_AFTER` και το `NEWCONFIG_KEEP` στο upgrade-dist· τον proxy (`PROXY`/`NO_PROXY`, κλειστός από default, με γραμμή `Proxy` στο `status`)· το `search --partial` και το `SEARCH` (issue #22)· και ότι το clean-system κρατά τον kernel του `make-kernel-backup` (όλα στο 7). Η 0.14.1: το update ελέγχει το PACKAGES.TXT με το CHECKSUMS.md5 και κρατά τα παλιά metadata όταν διαφέρουν, και κάθε πλάνο απορρίπτεται όσο μια λίστα στην cache δεν ταιριάζει (`enforce_package_list`, χωρίς παράκαμψη με `--yes`)· η διόρθωση του Freshness στο `status`· άρνηση του upgrade-dist σε aarch64. Μετά (16 Νοε 2026): `remove series/` και `remove` που σέβεται τα freezes `series/` και `@repo` (`PkgDb::has_series`, `series_of_installed`, `BlacklistRule::needs_package_lists`)· οι εγγραφές ρυθμίσεων αρνούνται symlink (`refuse_through_symlink`, μεταφέρθηκε στο `main.rs`)· τα prefixes των credentials ταιριάζουν μόνο σε ολόκληρα κομμάτια του path (`prefix_covers`)· το `unfrozen` χωρίς όρισμα δείχνει τους κανόνες και βγαίνει με 0· το upgrade-dist σταματά όταν δεν ανανεωθεί το official repo ή το patches subtree του, και κάθε στάση πριν από την πρώτη εγκατάσταση επαναφέρει `mirrors`, `repos`, `blacklist` από το escape kit (`dist_restore`). Κάθε νέο κλειδί έχει για default τη συμπεριφορά που υπήρχε πριν από αυτό. Μετά από κάθε αλλαγή: `cargo build --release --locked` χωρίς warnings, `cargo test --release --locked`, και οι έλεγχοι που τρέχει το SlackBuild (`contrib/check-completion-drift.sh`, `contrib/gen-completions.py --check`, `contrib/check-yes-noninteractive.sh`, `cargo audit`). Πριν από release: ένα τρέξιμο σε πραγματικό σύστημα από τον συντηρητή.
 
 ---
 
 ## 9. Tests
 
-- `cargo test`: **253 passed, 1 ignored** (254 συνολικά).
-- Ανά αρχείο: `main.rs` 50, `config.rs` 38, `pkgdb.rs` 35, `repo.rs` 12, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 8 (το ένα ignored: πραγματικό TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 6, `system.rs` 5, `commands/upgrade_dist.rs` 5, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, και από 1 στα `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
-- Modules tests στο `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (με τα fixtures `av()` και `fixture()`), `freshness_tests`, `foundational_tests`.
+- `cargo test`: **261 passed, 1 ignored** (262 συνολικά).
+- Ανά αρχείο: `main.rs` 51, `config.rs` 39, `pkgdb.rs` 36, `repo.rs` 15, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 9 (το ένα ignored: πραγματικό TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 7, `system.rs` 5, `commands/upgrade_dist.rs` 5, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, και από 1 στα `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
+- Modules tests στο `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (με τα fixtures `av()` και `fixture()`), `freshness_tests`, `foundational_tests`, `symlink_guard_tests`.
 
 ---
 

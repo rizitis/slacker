@@ -3,7 +3,7 @@
 
 use crate::cli::Cli;
 use crate::config::Config;
-use crate::{apply_vet, at_prefix_hint, closest, confirm, reload_repo, Outcome};
+use crate::{apply_vet, at_prefix_hint, closest, confirm, refuse_through_symlink, reload_repo, Outcome};
 use crate::{config, repo, ui};
 
 /// What a `repos` line declares, for matching during removal. Mirrors the
@@ -186,6 +186,7 @@ pub(crate) fn cmd_pri_repo(cli: &Cli, cfg: &Config, priority: &str, name: &str) 
         "{}",
         ui::blue(&format!("About to change '{name}' priority: {old} → {pri}"))
     );
+    refuse_through_symlink(&path)?;
     if !confirm("Write it to the repos file?", cli.yes) {
         println!("{}", ui::dim("aborted — nothing changed"));
         return Ok(Outcome::Ok);
@@ -264,6 +265,7 @@ pub(crate) fn cmd_add_repo(
 
     println!("{}", ui::blue("About to add this repository:"));
     println!("  {}", ui::white(&line));
+    refuse_through_symlink(&path)?;
     if !confirm("Add it to the repos file?", cli.yes) {
         println!("{}", ui::dim("aborted — nothing changed"));
         return Ok(Outcome::Ok);
@@ -368,6 +370,7 @@ pub(crate) fn cmd_del_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcom
             )
         );
     }
+    refuse_through_symlink(&path)?;
     if !confirm("Remove it from the repos file?", cli.yes) {
         println!("{}", ui::dim("aborted — nothing changed"));
         return Ok(Outcome::Ok);
@@ -407,6 +410,7 @@ pub(crate) fn cmd_add_tag(
 
     println!("{}", ui::blue("About to add this build-tag priority:"));
     println!("  {}", ui::white(&line));
+    refuse_through_symlink(&path)?;
     if !confirm("Add it to the repos file?", cli.yes) {
         println!("{}", ui::dim("aborted — nothing changed"));
         return Ok(Outcome::Ok);
@@ -465,6 +469,7 @@ pub(crate) fn cmd_del_tag(cli: &Cli, cfg: &Config, tag: &str) -> Result<Outcome,
     for r in &removed {
         println!("  {}", ui::red(r.trim()));
     }
+    refuse_through_symlink(&path)?;
     if !confirm("Remove it from the repos file?", cli.yes) {
         println!("{}", ui::dim("aborted — nothing changed"));
         return Ok(Outcome::Ok);

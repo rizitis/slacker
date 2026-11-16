@@ -86,11 +86,9 @@ repos by comparing CHECKSUMS.md5 against the cached copy. Exits 100 if any repo
 has updates pending.
 .TP
 .B show-changelog \fR[\fIREPO\fR]
-Page the cached ChangeLog of the official (tracked) repository. Name a
-repository to show its ChangeLog instead; if that repository's ChangeLog was
-not cached by
-.BR update ,
-it is fetched on demand.
+Page the ChangeLog of the official (tracked) repository, fetched from the
+repository each time; a cached copy is shown only when it cannot be reached.
+Name a repository to show its ChangeLog instead.
 .IP
 Not every repository publishes a ChangeLog of its own. A distribution subtree
 .RB ( extra ", " patches ", " testing )
@@ -204,7 +202,15 @@ To reinstall a package that is already current, use
 Reinstall the currently installed version.
 .TP
 .BI remove " PATTERN..."
-Remove installed packages.
+Remove installed packages. A series written with the trailing
+.B /
+(e.g.\&
+.BR "remove kde/" )
+removes the installed official packages of that series of the official tree:
+a series that does not exist there is an error, and a package carrying another
+repository's build tag is never part of a series. Without the
+.B /
+the word is matched like any other pattern. Frozen packages are skipped.
 .TP
 .BI download " PATTERN..."
 Download package files without installing them. By default they are saved under
@@ -303,8 +309,11 @@ refuses before anything is read or changed. The allowed routes are a fail\-close
 refused. This is a deliberately heavyweight, one\-way operation and is gated by a
 typed point\-of\-no\-return confirmation.
 .IP
-What it does, in order: writes an escape\-kit template of the current package set
-first; re\-points the active
+What it does, in order: saves an escape kit first (copies of
+.IR slacker.conf ", " mirrors ", " repos " and " blacklist
+in
+.IR /etc/slacker/dist\-backup\-<date>/ ,
+plus a template of the current package set); re\-points the active
 .I mirrors
 line and every
 .B mirror
@@ -325,6 +334,23 @@ throughout. It then runs
 and a second confirming pass, and finishes with a kernel/initrd and bootloader
 reminder. Downloads happen in batches that are deleted as they install, so the
 upgrade does not need disk for the whole release at once.
+.IP
+The official repository and its
+.I patches
+subtree must be refreshed with the target's lists; if either cannot be (network,
+checksum mismatch, GPG), the upgrade stops. Until the first package is installed,
+every stop (that one, the disk pre\-flight, a core package that fails to download
+or verify, or answering n at the Proceed? prompt) restores
+.IR mirrors ", " repos " and " blacklist
+from the escape kit and removes a
+.I blacklist.bak
+this run created; the system is untouched. A failure exits 1, a no exits 0. After
+a stop that follows the metadata refresh, run
+.B slacker update
+first: the cached lists may already be the target's. Once a package has been
+installed there is no automatic restore; re\-running
+.B upgrade-dist
+is safe and resumes.
 .IP
 With a
 .B DISTRO_UPGRADE_MIRROR
@@ -713,6 +739,10 @@ so only one runs at a time; a second one exits immediately reporting the running
 PID. The lock is held by the kernel and released automatically if slacker exits,
 crashes, or is killed, so it never gets stuck. Queries take no lock and run
 freely in parallel.
+.PP
+Commands that write a configuration file
+.RB ( frozen ", " unfrozen ", " pin ", " unpin ", " nodep ", " undep ", " add-repo ", " del-repo ", " pri-repo ", " add-tag ", " del-tag ", " generate-template ", " upgrade-dist )
+refuse to write through a symbolic link and change nothing.
 .SH PATTERNS
 A
 .I PATTERN
@@ -730,6 +760,14 @@ directory (e.g.\& \fIvlc/\fR) never hides the package name. A trailing
 .B /
 .RB ( k/ ", " kde/ )
 means the series and nothing else: if there is no such series, nothing matches.
+For
+.B remove
+a series is taken only in the
+.I series/
+form, only from the official tree, and only for official builds (no build tag,
+or
+.IR _slackNN );
+a bare word is matched as a name.
 .PP
 Two explicit set selectors are also accepted (the @ is required, so a bare word
 is never treated as a repo):
@@ -1090,8 +1128,21 @@ section, without needing a
 .B credentials=
 flag. Lookup order per repository is: an explicit
 .B credentials= NAME
-flag first, else the longest matching catalogue prefix, else anonymous. Same
-permission rules as
+flag first, else the longest matching catalogue prefix, else anonymous. A
+prefix covers a URL only up to a whole path segment: the URL must equal it,
+continue after it with a
+.RB ` / `,
+or the prefix must end in
+.RB ` / `.
+So
+.I [https://lab]
+does not cover
+.IR https://lab.evil/ ,
+and
+.I [https://host/repo]
+does not cover
+.IR https://host/repo\-other/ .
+Same permission rules as
 .IR credentials.d/ .
 .TP
 .I /etc/slacker/blacklist
@@ -1166,6 +1217,22 @@ package is held instead. A
 .I pin
 restricts the candidate set first and a freeze is then applied within it, so a
 package both pinned and frozen is held.
+.PP
+Only the official tree has series. A
+.I series/
+rule matches an installed package only when it is an official build (no build
+tag, or
+.IR _slackNN )
+that the official repository lists in that series; a same\-named build from
+another repository is not frozen by it.
+.B remove
+honours the blacklist too and skips a frozen package; for
+.I series/
+and
+.I @repo
+rules it needs the cached package lists, and notes a repository that has none
+(run
+.BR "slacker update" ).
 .PP
 An uninstalled frozen match is hidden from
 .BR install\-new ,
@@ -1294,6 +1361,26 @@ tells you how to proceed if you trust the repo anyway (relax its
 .I verify=
 in the repos file, or import its key) and re\-run.
 .PP
+On every
+.BR update ,
+a repository's
+.I PACKAGES.TXT
+is checked against the md5 its
+.I CHECKSUMS.md5
+lists for it. If they differ (a mirror in the middle of a sync, or a stale copy
+cached on the way), the new metadata is not written: the previous one is kept
+and the repository is reported as not updated. While a repository's cached list
+does not match, installs and upgrades from it are refused (exit 1, nothing
+changed) with no
+.B \-\-yes
+override;
+.B status
+shows it under Metadata and
+.B check-updates
+reports the repository as pending. A repository whose list never matches is
+broken at the source: remove it from
+.IR repos .
+.PP
 Before installation each package is checked according to the repo's policy: its
 md5 (and sha when provided) from the signature\-verified CHECKSUMS, and \(em when
 the policy includes gpg \(em its own detached
@@ -1415,10 +1502,16 @@ row, and, as with the apt convention, https is the assumed and only safe default
 Success.
 .TP
 .B 1
-An error occurred.
+An error occurred. Also when an argument of
+.BR install ", " upgrade ", " reinstall ", " remove " or " download
+matches no package: nothing is done.
+.TP
+.B 2
+Wrong command line (an unknown command or option); nothing is done.
 .TP
 .B 20
-No package was found to act on.
+The command was valid but there was nothing to do: already installed, nothing
+newer, no match in a search.
 .TP
 .B 50
 .B slacker
@@ -1427,6 +1520,13 @@ upgraded itself and must be re\-run.
 .B 100
 There are pending updates (from
 .BR check-updates ).
+.B check-updates
+also exits 100 for a repository whose cached
+.I PACKAGES.TXT
+does not match its
+.IR CHECKSUMS.md5 ,
+and exits 0 when it found nothing pending; a repository that could not be checked
+is shown as unreachable in its output, not in the exit status.
 .SH ENVIRONMENT
 .TP
 .B SLACKER_MERGE

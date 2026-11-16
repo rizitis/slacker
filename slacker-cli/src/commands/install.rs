@@ -821,12 +821,36 @@ pub(crate) fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Res
     Ok(Outcome::Ok)
 }
 
+/// `a/`, `kde/`: the series a `remove` argument names, if it is one (a word
+/// followed by a single trailing `/`, not an `@` selector or `repo:name`).
+fn series_selector(pat: &str) -> Option<&str> {
+    let set = pat.strip_suffix('/')?;
+    (!set.is_empty() && !set.contains(['/', ':', '@'])).then_some(set)
+}
+
 pub(crate) fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
-    // Load the package DB only if an @repo/@tag selector is used (needs it to
-    // map a repo to the build tags its packages carry).
-    let db = if patterns.iter().any(|p| p.starts_with('@')) {
+    // Load the package DB if an @repo/@tag or a `set/` selector is used (needs
+    // it to map a repo to the build tags its packages carry, or a package to its
+    // series), or if a freeze rule needs it:
+    // a series (`a/`) or `@repo` rule matches an installed package only through
+    // the repos' PACKAGE LOCATION / tags. There a repo without package data is
+    // skipped with a note.
+    let db = if patterns.iter().any(|p| p.starts_with('@') || series_selector(p).is_some()) {
         Some(PkgDb::load(cfg)?)
+    } else if cfg.blacklist.iter().any(|r| r.needs_package_lists()) {
+        let (db, missing) = PkgDb::load_available(cfg);
+        if !missing.is_empty() {
+            eprintln!(
+                "{}",
+                ui::yellow(&format!(
+                    "note: no package data for {} — series and @repo freeze rules cannot be checked \
+                     for its packages (run `slacker update`)",
+                    missing.join(", ")
+                ))
+            );
+        }
+        Some(db)
     } else {
         None
     };
@@ -863,6 +887,25 @@ pub(crate) fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result
             };
             for inst in &installed {
                 if from_here(inst) && seen.insert(inst.name.clone()) {
+                    if bl_installed(cfg, Some(db), inst) {
+                        frozen.push(inst.name.clone());
+                        continue;
+                    }
+                    todo.push(inst);
+                }
+            }
+            continue;
+        }
+        // `set/` -> the installed official packages of that series (only the
+        // official tree has series). Only with the trailing `/`; a bare word
+        // stays a name.
+        if let Some(set) = series_selector(pat) {
+            let db = db.as_ref().expect("db loaded for a series/ selector");
+            if !db.has_series(set) {
+                return Err(format!("no series '{set}/' in the official tree"));
+            }
+            for inst in &installed {
+                if db.series_of_installed(inst) == Some(set) && seen.insert(inst.name.clone()) {
                     if bl_installed(cfg, Some(db), inst) {
                         frozen.push(inst.name.clone());
                         continue;
@@ -1550,6 +1593,20 @@ pub(crate) fn report_pending_configs(cli: &Cli, cfg: &Config, before: &PendingCo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_takes_a_series_only_with_the_trailing_slash() {
+        assert_eq!(series_selector("a/"), Some("a"));
+        assert_eq!(series_selector("kde/"), Some("kde"));
+        // a bare word stays a name
+        assert_eq!(series_selector("a"), None);
+        assert_eq!(series_selector("kde"), None);
+        // not a series: empty, nested, an @ selector or repo:name
+        assert_eq!(series_selector("/"), None);
+        assert_eq!(series_selector("a/b/"), None);
+        assert_eq!(series_selector("@gnome/"), None);
+        assert_eq!(series_selector("slackware:a/"), None);
+    }
 
     #[test]
     fn a_new_file_written_again_in_this_run_is_this_runs() {
