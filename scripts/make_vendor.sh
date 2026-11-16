@@ -106,6 +106,12 @@ main() {
     log "Moving archives to $VENDORS_DIR"
     mv "$cli_tar" "$gui_tar" "$flatpak_tar" "$VENDORS_DIR"
 
+    log "Make vendors.tar,gz and md5sum"
+    pushd $ROOT || exit 1
+    tar -cvzf /tmp/vendors.tar.gz vendors
+    md5sum /tmp/vendors.tar.gz > /tmp/vendors.md5
+    popd || exit 1
+
     log "Cleaning up staging directories"
     rm -rf -- "$cli_stage/" "$gui_stage/" "$flatpak_stage/"
 }
