@@ -27,6 +27,7 @@ ROOT="$(dirname "$SCRIPT_DIR")"
 VENDORS_DIR="$ROOT/vendors"
 CLI_SRC="$ROOT/slacker-cli"
 GUI_SRC="$ROOT/slacker-gui"
+FLATPAK_SRC="$ROOT/slacker-flatpak"
 GENERATOR="slacker-vendor-generate.py"
 
 readonly SCRIPT_DIR ROOT VENDORS_DIR CLI_SRC GUI_SRC GENERATOR
@@ -76,14 +77,17 @@ main() {
     local cli_ver gui_ver
     cli_ver="$(crate_version "$CLI_SRC")"
     gui_ver="$(crate_version "$GUI_SRC")"
+    flatpak_ver="$(crate_version "$FLATPAK_SRC")"
 
     local cli_stage="slacker-cli-vendor-$cli_ver"
     local gui_stage="slacker-gui-vendor-$gui_ver"
+    local flatpak_stage="slacker-flatpak-vendor-$flatpak_ver"
     local cli_tar="slacker-cli-$cli_ver.tar.gz"
     local gui_tar="slacker-gui-$gui_ver.tar.gz"
+    local flatpak_tar="slacker-flatpak-$flatpak_ver.tar.gz"
 
     log "Creating staging directories"
-    mkdir -p "$cli_stage" "$gui_stage"
+    mkdir -p "$cli_stage" "$gui_stage" "$flatpak_stage"
 
     log "Generating vendor for slacker-cli $cli_ver"
     vendor_crate "$CLI_SRC" "$cli_stage"
@@ -91,15 +95,19 @@ main() {
     log "Generating vendor for slacker-gui $gui_ver"
     vendor_crate "$GUI_SRC" "$gui_stage"
 
+    log "Generating vendor for slacker-flatpak $flatpak_ver"
+    vendor_crate "$FLATPAK_SRC" "$flatpak_stage"
+
     log "Creating archives"
     tar -cvzf "$cli_tar" "$cli_stage/"
     tar -cvzf "$gui_tar" "$gui_stage/"
+    tar -cvzf "$flatpak_tar" "$flatpak_stage/"
 
     log "Moving archives to $VENDORS_DIR"
-    mv "$cli_tar" "$gui_tar" "$VENDORS_DIR"
+    mv "$cli_tar" "$gui_tar" "$flatpak_tar" "$VENDORS_DIR"
 
     log "Cleaning up staging directories"
-    rm -rf -- "$cli_stage/" "$gui_stage/"
+    rm -rf -- "$cli_stage/" "$gui_stage/" "$flatpak_stage/"
 }
 
 main "$@"

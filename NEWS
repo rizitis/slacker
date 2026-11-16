@@ -39,7 +39,7 @@ Version Beta 0.14.1
     - Fix bug (security): a credentials prefix covers a URL only up to a whole path segment; before, [https://lab] also sent the login to https://lab.evil and [.../repo] to [.../repo-other/].
     - CMD `slacker unfrozen` with no argument lists the rules and exits 0, as unpin does (it exited 1).
     - Fix bug: upgrade-dist went on when the target's package lists could not be fetched, built the plan from the old release's lists and reported "complete". Now it stops when the official repo or its patches subtree cannot be refreshed, and any stop before the first package is installed puts mirrors, repos and blacklist back from the escape kit.
-- Add: slacker-flatpak (Version 0.6.0, experimental)
+- Add: slacker-flatpak (Version 1.0.0, testing)
     - a separate GTK4/libadwaita front-end for Flatpak, for your user's and the
       system-wide installation. It runs flatpak as your user, never as root;
       system-wide changes get their privileges from flatpak's system helper
@@ -57,7 +57,19 @@ Version Beta 0.14.1
 - Update: wiki, man page (exit code 2, the meaning of 0/1/20/100, the package-list check,
       remove SERIES/, series freezes, credentials prefixes, upgrade-dist stop and restore), ARCHITECTURE.md
 - Update: scripts/
-    - Add: check-msrv.sh (SlackBuild use it now before build)
+    - Add: check-msrv.sh (SlackBuild use it now before build for slacker developers)
+**NOTES (0.14.1_beta.7 + slacker-flatpak-1.0.0)**:
+    - I'm stopping promoting binaries on the release page.
+    - You can install slacker from @conraid repo (slackware64-current) or build your own!
+      So from now on [slacker releases page](https://forge.slackware.nl/rizitis/slacker/releases) will be 3 source tarballs:
+        - slacker-VERSION-source.tar.gz - This is what you already know and what @conraid is building (slacker + slacker gui)
+        - slacker-cli-VERSION-source.tar.gz (minimal only slacker-cli no gui)
+        - slacker-flatpak-VERSION-source.tar.gz (Full slacker installation cli+gui+flatpak)
+      For **aarch64** @n4t3r will decide what binaries to promote on [releases page](https://forge.slackware.nl/rizitis/slacker/releases)
+      The main branch`s SlackBuild now can build: `GUI=NO` `FLATPAK=NO`, by default builds everything.
+    - `slacker-flatpak` is **testing** and it has 1 extra requirement out of Slackware stock packages (flatpak).
+      if you use it I suggest install flatpak from @conraid repo because it is very well builded and flatpak setup for users is ready after installation finsh by default.
+      There is **none** good reason to add this external dependency and its dependencies in slacker it self, better is to split slacker in 3 source tarballs in order a user build-install what he need only.
 ---
 
 Version Beta 0.14.0

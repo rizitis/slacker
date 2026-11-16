@@ -284,19 +284,3 @@ Global flags (σε όλες τις εντολές): `--config-dir`, `-y/--yes`, 
 - Ανά αρχείο: `main.rs` 51, `config.rs` 39, `pkgdb.rs` 36, `repo.rs` 15, `revert.rs` 11, `commands/blacklist.rs` 11, `pkg.rs` 10, `dist.rs` 10, `commands/status.rs` 10, `stockdb.rs` 9, `download.rs` 9 (το ένα ignored: πραγματικό TLS handshake), `mirrors.rs` 7, `history.rs` 6, `credentials.rs` 5, `commands/install.rs` 7, `system.rs` 5, `commands/upgrade_dist.rs` 5, `commands/new_config.rs` 4, `template.rs` 3, `manifest.rs` 2, `ui.rs` 2, `commands/clean.rs` 2, και από 1 στα `newconfig.rs`, `commands/query.rs`, `commands/repos.rs`.
 - Modules tests στο `main.rs`: `parallel_download_tests`, `arch_tests`, `selection_tests`, `collect_tests` (με τα fixtures `av()` και `fixture()`), `freshness_tests`, `foundational_tests`, `symlink_guard_tests`.
 
----
-
-## 10. Ανοιχτά θέματα (εκτός refactor)
-
-- **Δύο `arch_compatible` με ανάποδη σειρά ορισμάτων:** `main.rs` `(sys_arch, pkg_arch)` και `repo.rs` `(pkg_arch, arch)`. Κάνουν το ίδιο πράγμα. Δεν είναι bug σήμερα, αλλά είναι παγίδα. Αξίζει ενοποίηση, ως ξεχωριστή αλλαγή.
-- **Ημερομηνίες του `history` μετά από restore (ΔΕΝ διορθώθηκε, σκόπιμα):** η ζώνη ώρας υπολογίζεται συγκρίνοντας την ώρα στο όνομα `-upgraded-<T>` με το ctime. Το ctime χάνεται σε επαναφορά από backup, και τότε μετατοπίζονται οι ημερομηνίες. Μια απλή λύση «αγνόησε μη ρεαλιστικές ζώνες ώρας» ΔΕΝ αρκεί. Αφορά μόνο εμφάνιση και μόνο επαναφερμένα συστήματα. Θέλει δικό του σχεδιασμό αν ποτέ γίνει.
-- **Doc comments σε λάθος θέση** (μόνο rustdoc, όχι λειτουργία): μια παράγραφος του `warn_unverified_repos` πάνω από το `unverified_repo_names` (`main.rs`), το doc του `cmd_status` πάνω από το `MLOCATE_DB` (`commands/status.rs`), ένα «Parse a keep-selection» πάνω από το `select_packages_pkgid` (`commands/install.rs`), και ένα «GATE ONLY for now» πάνω από το `DIST_CRITICAL` (`commands/upgrade_dist.rs`). Έμειναν ως έχουν για την απόδειξη «αυτούσιο κείμενο». Διορθώνονται ως ξεχωριστή, καλλωπιστική αλλαγή.
-- **Ο proxy και τα redirects:** το `no_proxy` ελέγχεται για το URL που ζητά το slacker, όχι ξανά για τον στόχο ενός redirect· το redirect ακολουθεί τον ίδιο δρόμο (proxy ή απευθείας). Δεν διαρρέει τίποτα· στη χειρότερη περίπτωση το redirect αποτυγχάνει.
-- **Το slacker-gui και ο proxy:** το pkexec καθαρίζει το περιβάλλον, οπότε με `PROXY=env` το GUI κατεβάζει απευθείας. Ένα URL στο `PROXY` δουλεύει κανονικά και εκεί.
-- **Τα `.asc` των πακέτων μένουν στο cache** μετά από install/upgrade-dist (το πακέτο σβήνεται, η υπογραφή όχι). Παρατηρήθηκε στις δοκιμές. Είναι μικρά αρχεία και τα σβήνει το `clean-cache`. Δεν έχει αξιολογηθεί αν πρέπει να αλλάξει.
-
----
-
-## 11. Για patches προς το Slackware/Patrick
-
-Ό,τι πάει upstream στο Slackware πρέπει να ειναι: σκέτο `git diff`, χωρίς μεγάλα commit messages, σύντομα σχόλια στο ύφος του υπάρχοντος αρχείου.

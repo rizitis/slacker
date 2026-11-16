@@ -71,7 +71,7 @@
 
 ████ NOTES & STATUS ████████████████████████████████████████████████████
 - usr/bin: slacker (cli), slacker-gui and slacker-flatpak
-- slacker-flatpak: experimental; runs flatpak as the user, never as root;
+- slacker-flatpak: testing; runs flatpak as the user, never as root;
   flatpak itself is not part of this package
 - etc/slacker: shipped as .new, merged by doinst.sh config()
 - var/lib/slacker: trust anchors (GPG pins, quarantine); keep it

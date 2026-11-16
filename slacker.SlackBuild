@@ -76,11 +76,16 @@ while true; do
 done
 
 # rust-version in both Cargo.toml must cover what their Cargo.lock needs
-if ! bash "$CWD/scripts/check-msrv.sh"; then
-  echo
-  echo "STOP: a rust-version in Cargo.toml is lower than its Cargo.lock needs."
-  echo "Raise it to the value shown above, then build again."
-  exit 1
+# rust-version in both Cargo.toml must cover what their Cargo.lock needs
+if [ -f "$CWD/scripts/check-msrv.sh" ]; then
+  if ! bash "$CWD/scripts/check-msrv.sh"; then
+    echo
+    echo "STOP: a rust-version in Cargo.toml is lower than its Cargo.lock needs."
+    echo "Raise it to the value shown above, then build again."
+    exit 1
+  fi
+else
+  echo "skip check-msrv checks"
 fi
 
 sleep 3
@@ -217,6 +222,8 @@ install -m0644 contrib/slacker.fish \
 # ---------------------------------------------------- #
 # SLACKER-GUI
 # -----------------------------------------------------#
+if [ -d "$CWD/slacker-gui" ]; then
+
 if [ "$GUI" = "NO" ] || [ "$GUI" = "no" ]; then
 echo "SLACKER-GUI: skipped (GUI=$GUI)"
 else
@@ -251,11 +258,14 @@ install -Dm644 data/nl.slackware.forge.rizitis.slacker.policy \
   install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
 done
 fi
-
+else
+  echo "skip slacker-gui build"
+fi
 
 # ---------------------------------------------------- #
 # SLACKER-FLATPAK
 # ----------------------------------------------------- #
+if [ -d "$CWD/slacker-flatpak" ]; then
 if [ "$FLATPAK" = "NO" ] || [ "$FLATPAK" = "no" ]; then
 echo "SLACKER-FLATPAK: skipped (FLATPAK=$FLATPAK)"
 else
@@ -287,6 +297,9 @@ install -Dm644 data/nl.slackware.forge.rizitis.SlackerFlatpak.desktop \
 ( cd data/icons && find hicolor -type f ) | while read -r f; do
   install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
 done
+fi
+else
+  echo "skip slacker-flatpak build"
 fi
 
 # ------------------------------------- #

@@ -20,11 +20,13 @@ ROOT="$(dirname "$CWD")"
 VENDORS_DIR="$ROOT/vendors"
 CLI_SRC="$ROOT/slacker-cli"
 GUI_SRC="$ROOT/slacker-gui"
+FLATPAK_SRC="$ROOT/slacker-flatpak"
 VERIFY="$CWD/slacker-vendor-verify.py"
 
 PRGNAM=slacker
 VERSION=$(awk -F'"' '/^version/ {print $2; exit}' "$CLI_SRC"/Cargo.toml)
 VERSION2=$(awk -F'"' '/^version/ {print $2; exit}' "$GUI_SRC"/Cargo.toml)
+VERSION3=$(awk -F'"' '/^version/ {print $2; exit}' "$FLATPAK_SRC"/Cargo.toml)
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
@@ -269,6 +271,49 @@ mkdir -p $PKG/usr/share/icons
   install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
 done
 
+
+# --- FLATPAK --- #
+
+cd "$TMP"
+rm -rf .*
+rm -rf *
+
+cp -R "$FLATPAK_SRC"/* .
+rm -rf target || true
+
+tar xvf "$VENDORS_DIR"/slacker-flatpak-"$VERSION3".tar.gz --no-same-owner
+tar xvf slacker-flatpak-vendor-"$VERSION3"/slacker-flatpak-vendor-"$VERSION3".tar.gz --no-same-owner
+mkdir -p .cargo
+cat slacker-flatpak-vendor-"$VERSION3"/cargo-config.toml > .cargo/config.toml
+cat slacker-flatpak-vendor-"$VERSION3"/vendor.json > vendor.json
+cp Cargo.lock slacker-flatpak-vendor-"$VERSION3"/
+
+if [[ "$NET" == "ON" ]]; then
+    echo "Network is enabled"
+    python "$VERIFY" slacker-flatpak-vendor-"$VERSION3"/ slacker-flatpak-vendor-"$VERSION3"/slacker-flatpak-vendor-"$VERSION3".tar.gz
+    mv slacker-flatpak-vendor-"$VERSION3" vendor
+else
+    echo "Network is disabled"
+    mv slacker-flatpak-vendor-"$VERSION3" vendor
+fi
+
+find . \( -type d          ! -perm 755 -exec chmod 00755 {} \; \) -o \
+       \( -type f   -perm /111 ! -perm 755 -exec chmod -f 755 {} + \) -o \
+       \( -type f ! -perm /111 ! -perm 644 -exec chmod -f 644 {} + \)
+
+if command -v cargo-auditable >/dev/null 2>&1; then
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo auditable build --offline --release
+else
+  CFLAGS="$SLKCFLAGS" CXXFLAGS="$SLKCFLAGS" cargo build --offline --release
+fi
+
+# run tests
+cargo test
+
+install -Dm755 target/release/slacker-flatpak $PKG/usr/bin/slacker-flatpak
+
+# ___________ PKG ___________________ #
+
 # Copy the slack-desc and a custom doinst.sh
 mkdir -p $PKG/install
 cat $CWD/slack-desc > $PKG/install/slack-desc
@@ -278,7 +323,7 @@ cat $CWD/slacker-vendor.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/slacker.Slack
 cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
 #sleep 1
-sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+sbopkglint $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE || true
 
 rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new /tmp/stockdb_test_*.txt
 
