@@ -85,8 +85,6 @@ pub fn hint(text: &str) -> Option<&'static str> {
     None
 }
 
-/// Turns pty output into text for display: CR-LF becomes LF, and a bare CR
-/// (a progress line redrawn in place) starts the line over.
 /// Length in bytes of what `old` and `new` start with, cut back to a whole
 /// character.
 pub fn common_prefix(old: &str, new: &str) -> usize {
@@ -97,6 +95,8 @@ pub fn common_prefix(old: &str, new: &str) -> usize {
     n
 }
 
+/// Turns pty output into text for display: CR-LF becomes LF, and a bare CR
+/// (a progress line redrawn in place) starts the line over.
 pub fn clean(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut line = String::new();

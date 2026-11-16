@@ -335,13 +335,32 @@ echo "=============================================================="
 # audit the embedded dependency lists (cargo-auditable)
 if command -v cargo-audit >/dev/null 2>&1; then
   for b in slacker slacker-gui slacker-flatpak; do
-    [ -f $PKG/usr/bin/$b ] || continue
-    cargo audit bin $PKG/usr/bin/$b || echo "WARNING: cargo audit reported problems in $b"
+    [ -f "$PKG/usr/bin/$b" ] || continue
+    cargo audit bin "$PKG/usr/bin/$b" || echo "WARNING: cargo audit reported problems in $b"
   done
 else
-  echo "skip audit: cargo-audit not found for root or not installed."
+  ME=${SUDO_USER:-$(who -m | awk '{print $1}')}
+  MEHOME=$(getent passwd "$ME" | cut -d: -f6)
+  if [ -n "$ME" ] && [ "$ME" != root ] && [ -x "$MEHOME/.cargo/bin/cargo-audit" ]; then
+    for b in slacker slacker-gui slacker-flatpak; do
+      [ -f "$PKG/usr/bin/$b" ] || continue
+      su - "$ME" -c "'$MEHOME/.cargo/bin/cargo-audit' audit bin '$PKG/usr/bin/$b'" \
+        || echo "WARNING: cargo audit reported problems in $b"
+    done
+  else
+    echo "skip audit: cargo-audit not found for root or for the login user"
+  fi
 fi
 echo "=============================================================="
-#sleep 1
-#gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
-echo "gpg --detach-sign --armor need user mode.........................."
+sleep 1
+PACK=$OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+
+if [ -z "$ME" ] || [ "$ME" = root ]; then
+  echo "skip gpg signing: no login user found"
+elif su - "$ME" -c "gpg --detach-sign --armor --output -" < "$PACK" > "$PACK.asc" \
+     && [ "$(head -n 1 "$PACK.asc")" = "-----BEGIN PGP SIGNATURE-----" ]; then
+  echo "signed as $ME: $PACK.asc"
+else
+  echo "gpg signing failed, removing $PACK.asc"
+  rm -f "$PACK.asc"
+fi

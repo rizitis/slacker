@@ -25,6 +25,9 @@ pub struct Spec {
     pub title: String,
     pub inst: Inst,
     pub argv: Vec<String>,
+    /// The user already agreed in our own dialog, for a command that asks
+    /// nothing itself (repair). Stop then warns as after a yes.
+    pub confirmed: bool,
 }
 
 struct T {
@@ -171,7 +174,7 @@ pub fn run(parent: &gtk::ApplicationWindow, app_frame: bool, flatpak: PathBuf, s
         pending: RefCell::default(),
         text: RefCell::default(),
         waiting: RefCell::new(None),
-        said_yes: Cell::new(false),
+        said_yes: Cell::new(spec.confirmed),
         said_no: Cell::new(false),
         stopped: Cell::new(false),
         finished: Cell::new(false),

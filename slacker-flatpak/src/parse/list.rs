@@ -53,6 +53,13 @@ impl Item {
         format!("{}/{}/{}", self.id, self.arch, self.branch)
     }
 
+    /// The size flatpak printed, in bytes, for ordering only (the window shows
+    /// flatpak's own text). flatpak writes it with g_format_size: SI units,
+    /// a no-break space before the unit. None if it is not in that form.
+    pub fn size_bytes(&self) -> Option<u64> {
+        size_bytes(&self.size)
+    }
+
     /// The name if flatpak gave one, else the ID.
     pub fn title(&self) -> &str {
         if self.name.is_empty() {
@@ -61,6 +68,22 @@ impl Item {
             &self.name
         }
     }
+}
+
+/// "593.5\u{a0}MB" -> 593_500_000. See Item::size_bytes.
+pub fn size_bytes(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (num, unit) = s.split_once(|c: char| c.is_whitespace())?;
+    let n: f64 = num.trim().parse().ok()?;
+    let mult = match unit.trim() {
+        "byte" | "bytes" => 1.0,
+        "kB" => 1e3,
+        "MB" => 1e6,
+        "GB" => 1e9,
+        "TB" => 1e12,
+        _ => return None,
+    };
+    (n.is_finite() && n >= 0.0).then_some((n * mult) as u64)
 }
 
 pub fn parse(out: &str) -> Vec<Item> {
@@ -184,6 +207,20 @@ mod tests {
         assert_eq!(it("current").eol(), None);
         assert_eq!(it("runtime,eol=Old, use 2,eol-rebase=org.x.New").eol(), Some("Old, use 2"));
         assert_eq!(it("current,noteol=x").eol(), None);
+    }
+
+    #[test]
+    fn sizes_as_flatpak_prints_them() {
+        assert_eq!(size_bytes("593.5\u{a0}MB"), Some(593_500_000));
+        assert_eq!(size_bytes("1.0\u{a0}kB"), Some(1_000));
+        assert_eq!(size_bytes("2.1 GB"), Some(2_100_000_000));
+        assert_eq!(size_bytes("212 bytes"), Some(212));
+        assert_eq!(size_bytes("1 byte"), Some(1));
+        for bad in ["", "MB", "12", "1.0 KiB", "x MB", "-1 MB"] {
+            assert_eq!(size_bytes(bad), None, "{bad}");
+        }
+        let apps = parse(include_str!("../../fixtures/list-app-slackware.txt"));
+        assert_eq!(apps[0].size_bytes(), Some(593_500_000));
     }
 
     #[test]

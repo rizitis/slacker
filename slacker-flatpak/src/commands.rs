@@ -120,6 +120,16 @@ pub fn uninstall_unused(inst: Inst) -> Vec<String> {
     args(&["uninstall", "--unused", inst.flag()])
 }
 
+/// `flatpak uninstall --delete-data` with no ref: flatpak finds the data in
+/// ~/.var/app that no installed application owns and asks about each one
+/// ([y/n]) before deleting it, with what the permission store holds for it.
+/// No --user or --system on purpose: flatpak then checks ownership against
+/// every installation, so the data of an application installed system-wide
+/// is never taken for unused.
+pub fn delete_unused_data() -> Vec<String> {
+    args(&["uninstall", "--delete-data"])
+}
+
 /// `flatpak --default-arch`, for finding the appstream icons.
 pub fn default_arch() -> Vec<String> {
     args(&["--default-arch"])
@@ -153,13 +163,15 @@ pub fn pins(inst: Inst) -> Vec<String> {
 }
 
 /// `flatpak repair --user|--system --dry-run`: checks every installed ref
-/// and changes nothing. (Without --dry-run, repair deletes what is damaged
-/// and downloads it again; that is left to the terminal.)
+/// and changes nothing.
 pub fn repair_check(inst: Inst) -> Vec<String> {
     args(&["repair", inst.flag(), "--dry-run"])
 }
 
-/// `flatpak repair --user|--system`, shown after a transaction was stopped.
+/// `flatpak repair --user|--system`: deletes what is damaged and downloads
+/// it again. It asks nothing. The GUI runs only --user (after its own
+/// dialog); without root, flatpak turns --system into --dry-run, so that
+/// one is only shown, for a terminal.
 pub fn repair(inst: Inst) -> Vec<String> {
     args(&["repair", inst.flag()])
 }
@@ -283,6 +295,16 @@ mod tests {
     }
 
     #[test]
+    fn unused_data_is_left_to_flatpak_to_find_and_ask_about() {
+        let a = delete_unused_data();
+        assert_eq!(display(&a), "flatpak uninstall --delete-data");
+        // No installation flag (see delete_unused_data), no ref, nothing answered.
+        for forbidden in ["--user", "--system", "-y", "--assumeyes", "--noninteractive"] {
+            assert!(!a.iter().any(|x| x == forbidden), "{forbidden}");
+        }
+    }
+
+    #[test]
     fn run_and_install_commands() {
         assert_eq!(
             display(&run_app(Inst::System, "org.gnome.baobab", "stable").unwrap()),
@@ -292,6 +314,7 @@ mod tests {
         assert_eq!(display(&pins(Inst::System)), "flatpak pin --system");
         assert_eq!(display(&repair_check(Inst::User)), "flatpak repair --user --dry-run");
         assert!(repair_check(Inst::System).iter().any(|a| a == "--dry-run"));
+        assert_eq!(display(&repair(Inst::User)), "flatpak repair --user");
         assert!(run_app(Inst::User, "org.gnome.baobab", "-x").is_err());
         assert_eq!(
             display(&install(Inst::User, "flathub", "org.gnome.baobab", "stable").unwrap()),
@@ -313,6 +336,7 @@ mod tests {
             update(Inst::System),
             uninstall(Inst::User, "org.vinegarhq.Sober", "stable").unwrap(),
             uninstall_unused(Inst::System),
+            repair(Inst::User),
         ];
         for a in &all {
             for forbidden in ["-y", "--assumeyes", "--noninteractive", "--delete-data", "--no-gpg-verify"] {
