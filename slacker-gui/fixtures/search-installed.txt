@@ -1,1 +1,0 @@
-[slackware] installed   emacs-31.1  emacs (GNU Emacs)  (also: extras emacs-31.1)

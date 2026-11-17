@@ -1,1 +1,0 @@
-org.test.Platform	test platform		1	x86_64	system	testrepo	512 bytes	e8830b16a1ab		eol=Use org.test.Platform//2

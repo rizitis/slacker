@@ -1,6 +1,0 @@
-/* libadwaita >= 1.6 reads the accent from CSS variables. */
-:root {
-  --accent-bg-color: #b8262b;
-  --accent-fg-color: #ffffff;
-  --accent-color: #ff8a84;
-}

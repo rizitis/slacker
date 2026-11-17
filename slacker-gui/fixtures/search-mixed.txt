@@ -1,3 +1,0 @@
-[alienbob] uninstalled vlc-3.0.21  vlc (multimedia player) [blacklisted]  (also: restricted vlc-3.0.21, conraid vlc-3.0.20)
-[_SBo] installed   sbopkg-0.38.2  
-[testing] uninstalled kernel-generic-7.1.7  kernel-generic (a general purpose SMP Linux kernel)

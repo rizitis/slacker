@@ -1,5 +1,0 @@
-include base
-meson
-ninja
-python3
-python-setuptools

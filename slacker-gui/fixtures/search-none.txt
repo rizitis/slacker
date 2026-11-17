@@ -1,2 +1,0 @@
-No package named 'emacz'. Did you mean 'emacs'?
-search matches exact names — try `slacker file-search emacz` for a file, or `slacker info emacz`.

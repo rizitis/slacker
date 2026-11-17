@@ -1,8 +1,0 @@
-  slackware  updates pending
-  conraid    unreachable (check its URL)
-  ponce      unknown (run update first)
-
-WARNING: verification is OFF for ponce — packages from there install completely unchecked.
-Are you sure? For protection set VERIFY=all in slacker.conf (or verify=gpg,md5 on the repo line in repos), then run `slacker update gpg` to import keys.
-
-Run `slacker update` then `slacker upgrade-all`.

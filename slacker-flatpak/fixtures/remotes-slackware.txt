@@ -1,3 +1,0 @@
-flathub	Flathub	https://dl.flathub.org/repo/	1	system
-flathub	Flathub	https://dl.flathub.org/repo/	1	user
-sober	Sober	https://sober.vinegarhq.org/repo/	1	user

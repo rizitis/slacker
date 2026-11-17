@@ -1,4 +1,0 @@
-2026-09-14 22:10  ↑ upgraded     glibc    2.44-4 → 2.44-5  [slackware]
-2026-09-14 22:10  ↻ reinstalled  sbopkg   0.38.2-1_SBo  [SBo]
-2026-09-13 08:01  + installed    ddcutil  3.0.1-1  [slackware]
-2026-09-12 19:44  − removed      oldpkg   1.0-1  [conraid]

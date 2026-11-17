@@ -1,4 +1,0 @@
-include base
-nodejs
-python3            # node-gyp
-gcc-g++            # node-gyp native modules
