@@ -39,6 +39,9 @@ if [ "$ARCH" = "i686" ]; then
 elif [ "$ARCH" = "x86_64" ]; then
   SLKCFLAGS="-O2 -march=x86-64 -mtune=generic -fPIC"
   LIBDIRSUFFIX="64"
+elif [ "$ARCH" = "aarch64" ]; then
+  SLKCFLAGS="-O2 -march=armv8-a -mtune=generic -fPIC"
+  LIBDIRSUFFIX="64"
 else
   SLKCFLAGS="-O2"
   LIBDIRSUFFIX=""
@@ -75,7 +78,6 @@ while true; do
     esac
 done
 
-# rust-version in both Cargo.toml must cover what their Cargo.lock needs
 # rust-version in both Cargo.toml must cover what their Cargo.lock needs
 if [ -f "$CWD/scripts/check-msrv.sh" ]; then
   if ! bash "$CWD/scripts/check-msrv.sh"; then
