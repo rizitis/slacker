@@ -1,1 +1,7 @@
-Fix slacker <cmd> --help
+1. Fix slacker <cmd> --help
+2. slacker-cli (standalone Package)
+        the real slacker without gui
+3. slacker (required: slacker-cli)
+        slacker + gui
+4. slacker-flatpak (required: flatpak,slacker)
+        flatpak repos manager + slacker
