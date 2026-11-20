@@ -19,7 +19,7 @@
 #
 #  Architecture  (auto-detected — just match the directory in the line you pick)
 #  ----------------------------------------------------------------------------
-#        x86_64   ->   .../slackware64-current/
+#        x86_64   ->   .../slackware-current/
 #        32-bit   ->   .../slackware-current/
 #
 #  The few rules
@@ -115,6 +115,8 @@
 #  --- GERMANY (DE) ----------------------------------------------------------
 # http://ftp.gwdg.de/pub/linux/slackware/slackware-current/
 # http://ftp.tu-chemnitz.de/pub/linux/slackware/slackware-current/
+# https://ftp6.gwdg.de/pub/linux/slackware/slackware-current/
+# https://mirror.netcologne.de/slackware/slackware-current/
 #
 #  --- GREECE (GR) -----------------------------------------------------------
 # http://ftp.cc.uoc.gr/mirrors/linux/slackware/slackware-current/
@@ -140,6 +142,9 @@
 #  --- POLAND (PL) -----------------------------------------------------------
 # http://ftp.slackware.pl/pub/slackware/slackware-current/
 # http://sunsite.icm.edu.pl/packages/linux-slackware/slackware-current/
+#
+#  --- Portugal -----------------------------------------------------------
+# https://ftp.rnl.tecnico.ulisboa.pt/pub/slackware/slackware-current/
 #
 #  --- RUSSIA (RU) -----------------------------------------------------------
 # http://mirror.rol.ru/slackware/slackware-current/

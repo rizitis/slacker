@@ -17,6 +17,7 @@
 - Update: slacker-cli
     - probe timeouts (FRESHNESS_TIMEOUT_SECS, PROBE_TIMEOUT_SECS, status
       Freshness, build_agent) do not cover the connect, which is ureq's 30 s
+    - mirrors file updated.
 - Update: slacker-gui
     - check-updates runs when the Updates page is opened or refresh is
       pressed, and not twice at the same time

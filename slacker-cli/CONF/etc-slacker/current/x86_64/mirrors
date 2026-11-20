@@ -115,6 +115,8 @@
 #  --- GERMANY (DE) ----------------------------------------------------------
 # http://ftp.gwdg.de/pub/linux/slackware/slackware64-current/
 # http://ftp.tu-chemnitz.de/pub/linux/slackware/slackware64-current/
+# https://ftp6.gwdg.de/pub/linux/slackware/slackware64-current/
+# https://mirror.netcologne.de/slackware/slackware64-current/
 #
 #  --- GREECE (GR) -----------------------------------------------------------
 # http://ftp.cc.uoc.gr/mirrors/linux/slackware/slackware64-current/
@@ -141,6 +143,9 @@
 # http://ftp.slackware.pl/pub/slackware/slackware64-current/
 # http://sunsite.icm.edu.pl/packages/linux-slackware/slackware64-current/
 #
+#  --- Portugal -----------------------------------------------------------
+# https://ftp.rnl.tecnico.ulisboa.pt/pub/slackware/slackware64-current/
+#
 #  --- RUSSIA (RU) -----------------------------------------------------------
 # http://mirror.rol.ru/slackware/slackware64-current/
 # http://mirror.yandex.ru/slackware/slackware64-current/
@@ -165,11 +170,11 @@
 #
 #  --- UNITED KINGDOM (UK) ---------------------------------------------------
 # http://slackware.uk/slackware/slackware64-current/
-# http://ftp.mirrorservice.org/sites/ftp.slackware.com/pub/slackware/slackware64-current/
+# https://ftp.mirrorservice.org/sites/ftp.slackware.com/pub/slackware/slackware64-current/
 # http://mirror.bytemark.co.uk/slackware/slackware64-current/
 #
 #  --- UNITED STATES (US) ----------------------------------------------------
-# http://mirrors.us.kernel.org/slackware/slackware64-current/
+# https://mirrors.us.kernel.org/slackware/slackware64-current/
 # http://mirrors.xmission.com/slackware/slackware64-current/
 # https://mirror.slackbuilds.org/slackware/slackware64-current/
 # http://slackware.cs.utah.edu/pub/slackware/slackware64-current/

@@ -5,3 +5,4 @@
         slacker + gui
 4. slacker-flatpak (required: flatpak,slacker)
         flatpak repos manager + slacker
+5. maybe its better to forget mirrorlist and scan our own? it will be faster and more secure?

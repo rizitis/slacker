@@ -20,7 +20,7 @@
 #  Architecture  (auto-detected — just match the directory in the line you pick)
 #  ----------------------------------------------------------------------------
 #        x86_64   ->   .../slackware64-16.0/
-#        32-bit   ->   .../slackware-current/
+#        32-bit   ->   .../slackware-16.0/
 #
 #  The few rules
 #  -------------
@@ -30,9 +30,6 @@
 #    * The trailing slash is optional.
 #    * The official repo's priority and name are set in the 'repos' file; its
 #      line there uses the keyword  mirror  to read the URL from HERE.
-#
-#  A full, always-current list of official mirrors lives at:
-#        https://mirrors.slackware.com/mirrorlist/
 #
 # ----------------------------------------------------------------------------
 #  What  slacker find-mirror  looks like
@@ -50,16 +47,6 @@
 #    Fastest: https://mirror1.sox.rs/slackware/ — to use it, make this the
 #    single active line in your `mirrors` file:
 #        https://mirror1.sox.rs/slackware/slackware-16.0/
-#
-#
-# ============================================================================
-#  RECOMMENDED  —  the redirector (auto-picks a mirror near you)
-# ============================================================================
-#  Best default for most people. Use http/https, not ftp: only http resolves
-#  you to a nearby mirror.
-#
-# https://mirrors.slackware.com/slackware/slackware-16.0/
-#
 #
 # ============================================================================
 #  LOCAL  —  a CD/DVD drive, mounted media, or an on-disk mirror
@@ -115,6 +102,8 @@
 #  --- GERMANY (DE) ----------------------------------------------------------
 # http://ftp.gwdg.de/pub/linux/slackware/slackware-16.0/
 # http://ftp.tu-chemnitz.de/pub/linux/slackware/slackware-16.0/
+# https://ftp6.gwdg.de/pub/linux/slackware/slackware-16.0/
+# https://mirror.netcologne.de/slackware/slackware-16.0/
 #
 #  --- GREECE (GR) -----------------------------------------------------------
 # http://ftp.cc.uoc.gr/mirrors/linux/slackware/slackware-16.0/
@@ -140,6 +129,9 @@
 #  --- POLAND (PL) -----------------------------------------------------------
 # http://ftp.slackware.pl/pub/slackware/slackware-16.0/
 # http://sunsite.icm.edu.pl/packages/linux-slackware/slackware-16.0/
+#
+#  --- Portugal -----------------------------------------------------------
+# https://ftp.rnl.tecnico.ulisboa.pt/pub/slackware/slackware-16.0/
 #
 #  --- RUSSIA (RU) -----------------------------------------------------------
 # http://mirror.rol.ru/slackware/slackware-16.0/
