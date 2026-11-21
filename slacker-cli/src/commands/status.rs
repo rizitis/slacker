@@ -1441,6 +1441,25 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
             srow(&info, "", &ui::dim(&format!("(+{} more)", leftovers.len() - LEFTOVER_SAMPLE)));
         }
     }
+    // Running programs that still use files an upgrade replaced. Needs root
+    // (every process, and what they have loaded); shown only when found.
+    let stale_procs = if current_uid() == Some(0) {
+        let r = crate::stale::scan(&cfg.pkg_db_dir, &cfg.adm_dir.join("removed_packages"));
+        if !r.procs.is_empty() {
+            srow(
+                &warn,
+                "CheckRestart",
+                &ui::yellow(&format!(
+                    "{} running program(s) still use files an upgrade replaced \u{2014} see `slacker check-restart`",
+                    r.procs.len()
+                )),
+            );
+        }
+        r.procs.len()
+    } else {
+        srow(&info, "CheckRestart", &ui::dim("not checked (needs root \u{2014} re-run as root)"));
+        0
+    };
     let mut parts: Vec<String> = repos
         .iter()
         .map(|r| {
@@ -1612,6 +1631,11 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         notes.push(format!(
             "{unranked_pkgs} installed package(s) carry a build tag with no priority ({}) — they cannot be ranked, so they are kept and never upgraded; give each tag a priority in `repos`, or removepkg and install from a repo",
             unranked_tags.join(", ")
+        ));
+    }
+    if stale_procs > 0 {
+        notes.push(format!(
+            "{stale_procs} running program(s) still use files an upgrade replaced \u{2014} restart them; `slacker check-restart` lists them"
         ));
     }
     if security_problem {

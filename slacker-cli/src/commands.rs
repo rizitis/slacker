@@ -1,6 +1,7 @@
 //! Command implementations, grouped by area. Shared helpers stay in main.rs.
 
 pub(crate) mod blacklist;
+pub(crate) mod check_restart;
 pub(crate) mod clean;
 pub(crate) mod find_mirror;
 pub(crate) mod fix_upgrade;

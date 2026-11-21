@@ -102,6 +102,15 @@ pub(crate) enum Cmd {
     /// repos' candidates (or only the record is removed when nothing would be
     /// deleted). Asks first; refuses while a pkgtool runs.
     FixUpgrade,
+    /// List running programs that still use files an upgrade replaced.
+    ///
+    /// After an upgrade, a program that was already running keeps the old
+    /// program and libraries it had loaded. This lists those processes, with the
+    /// files and the packages they come from, so you can restart them. Only
+    /// files listed in a pkgtools record count; a reinstall of the same build is
+    /// not reported. Programs and shared libraries only: scripts are not seen.
+    /// Changes nothing; run as root. Exit status 100 when something is found.
+    CheckRestart,
     /// Download package files without installing them.
     ///
     /// Saved to the cache by default, or to a directory given with -o/--output.

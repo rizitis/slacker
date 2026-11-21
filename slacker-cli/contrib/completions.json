@@ -14,6 +14,7 @@
     "remove":            {"selector": true,  "positional": "installed"},
     "revert-pkg":        {"selector": false, "positional": "installed"},
     "fix-upgrade":       {"selector": false, "positional": "none"},
+    "check-restart":     {"selector": false, "positional": "none"},
     "download":          {"selector": true,  "positional": "none", "flags": ["-o", "--output"]},
     "upgrade-all":       {"selector": false, "positional": "none"},
     "upgrade-dist":      {"selector": false, "positional": "none"},

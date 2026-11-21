@@ -20,6 +20,7 @@ mod pkg;
 mod pkgdb;
 mod repo;
 mod revert;
+mod stale;
 mod system;
 mod template;
 mod ui;
@@ -28,6 +29,7 @@ use clap::Parser;
 use cli::{Cli, Cmd};
 use commands::blacklist::{cmd_frozen, cmd_nodep, cmd_pin, cmd_undep, cmd_unfrozen, cmd_unpin};
 use commands::clean::{cmd_clean_cache, cmd_clean_system};
+use commands::check_restart::cmd_check_restart;
 use commands::find_mirror::cmd_find_mirror;
 use commands::fix_upgrade::cmd_fix_upgrade;
 use commands::install::{
@@ -204,6 +206,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::Remove { patterns } => cmd_remove(cli, &cfg, patterns),
         Cmd::RevertPkg { name } => cmd_revert_pkg(cli, &cfg, name),
         Cmd::FixUpgrade => cmd_fix_upgrade(cli, &cfg),
+        Cmd::CheckRestart => cmd_check_restart(&cfg),
         Cmd::Download { patterns, output } => cmd_download(cli, &cfg, patterns, output.as_deref()),
         Cmd::UpgradeAll => cmd_upgrade_all(cli, &cfg),
         Cmd::UpgradeDist { target } => cmd_upgrade_dist(cli, &cfg, target),
@@ -348,9 +351,13 @@ fn ensure_privileged(cmd: &Cmd) -> Result<(), String> {
     } else {
         "you are not in the 'wheel' group; ask a system administrator".to_string()
     };
-    Err(format!(
-        "'{name}' modifies the system or cache and must be run as root — {hint}"
-    ))
+    // check-restart changes nothing; it needs root to read every process.
+    let why = if matches!(cmd, Cmd::CheckRestart) {
+        "reads every running process"
+    } else {
+        "modifies the system or cache"
+    };
+    Err(format!("'{name}' {why} and must be run as root — {hint}"))
 }
 
 /// Short command name for messages.
@@ -368,6 +375,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::Remove { .. } => "remove",
         Cmd::RevertPkg { .. } => "revert-pkg",
         Cmd::FixUpgrade => "fix-upgrade",
+        Cmd::CheckRestart => "check-restart",
         Cmd::Download { .. } => "download",
         Cmd::UpgradeAll => "upgrade-all",
         Cmd::UpgradeDist { .. } => "upgrade-dist",

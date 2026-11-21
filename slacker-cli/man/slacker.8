@@ -1,4 +1,4 @@
-.TH SLACKER 8 "November 2026" "slacker 0.14.2" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.14.1" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -304,6 +304,29 @@ It asks before changing anything
 changes nothing and asks nothing), and refuses to start while
 .BR installpkg ", " upgradepkg " or " removepkg
 is running, since a record is expected while they work.
+.TP
+.B check-restart
+List running programs that still use files an upgrade replaced.
+.B installpkg
+unpacks over the old files, so a program that was already running keeps the
+program and shared libraries it had loaded; the kernel shows them in
+.I /proc
+as deleted. A process is listed when an executable mapping (its program or a
+shared library) is deleted, its path is in the file list of an installed
+package (or of a record in
+.IR ADM_DIR/removed_packages/ ,
+shown as a removed package), and what is loaded differs from the file there
+now, so a reinstall of the same build is not listed. Processes in another mount
+namespace (containers) are counted but not checked. Each process is shown with its user,
+the files with their packages, and its command line (cut to the terminal width;
+whole in a pipe); restarting them (or a reboot) is up
+to you. Scripts (python, perl, shell) and files read once at start are not seen.
+It changes nothing, but needs root to read every process, and takes the lock like
+the commands that change the system. Exit status
+.B 100
+when something is found,
+.B 0
+otherwise.
 .SS Bulk operations
 .TP
 .B upgrade-all
@@ -685,6 +708,8 @@ packages, upgrades that
 .B upgradepkg
 left unfinished (see
 .BR \%fix\-upgrade ),
+running programs that still use replaced files (as root; see
+.BR \%check\-restart ),
 and
 \(em when online \(em reachability and pending updates. When your mirror is more
 than 48 hours behind upstream it says so and points you at
@@ -785,6 +810,8 @@ Read-only commands
 run as any user. Commands that change the system, the cache, or the
 configuration (everything else) must be run as root; non-root invocations stop
 with a clear message before doing anything.
+.B check-restart
+changes nothing but also needs root, to read every running process.
 .PP
 Those same commands take an exclusive lock
 .RI ( /run/slacker.lock )
@@ -1572,7 +1599,9 @@ upgraded itself and must be re\-run.
 .TP
 .B 100
 There are pending updates (from
-.BR check-updates ).
+.BR check-updates ),
+or running programs that still use replaced files (from
+.BR check-restart ).
 .B check-updates
 also exits 100 for a repository whose cached
 .I PACKAGES.TXT
@@ -1687,6 +1716,14 @@ Roll a package back to a previous \-current version:
 .RS
 .nf
 slacker revert-pkg emacs
+.fi
+.RE
+.PP
+After an upgrade, see which running programs to restart:
+.PP
+.RS
+.nf
+slacker check-restart
 .fi
 .RE
 .PP

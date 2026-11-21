@@ -12,7 +12,7 @@ Setup
   ✓ Repo release all match this system (24.04)
   ✓ Repo arch  all match this system (x86_64)
   ✓ Repo trust no repos are frozen
-  ! GPG keys   none imported yet
+  · GPG keys   cannot verify without root
   ✗ Metadata   not downloaded yet
   · Blacklist  0 rule(s)
   ✓ Tag prio   every installed package's source can be ranked
@@ -22,6 +22,7 @@ Installed
   ✓ Packages   2
   ! Leftovers  1 upgradepkg record(s) left in /var/lib/pkgtools/packages: an upgrade did not finish (unless upgradepkg is running now); fix: `slacker fix-upgrade` as root
   ·            openssl-3.3.2-x86_64-1-upgraded-2026-11-20,14:35:12
+  · CheckRestart not checked (needs root — re-run as root)
   · By source  patches ?, slackware ?, extras ?, testing ?
   ·            ? = no metadata yet (slackware, patches, extras, testing) — run `slacker update`, or check the repo URL
 
@@ -29,7 +30,6 @@ Online
   ✗ Reachable  slackware unreachable: https://mirrors.slackware.com/mirrorlist/ChangeLog.txt: Dns Failed: resolve dns name 'mirrors.slackware.com:443': failed to lookup address information: Name or service not known
 
 Setup looks correct — you're ready. Start with your first update, in order:
-  → slacker update gpg
   → slacker update
   → slacker fix-upgrade
   → slacker install-new

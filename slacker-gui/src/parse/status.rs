@@ -28,17 +28,21 @@ impl Mark {
 }
 
 /// Every label `status` prints (srow calls in main.rs), plus the empty one.
-pub const LABELS: [&str; 36] = [
+pub const LABELS: [&str; 37] = [
     "Pkgtools", "Tools", "Locate DB", "Config dir", "Config", "Mirror", "Proxy", "Freshness",
     "Repos", "Cache", "Tag rules", "Verify", "Transport", "Credentials", "Repo release",
     "Repo arch", "Repo trust", "GPG keys", "Metadata", "Blacklist", "Pins", "Tag prio",
     "Configs", "Integrity", "Symlinks", "Writable", "Ownership", "Admin dir", "Packages",
-    "Leftovers", "By source", "Connection", "Reachable", "Updates", "All repos", "Stock-db",
+    "Leftovers", "CheckRestart", "By source", "Connection", "Reachable", "Updates", "All repos", "Stock-db",
 ];
 
 /// The row slacker prints when upgradepkg left `<pkg>-upgraded-<time>`
 /// records behind; the record names follow it as unlabelled rows.
 pub const LEFTOVERS: &str = "Leftovers";
+
+/// The row about running programs that still use replaced files. The GUI
+/// never runs as root, so it shows "not checked (needs root …)" there.
+pub const CHECK_RESTART: &str = "CheckRestart";
 
 pub const SECTIONS: [&str; 4] = ["Environment", "Setup", "Installed", "Online"];
 
@@ -233,11 +237,14 @@ mod tests {
         let installed = s.sections.iter().find(|x| x.title == "Installed").unwrap();
         let labels: Vec<&str> = installed.rows.iter().map(|r| r.label.as_str()).collect();
         // The `? = no metadata` row under By source stays a row of its own.
-        assert_eq!(labels, ["Packages", "Leftovers", "By source", ""]);
+        assert_eq!(labels, ["Packages", "Leftovers", "CheckRestart", "By source", ""]);
         let left = &installed.rows[1];
         assert_eq!(left.mark, Mark::Warn);
         assert!(left.detail.contains("slacker fix-upgrade"));
         assert_eq!(left.extra, vec!["openssl-3.3.2-x86_64-1-upgraded-2026-11-20,14:35:12"]);
+        let cr = &installed.rows[2];
+        assert_eq!(cr.mark, Mark::Info);
+        assert!(cr.detail.starts_with("not checked (needs root"));
         let v = s.verdict.unwrap();
         assert!(v.items.contains(&(ItemKind::Step, "slacker fix-upgrade".to_string())));
     }
@@ -249,6 +256,10 @@ mod tests {
         assert_eq!(match_label("Config     repos and mirrors parse"), Some(("Config", "repos and mirrors parse")));
         assert_eq!(match_label("Repos      8 configured"), Some(("Repos", "8 configured")));
         assert_eq!(match_label("Proxy      http://p:3128"), Some(("Proxy", "http://p:3128")));
+        assert_eq!(
+            match_label("CheckRestart not checked (needs root)"),
+            Some(("CheckRestart", "not checked (needs root)"))
+        );
         assert_eq!(match_label("Nonsense   x"), None);
     }
 

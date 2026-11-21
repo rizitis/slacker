@@ -15,11 +15,19 @@
     - Fix doc comments placed above the wrong functions.
     - DESIGN.md updated.
 - Update: slacker-cli
+    - CMD: Add check-restart to list running programs that still use files an
+      upgrade replaced (program or shared library, with user, packages and
+      command line); changes nothing, needs root, exit 100 when found
+    - status (as root) shows a CheckRestart row and a note when it finds
+      such programs; as a plain user the row says "not checked (needs root)"
     - probe timeouts (FRESHNESS_TIMEOUT_SECS, PROBE_TIMEOUT_SECS, status
       Freshness, build_agent) do not cover the connect, which is ureq's 30 s
     - mirrors file updated.
     - CMD: Add fix-upgrade to finish upgrades upgradepkg left unfinished; status reports leftover -upgraded- records
+
 - Update: slacker-gui
+    - Add place for `slacker check-restart` for «CheckRestart»
+    - Doctor recognises the Proxy row (it went to "Other output")
     - Add place for `slacker fix-upgrade` for «Leftovers»
     - check-updates runs when the Updates page is opened or refresh is
       pressed, and not twice at the same time

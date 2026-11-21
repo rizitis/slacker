@@ -87,6 +87,9 @@ fn render(ctx: &Ctx, body: &gtk::Box, report: &Report, version: &str) {
             if r.label == status::LEFTOVERS {
                 g.add(&fix_upgrade_row(ctx));
             }
+            if r.label == status::CHECK_RESTART {
+                g.add(&check_restart_row(ctx));
+            }
         }
         body.append(&g);
     }
@@ -102,13 +105,29 @@ fn render(ctx: &Ctx, body: &gtk::Box, report: &Report, version: &str) {
 
 /// Under the Leftovers row: what to run, and how, to finish the upgrades.
 fn fix_upgrade_row(ctx: &Ctx) -> adw::ActionRow {
-    let cmd = "slacker fix-upgrade";
-    let row = widgets::row(
-        &format!("<tt>{cmd}</tt>"),
+    command_row(
+        ctx,
+        "slacker fix-upgrade",
         "From a terminal, as root. It finishes what upgradepkg did not, with the pkgtools \
          (reinstall, removepkg of the leftover record, reinstall), using the package from your repos. \
          It shows each step and asks before it changes anything.",
-    );
+    )
+}
+
+/// Under the CheckRestart row. The GUI runs status as you, so that check is
+/// never made here; the command is for a terminal, as root.
+fn check_restart_row(ctx: &Ctx) -> adw::ActionRow {
+    command_row(
+        ctx,
+        "slacker check-restart",
+        "From a terminal, as root. It lists running programs that still use files an upgrade \
+         replaced, so you can restart them. It changes nothing.",
+    )
+}
+
+/// A terminal command, in monospace, with a copy button.
+fn command_row(ctx: &Ctx, cmd: &'static str, text: &str) -> adw::ActionRow {
+    let row = widgets::row(&format!("<tt>{cmd}</tt>"), text);
     // Markup only for the monospace title; the subtitle has no markup characters.
     row.set_use_markup(true);
     row.add_prefix(&widgets::tile("utilities-terminal-symbolic", None));
