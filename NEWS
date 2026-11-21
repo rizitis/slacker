@@ -1,3 +1,5 @@
+Version Beta 0.14.2
+=====
 - Update: slacker-flatpak
     - Overview: "Data of uninstalled applications" now runs
       `flatpak uninstall --delete-data` in the transaction window; flatpak

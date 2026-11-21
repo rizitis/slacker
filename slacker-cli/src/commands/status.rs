@@ -1441,6 +1441,32 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
             srow(&info, "", &ui::dim(&format!("(+{} more)", leftovers.len() - LEFTOVER_SAMPLE)));
         }
     }
+    // What an install cut off leaves: a record with no file list (cut before
+    // installpkg wrote it), a record whose install script did not run, and
+    // installpkg's own `installpkg-<cookie>` directory in the root. Shown
+    // only, nothing is changed.
+    let incomplete = system::incomplete_records(&cfg.pkg_db_dir);
+    let install_tmps = system::installpkg_tmp_dirs(&system::system_root(&cfg.adm_dir));
+    let not_run = system::scripts_not_run(&cfg.pkg_db_dir, &install_tmps);
+    let mut cut_items: Vec<String> = incomplete.iter().map(|r| format!("{r}: no file list")).collect();
+    cut_items.extend(not_run.iter().map(|(r, _)| format!("{r}: install script did not run")));
+    cut_items.extend(install_tmps.iter().map(|t| format!("{}: left by installpkg", t.dir.display())));
+    if !cut_items.is_empty() {
+        srow(
+            &warn,
+            "Incomplete",
+            &ui::yellow(&format!(
+                "{} sign(s) of an install that did not finish (unless installpkg is running now); fix: `slacker fix-upgrade` as root",
+                cut_items.len()
+            )),
+        );
+        for item in cut_items.iter().take(LEFTOVER_SAMPLE) {
+            srow(&info, "", &ui::dim(item));
+        }
+        if cut_items.len() > LEFTOVER_SAMPLE {
+            srow(&info, "", &ui::dim(&format!("(+{} more)", cut_items.len() - LEFTOVER_SAMPLE)));
+        }
+    }
     // Running programs that still use files an upgrade replaced. Needs root
     // (every process, and what they have loaded); shown only when found.
     let stale_procs = if current_uid() == Some(0) {
@@ -1590,9 +1616,9 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     if metadata_incomplete || pending {
         steps.push("slacker update");
     }
-    // An upgrade upgradepkg did not finish is fixed before anything else is
-    // installed or upgraded (after `update`, so the repo package is current).
-    if !leftovers.is_empty() {
+    // An upgrade upgradepkg did not finish, or an install cut off before its
+    // file list, is fixed before anything else is installed or upgraded (after `update`, so the repo package is current).
+    if !leftovers.is_empty() || !cut_items.is_empty() {
         steps.push("slacker fix-upgrade");
     }
     // A fresh/unsynced system, or one with pending changes, installs the newly

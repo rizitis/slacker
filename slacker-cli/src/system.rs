@@ -76,6 +76,165 @@ pub fn leftover_upgrade_records(db_dir: &Path) -> Vec<String> {
     out
 }
 
+/// True when a pkgtools record has no file list: no "FILE LIST:" line, or no
+/// entry after it. installpkg writes the header first and appends the list
+/// only after tar has extracted everything, so such a record is an install
+/// that was cut off (or one running now). A complete record lists at least
+/// `./`. An unreadable record is not reported. Reads only up to the first
+/// entry of the list.
+pub(crate) fn record_lacks_file_list(record: &Path) -> bool {
+    use std::io::BufRead;
+    let Ok(f) = std::fs::File::open(record) else { return false };
+    let mut lines = std::io::BufReader::new(f).lines();
+    for l in lines.by_ref() {
+        match l {
+            Ok(l) if l == "FILE LIST:" => break,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+    // Ended without "FILE LIST:" (the loop ran out), or the list is empty.
+    !lines.any(|l| l.map(|l| !l.is_empty()).unwrap_or(false))
+}
+
+/// Names of installed records with no file list (see `record_lacks_file_list`),
+/// sorted. `-upgraded-` records are left out, and so is every record of a
+/// package that has one: that is an unfinished upgrade, which fix-upgrade
+/// handles as such. Read-only.
+pub fn incomplete_records(db_dir: &Path) -> Vec<String> {
+    let upgrading: std::collections::HashSet<String> = leftover_upgrade_records(db_dir)
+        .iter()
+        .filter_map(|r| PkgId::parse(crate::revert::strip_upgraded_suffix(r)).map(|p| p.name))
+        .collect();
+    let mut out: Vec<String> = match std::fs::read_dir(db_dir) {
+        Ok(e) => e
+            .flatten()
+            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .filter(|n| !is_removed_record(n))
+            .filter(|n| PkgId::parse(n).is_some_and(|p| !upgrading.contains(&p.name)))
+            .filter(|n| record_lacks_file_list(&db_dir.join(n)))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    out.sort();
+    out
+}
+
+/// The root the pkgtools install into, read from ADM_DIR: the part before
+/// `var/adm`, `var/log` or `var/lib/pkgtools`, or `/` for any other ADM_DIR.
+pub fn system_root(adm_dir: &Path) -> PathBuf {
+    for tail in ["var/adm", "var/log", "var/lib/pkgtools"] {
+        let mut root = adm_dir.to_path_buf();
+        let mut ok = true;
+        for part in tail.rsplit('/') {
+            if root.file_name().and_then(|n| n.to_str()) == Some(part) {
+                root.pop();
+            } else {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            return if root.as_os_str().is_empty() { PathBuf::from("/") } else { root };
+        }
+    }
+    PathBuf::from("/")
+}
+
+/// A directory installpkg left in the root. installpkg unpacks the package's
+/// `install/` into `ROOT/installpkg-<mcookie>` (or `-<PID>` without mcookie),
+/// runs doinst.sh from there, copies it to scripts/, and removes the directory.
+/// One still there is an install cut off after the unpack.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstallTmp {
+    pub dir: PathBuf,
+    /// The package name, from the `name:` lines of its slack-desc.
+    pub package: Option<String>,
+    /// Its doinst.sh, if it has one.
+    pub doinst: Option<String>,
+    /// Entries other than do*inst.sh and slack-* (installpkg removes only
+    /// those, then rmdir).
+    pub other: Vec<String>,
+}
+
+fn is_installpkg_tmp_name(n: &str) -> bool {
+    let Some(id) = n.strip_prefix("installpkg-") else { return false };
+    (id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        || (!id.is_empty() && id.len() <= 10 && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The package a slack-desc describes: the name before the first `:` of its
+/// first `name: ...` line (comment and ruler lines are skipped).
+fn slack_desc_name(text: &str) -> Option<String> {
+    text.lines().find_map(|l| {
+        let (name, _) = l.split_once(':')?;
+        let ok = !name.is_empty()
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"+_.-".contains(&b));
+        ok.then(|| name.to_string())
+    })
+}
+
+/// The directories installpkg left in `root` (see `InstallTmp`), sorted.
+/// Symlinks are not followed. Read-only.
+pub fn installpkg_tmp_dirs(root: &Path) -> Vec<InstallTmp> {
+    let Ok(rd) = std::fs::read_dir(root) else { return Vec::new() };
+    let mut out: Vec<InstallTmp> = rd
+        .flatten()
+        .filter(|e| e.file_name().to_str().is_some_and(is_installpkg_tmp_name))
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| {
+            let dir = e.path();
+            let package = std::fs::read_to_string(dir.join("slack-desc")).ok().and_then(|t| slack_desc_name(&t));
+            let doinst = std::fs::read_to_string(dir.join("doinst.sh")).ok();
+            let mut other: Vec<String> = std::fs::read_dir(&dir)
+                .map(|r| {
+                    r.flatten()
+                        .filter_map(|x| x.file_name().to_str().map(str::to_string))
+                        .filter(|n| !(n.starts_with("do") && n.ends_with("inst.sh")) && !n.starts_with("slack-"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            other.sort();
+            InstallTmp { dir, package, doinst, other }
+        })
+        .collect();
+    out.sort_by(|a, b| a.dir.cmp(&b.dir));
+    out
+}
+
+/// Installed records whose install script did not run: a directory installpkg
+/// left (see `InstallTmp`) holds a doinst.sh, its package has a complete
+/// record, and no record of that package has the same script in scripts/
+/// (installpkg copies it there after running it). Packages with a
+/// `-upgraded-` record or a record with no file list are left out: they are
+/// fixed as such. One (record, dir) per package; the record is the first
+/// one of that name. Read-only.
+pub fn scripts_not_run(db_dir: &Path, tmps: &[InstallTmp]) -> Vec<(String, PathBuf)> {
+    let scripts = db_dir.parent().map(|p| p.join("scripts")).unwrap_or_default();
+    let skip: std::collections::HashSet<String> = leftover_upgrade_records(db_dir)
+        .iter()
+        .map(|r| crate::revert::strip_upgraded_suffix(r).to_string())
+        .chain(incomplete_records(db_dir))
+        .filter_map(|r| PkgId::parse(&r).map(|p| p.name))
+        .collect();
+    let installed = installed_packages(db_dir).unwrap_or_default();
+    let mut out = Vec::new();
+    for t in tmps {
+        let (Some(name), Some(doinst)) = (&t.package, &t.doinst) else { continue };
+        if skip.contains(name) {
+            continue;
+        }
+        let recs: Vec<String> = installed.iter().filter(|p| &p.name == name).map(|p| p.tag()).collect();
+        let ran = recs
+            .iter()
+            .any(|r| std::fs::read_to_string(scripts.join(r)).is_ok_and(|s| &s == doinst));
+        if let (false, Some(first)) = (ran, recs.first()) {
+            out.push((first.clone(), t.dir.clone()));
+        }
+    }
+    out
+}
+
 /// Running installpkg, upgradepkg or removepkg processes, as (pid, tool),
 /// read from /proc. These are shell scripts, so the tool is the first or the
 /// second word of the command line (`/bin/bash /sbin/upgradepkg ...`).
@@ -309,6 +468,78 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
         assert!(leftover_upgrade_records(&dir).is_empty());
+    }
+
+    #[test]
+    fn records_without_a_file_list_are_listed() {
+        let dir = std::env::temp_dir().join("slacker_test_incomplete_records");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let head = "PACKAGE NAME:     x\nPACKAGE DESCRIPTION:\nx: x\n";
+        for (n, body) in [
+            ("good-1-x86_64-1", format!("{head}FILE LIST:\n./\nusr/\n")),
+            ("nolist-1-x86_64-1", head.to_string()),
+            ("emptylist-1-x86_64-1_SBo", format!("{head}FILE LIST:\n")),
+            // an unfinished upgrade: fix-upgrade handles it as one
+            ("up-2-x86_64-1", head.to_string()),
+            ("up-1-x86_64-1-upgraded-2026-11-20,14:35:12", head.to_string()),
+        ] {
+            std::fs::write(dir.join(n), body).unwrap();
+        }
+        assert_eq!(
+            incomplete_records(&dir),
+            vec!["emptylist-1-x86_64-1_SBo".to_string(), "nolist-1-x86_64-1".to_string()]
+        );
+        assert!(!record_lacks_file_list(&dir.join("good-1-x86_64-1")));
+        assert!(!record_lacks_file_list(&dir.join("missing-1-x86_64-1")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn root_comes_from_adm_dir() {
+        assert_eq!(system_root(Path::new("/var/adm")), PathBuf::from("/"));
+        assert_eq!(system_root(Path::new("/var/log")), PathBuf::from("/"));
+        assert_eq!(system_root(Path::new("/mnt/new/var/lib/pkgtools")), PathBuf::from("/mnt/new"));
+        assert_eq!(system_root(Path::new("/srv/adm")), PathBuf::from("/"));
+    }
+
+    #[test]
+    fn installpkg_dirs_and_scripts_that_did_not_run() {
+        let root = std::env::temp_dir().join("slacker_test_installpkg_tmp");
+        let _ = std::fs::remove_dir_all(&root);
+        let db = root.join("var/lib/pkgtools/packages");
+        let sc = root.join("var/lib/pkgtools/scripts");
+        std::fs::create_dir_all(&db).unwrap();
+        std::fs::create_dir_all(&sc).unwrap();
+        let list = "PACKAGE NAME: x\nFILE LIST:\n./\n";
+        std::fs::write(db.join("foo-2-x86_64-1"), list).unwrap();
+        std::fs::write(db.join("bar-1-x86_64-1"), list).unwrap();
+        let doinst = "( cd usr/lib ; ln -sf libfoo.so libfoo.so.1 )\n";
+        let mk = |id: &str, pkg: &str, extra: bool| {
+            let d = root.join(format!("installpkg-{id}"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("slack-desc"), format!("# HOW TO EDIT\n       |-----handy-ruler---|\n{pkg}: {pkg} 2\n{pkg}:\n")).unwrap();
+            std::fs::write(d.join("doinst.sh"), doinst).unwrap();
+            if extra {
+                std::fs::write(d.join("stray"), "").unwrap();
+            }
+        };
+        mk("e954c3e29369efedbe34a3acd716a45e", "foo", false);
+        mk("4242", "bar", true);
+        std::fs::create_dir_all(root.join("installpkg-notacookie")).unwrap();
+        // bar's script ran (it is in scripts/); foo's did not
+        std::fs::write(sc.join("bar-1-x86_64-1"), doinst).unwrap();
+        let t = installpkg_tmp_dirs(&root);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].package.as_deref(), Some("bar"));
+        assert_eq!(t[0].other, vec!["stray".to_string()]);
+        assert_eq!(t[1].package.as_deref(), Some("foo"));
+        assert!(t[1].other.is_empty());
+        assert_eq!(
+            scripts_not_run(&db, &t),
+            vec![("foo-2-x86_64-1".to_string(), root.join("installpkg-e954c3e29369efedbe34a3acd716a45e"))]
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

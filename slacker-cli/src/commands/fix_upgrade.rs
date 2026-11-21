@@ -26,6 +26,28 @@
 //! checked like any install (cache, download, md5/gpg). For a package no repo
 //! has, or one that was skipped, the steps are printed to run by hand.
 //!
+//! An install cut off before its file list was written leaves a record with
+//! no file list (installpkg writes the header first and the list only after
+//! tar has extracted everything). removepkg cannot remove what such a record
+//! does not list, and `slacker status` cannot tell what the package owns. The
+//! fix is one `upgradepkg --reinstall FILE`, with the package chosen as above:
+//! the package is installed again and its record written whole; the removepkg
+//! step inside upgradepkg removes nothing, as the record lists nothing. A
+//! record of a package that also has a `-upgraded-` record is fixed as an
+//! unfinished upgrade instead (its step 1 is the same reinstall).
+//!
+//! An install cut off after the unpack but before doinst.sh ran leaves a
+//! complete record, no script in scripts/, and installpkg's own directory
+//! `ROOT/installpkg-<cookie>` holding doinst.sh and slack-desc (installpkg
+//! runs the script from there, copies it to scripts/, then removes the
+//! directory). The slack-desc names the package; when no record of it has
+//! that script in scripts/, it is fixed the same way, with one
+//! `upgradepkg --reinstall FILE`, which runs the script.
+//!
+//! The directories themselves are not removed: no pkgtool removes them, so
+//! slacker prints the two commands installpkg would have run
+//! (`rm -f DIR/do*inst.sh DIR/slack-*`, `rmdir DIR`) for the admin to run.
+//!
 //! One case needs no package file: a reinstall (or upgrade) whose new record
 //! is complete and lists every file and symlink the leftover record lists.
 //! Then `removepkg` of the leftover would delete nothing, and only the record
@@ -60,6 +82,13 @@ struct Fix<'a> {
     frozen: Vec<String>,
     /// The candidate chosen, if any.
     chosen: Option<&'a crate::repo::AvailPkg>,
+    /// An install cut off before its file list, or before its install script
+    /// ran (no `-upgraded-` record): fixed with one `upgradepkg --reinstall`.
+    incomplete: bool,
+    /// What is wrong with it, for an incomplete one.
+    why: String,
+    /// Why it cannot be fixed here even with a package file, if so.
+    blocked: Option<String>,
 }
 
 impl Fix<'_> {
@@ -118,12 +147,24 @@ fn manual_steps(records: &[String], file: &str) -> Vec<String> {
     v
 }
 
+/// The steps for one fix: the three of an unfinished upgrade, or the one
+/// reinstall of a record with no file list.
+fn steps_for(f: &Fix, file: &str) -> Vec<String> {
+    if f.incomplete {
+        vec![format!("upgradepkg --reinstall {file}")]
+    } else {
+        manual_steps(&f.records, file)
+    }
+}
+
 /// One line per candidate for the user to choose from.
 fn candidate_line(db: &PkgDb, cfg: &Config, f: &Fix, c: &crate::repo::AvailPkg) -> String {
     let reference = f.reference();
     let mut notes: Vec<String> = Vec::new();
     if c.id == *reference {
         notes.push("same build as installed".to_string());
+    } else if f.incomplete {
+        notes.push("another build: files only the cut-off install put on disk stay".to_string());
     }
     if f.now.is_some() && !db.upgrade_respects_priority(reference, c, &cfg.tag_priorities) {
         notes.push(format!(
@@ -157,11 +198,18 @@ fn ask_choice(n: usize) -> Option<usize> {
 
 pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let leftovers = system::leftover_upgrade_records(&cfg.pkg_db_dir);
-    if leftovers.is_empty() {
-        println!("No unfinished upgrade: no `-upgraded-` record in {}.", cfg.pkg_db_dir.display());
+    let incomplete = system::incomplete_records(&cfg.pkg_db_dir);
+    let tmps = system::installpkg_tmp_dirs(&system::system_root(&cfg.adm_dir));
+    if leftovers.is_empty() && incomplete.is_empty() && tmps.is_empty() {
+        println!(
+            "Nothing to fix: no `-upgraded-` record and no record without a file list in {}, no directory installpkg left in {}.",
+            cfg.pkg_db_dir.display(),
+            system::system_root(&cfg.adm_dir).display()
+        );
         return Ok(Outcome::NothingFound);
     }
-    // While a pkgtool runs, its `-upgraded-` record is expected; do not race it.
+    // While a pkgtool runs, its `-upgraded-` record, or a record with no file
+    // list yet, is expected; do not race it.
     let running = system::pkgtools_running();
     if !running.is_empty() {
         let list: Vec<String> = running.iter().map(|(p, t)| format!("{t} (PID {p})")).collect();
@@ -202,12 +250,48 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
             cands,
             frozen,
             chosen: None,
+            incomplete: false,
+            why: String::new(),
+            blocked: None,
+        });
+    }
+    let not_run = system::scripts_not_run(&cfg.pkg_db_dir, &tmps);
+    let mut cut: Vec<(String, String)> = incomplete.iter().map(|r| (r.clone(), "no file list".to_string())).collect();
+    for (r, d) in &not_run {
+        cut.push((r.clone(), format!("install script did not run ({} is still there)", d.display())));
+    }
+    for (rec, why) in &cut {
+        let Some(id) = pkg::PkgId::parse(rec) else {
+            unreadable.push(rec.clone());
+            continue;
+        };
+        // Two records of one name: which one upgradepkg would replace is not
+        // for slacker to guess.
+        let same_name = installed.iter().filter(|p| p.name == id.name).count();
+        let blocked = (same_name > 1).then(|| format!("{same_name} records of {} are installed", id.name));
+        let all = db.candidates(&id.name);
+        let frozen = all.iter().filter(|c| c.frozen).map(|c| c.repo.clone()).collect();
+        let cands = all.into_iter().filter(|c| !c.frozen).collect();
+        fixes.push(Fix {
+            name: id.name.clone(),
+            records: vec![rec.clone()],
+            record_only: false,
+            now: Some(id.clone()),
+            old: id,
+            cands,
+            frozen,
+            chosen: None,
+            incomplete: true,
+            why: why.clone(),
+            blocked,
         });
     }
 
     // ---------- what is found ----------
-    println!("{}", ui::blue("Unfinished upgrades (records upgradepkg left in the package DB):"));
-    for f in &fixes {
+    if fixes.iter().any(|f| !f.incomplete) {
+        println!("{}", ui::blue("Unfinished upgrades (records upgradepkg left in the package DB):"));
+    }
+    for f in fixes.iter().filter(|f| !f.incomplete) {
         for r in &f.records {
             println!("  {}", ui::white(r));
         }
@@ -217,6 +301,15 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
                 ui::dim(&format!("installed now: {} (source {})", n.tag(), installed_source_label(n)))
             ),
             None => println!("    {}", ui::dim(&format!("{} is not installed now", f.name))),
+        }
+    }
+    if fixes.iter().any(|f| f.incomplete) {
+        println!("{}", ui::blue("Installs cut off:"));
+    }
+    for f in fixes.iter().filter(|f| f.incomplete) {
+        println!("  {}  {}", ui::white(&f.records[0]), ui::dim(&f.why));
+        if let Some(b) = &f.blocked {
+            println!("    {}", ui::yellow(b));
         }
     }
     for r in &unreadable {
@@ -238,7 +331,7 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
 
     // ---------- the user picks the package ----------
     let ask = !cli.yes && !cli.dry_run;
-    for f in fixes.iter_mut().filter(|f| !f.record_only && !f.cands.is_empty()) {
+    for f in fixes.iter_mut().filter(|f| !f.record_only && f.blocked.is_none() && !f.cands.is_empty()) {
         println!("\n{}", ui::white(&format!("{}: which package to reinstall it from?", f.name)));
         for (i, c) in f.cands.iter().enumerate() {
             println!("  {}) {}", i + 1, candidate_line(&db, cfg, f, c));
@@ -266,7 +359,9 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
     let print_manual = |fixes: &[Fix]| {
         for f in fixes.iter().filter(|f| !f.record_only && f.chosen.is_none()) {
             let file = format!("{}.t?z", f.reference().tag());
-            let why = if f.cands.is_empty() && f.frozen.is_empty() {
+            let why = if let Some(b) = &f.blocked {
+                b.as_str()
+            } else if f.cands.is_empty() && f.frozen.is_empty() {
                 "no repository has it"
             } else if f.cands.is_empty() {
                 "only frozen candidates"
@@ -282,8 +377,35 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
                     f.name
                 ))
             );
-            for step in manual_steps(&f.records, &file) {
+            for step in steps_for(f, &file) {
                 println!("    {step}");
+            }
+        }
+    };
+
+    // The directories installpkg left: printed only, never removed here.
+    let print_dirs = || {
+        if tmps.is_empty() {
+            return;
+        }
+        println!(
+            "\n{}",
+            ui::yellow("Directories installpkg left (not removed by slacker). After the fixes above, run as root:")
+        );
+        for t in &tmps {
+            let what = match &t.package {
+                Some(p) => format!("package {p}"),
+                None => "no slack-desc: package unknown".to_string(),
+            };
+            println!("  {}", ui::dim(&format!("{} ({what})", t.dir.display())));
+            let d = t.dir.display();
+            println!("    rm -f {d}/do*inst.sh {d}/slack-*");
+            println!("    rmdir {d}");
+            if !t.other.is_empty() {
+                println!(
+                    "    {}",
+                    ui::yellow(&format!("it also holds {}: rmdir fails until you check those", t.other.join(", ")))
+                );
             }
         }
     };
@@ -292,6 +414,7 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
     let only: Vec<&Fix> = fixes.iter().filter(|f| f.record_only).collect();
     if todo.is_empty() && only.is_empty() {
         print_manual(&fixes);
+        print_dirs();
         return Ok(Outcome::Ok);
     }
 
@@ -300,7 +423,7 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
         for f in &todo {
             let c = f.chosen.expect("filtered");
             println!("  {} {}", ui::white(&f.name), ui::dim(&format!("with {} from {}", c.id.tag(), c.repo)));
-            for (i, step) in manual_steps(&f.records, &c.filename).iter().enumerate() {
+            for (i, step) in steps_for(f, &c.filename).iter().enumerate() {
                 println!("    {}. {step}", i + 1);
             }
         }
@@ -321,6 +444,7 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
 
     if cli.dry_run {
         print_manual(&fixes);
+        print_dirs();
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
     }
@@ -357,6 +481,15 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
             let repo = cfg.repo_by_name(&c.repo).ok_or("internal repo lookup failed")?;
             let dest = package_dest(cfg, &c.repo, &c.filename)?;
             fetch_and_verify(cfg, repo, c, &dest, false)?;
+            if f.incomplete {
+                println!("{}", ui::blue(&format!("{}: upgradepkg --reinstall", f.name)));
+                system::reinstall(&dest, cfg.terse)?;
+                let rec = cfg.pkg_db_dir.join(c.id.tag());
+                if !rec.exists() || system::record_lacks_file_list(&rec) {
+                    return Err(format!("{} has no complete record after upgradepkg", c.id.tag()));
+                }
+                return Ok(());
+            }
             println!("{}", ui::blue(&format!("[1/3] {}: upgradepkg --install-new --reinstall", f.name)));
             system::reinstall_or_install(&dest, cfg.terse)?;
             // Step 1 must have left a record of the package before anything is
@@ -386,10 +519,16 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
         }
     }
     print_manual(&fixes);
+    print_dirs();
 
-    let left = system::leftover_upgrade_records(&cfg.pkg_db_dir);
-    if failed.is_empty() && left.is_empty() {
-        println!("\n{}", ui::green("Done: no unfinished upgrade is left."));
+    let mut left = system::leftover_upgrade_records(&cfg.pkg_db_dir);
+    left.extend(system::incomplete_records(&cfg.pkg_db_dir));
+    left.extend(system::scripts_not_run(&cfg.pkg_db_dir, &tmps).into_iter().map(|(r, _)| r));
+    if failed.is_empty() && left.is_empty() && !tmps.is_empty() {
+        println!("\n{}", ui::green("Done: the packages are fixed; the directories above are yours to remove."));
+        Ok(Outcome::Ok)
+    } else if failed.is_empty() && left.is_empty() {
+        println!("\n{}", ui::green("Done: no unfinished upgrade and no record without a file list is left."));
         Ok(Outcome::Ok)
     } else if failed.is_empty() {
         println!("\n{}", ui::yellow(&format!("{} record(s) are still there (see above).", left.len())));

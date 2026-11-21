@@ -1,4 +1,4 @@
-.TH SLACKER 8 "November 2026" "slacker 0.14.1" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.14.2" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -299,6 +299,68 @@ architecture, package\-list and md5/GPG checks). With
 nobody is asked, so only a candidate that is exactly the installed build is
 taken. For a package no repository has, or one that was skipped, the three
 commands are printed, with the package file they need, for you to run by hand.
+.IP
+.B fix-upgrade
+also fixes an install cut off before its file list was written.
+.B installpkg
+writes the package record header first and appends the file list only after
+.B tar
+has extracted everything, so such a record has no
+.I FILE LIST:
+line, or no entry after it
+.RB ( status
+reports it as
+.IR Incomplete ).
+.B removepkg
+cannot remove what such a record does not list. The fix is one
+.IR "upgradepkg \-\-reinstall" ,
+with the package chosen as above: the package is installed again and its record
+written whole. A candidate that is not the same build is marked: files only the
+cut-off install put on disk stay. A record of a package that also has an
+.I \-upgraded\-
+record is fixed as an unfinished upgrade instead. When two records of the same
+package name are installed, nothing is done and the step is printed to run by
+hand.
+.IP
+.B installpkg
+unpacks the package's
+.I install/
+directory into
+.IR ROOT/installpkg-COOKIE ,
+runs
+.I doinst.sh
+from there, copies it to
+.IR ADM_DIR/scripts/ ,
+and removes the directory. One still there means an install was cut off after
+the unpack
+.RB ( status
+lists it under
+.IR Incomplete ).
+Its
+.I slack-desc
+names the package; when the record of that package is complete but no record of
+it has that
+.I doinst.sh
+in
+.IR ADM_DIR/scripts/ ,
+the install script did not run, and the package is fixed the same way, with
+.IR "upgradepkg \-\-reinstall" ,
+which runs it. The directory itself is not removed: no pkgtool removes it, so
+.B fix-upgrade
+prints the two commands
+.B installpkg
+would have run
+.RI ( "rm \-f DIR/do*inst.sh DIR/slack\-*" " and " "rmdir DIR" )
+for you to run after the fixes, and says so when the directory holds other
+files. The root is read from
+.BR ADM_DIR :
+the part before
+.IR var/adm ", " var/log " or " var/lib/pkgtools ,
+or
+.I /
+for any other
+.BR ADM_DIR .
+.IP
 It asks before changing anything
 .RB ( \-\-dry\-run
 changes nothing and asks nothing), and refuses to start while
@@ -1730,7 +1792,9 @@ slacker check-restart
 After a power loss during an upgrade, when
 .B status
 shows
-.IR Leftovers :
+.I Leftovers
+or
+.IR Incomplete :
 .PP
 .RS
 .nf

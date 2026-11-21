@@ -87,6 +87,9 @@ fn render(ctx: &Ctx, body: &gtk::Box, report: &Report, version: &str) {
             if r.label == status::LEFTOVERS {
                 g.add(&fix_upgrade_row(ctx));
             }
+            if r.label == status::INCOMPLETE {
+                g.add(&fix_incomplete_row(ctx));
+            }
             if r.label == status::CHECK_RESTART {
                 g.add(&check_restart_row(ctx));
             }
@@ -111,6 +114,19 @@ fn fix_upgrade_row(ctx: &Ctx) -> adw::ActionRow {
         "From a terminal, as root. It finishes what upgradepkg did not, with the pkgtools \
          (reinstall, removepkg of the leftover record, reinstall), using the package from your repos. \
          It shows each step and asks before it changes anything.",
+    )
+}
+
+/// Under the Incomplete row: the same command, which reinstalls the package
+/// and prints the commands for installpkg's directory.
+fn fix_incomplete_row(ctx: &Ctx) -> adw::ActionRow {
+    command_row(
+        ctx,
+        "slacker fix-upgrade",
+        "From a terminal, as root. It installs the package again with upgradepkg --reinstall, \
+         using the package from your repos, so the record is complete and the install script runs. \
+         It shows the step and asks before it changes anything. A directory installpkg left \
+         is not removed: it prints the two commands for you to run.",
     )
 }
 
