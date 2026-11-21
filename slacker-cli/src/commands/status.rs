@@ -759,6 +759,9 @@ fn freshness_urls(cfg: &Config) -> Option<(String, String)> {
 const CACHE_WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
 const CACHE_STALE_DAYS: u64 = 30;
 
+/// How many leftover `-upgraded-` records `status` names before "+N more".
+const LEFTOVER_SAMPLE: usize = 10;
+
 fn status_full(cfg: &Config) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let (db, missing_meta) = PkgDb::load_available(cfg);
@@ -799,7 +802,8 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     // the one that touches the network. On -current we compare the main-tree
     // PACKAGES.TXT; on STABLE the release root is frozen, so we compare the
     // patches/ PACKAGES.TXT — that is the timestamp that moves when the server
-    // publishes security updates. Short timeout, FAILS OPEN: an unreachable or
+    // publishes security updates. Short read timeout (connecting can still take
+    // ureq's 30 s, see download::build_agent), FAILS OPEN: an unreachable or
     // unparseable side never yields a false "stale" verdict and never blocks.
     if let Some((up_url, mine_url)) = freshness_urls(cfg) {
         let t = std::time::Duration::from_secs(FRESHNESS_TIMEOUT_SECS);
@@ -1416,6 +1420,27 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     }
     let (per_repo, per_rule, per_other) = installed_attribution(cfg, Some(&db), &installed);
     srow(&ok, "Packages", &ui::white(&installed.len().to_string()));
+    // `upgradepkg` renames the old record to `<pkg>-upgraded-<T>` and removes
+    // it when the upgrade finishes; one still here is an upgrade that did not
+    // finish, or one running now. Shown only, nothing is changed.
+    let leftovers = system::leftover_upgrade_records(&cfg.pkg_db_dir);
+    if !leftovers.is_empty() {
+        srow(
+            &warn,
+            "Leftovers",
+            &ui::yellow(&format!(
+                "{} upgradepkg record(s) left in {}: an upgrade did not finish (unless upgradepkg is running now); fix: `slacker fix-upgrade` as root",
+                leftovers.len(),
+                cfg.pkg_db_dir.display()
+            )),
+        );
+        for name in leftovers.iter().take(LEFTOVER_SAMPLE) {
+            srow(&info, "", &ui::dim(name));
+        }
+        if leftovers.len() > LEFTOVER_SAMPLE {
+            srow(&info, "", &ui::dim(&format!("(+{} more)", leftovers.len() - LEFTOVER_SAMPLE)));
+        }
+    }
     let mut parts: Vec<String> = repos
         .iter()
         .map(|r| {
@@ -1534,7 +1559,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
 
     // ---------- Verdict ----------
     // Recommended commands in the canonical post-install order:
-    //   update gpg -> update -> install-new -> upgrade-all.
+    //   update gpg -> update -> fix-upgrade -> install-new -> upgrade-all.
     let mut steps: Vec<&str> = Vec::new();
     if gpg_missing {
         steps.push("slacker update gpg");
@@ -1545,6 +1570,11 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     // the cache, so it must be refreshed before them.
     if metadata_incomplete || pending {
         steps.push("slacker update");
+    }
+    // An upgrade upgradepkg did not finish is fixed before anything else is
+    // installed or upgraded (after `update`, so the repo package is current).
+    if !leftovers.is_empty() {
+        steps.push("slacker fix-upgrade");
     }
     // A fresh/unsynced system, or one with pending changes, installs the newly
     // added packages BEFORE upgrading — install-new always precedes upgrade-all,

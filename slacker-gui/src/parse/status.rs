@@ -28,13 +28,17 @@ impl Mark {
 }
 
 /// Every label `status` prints (srow calls in main.rs), plus the empty one.
-pub const LABELS: [&str; 34] = [
-    "Pkgtools", "Tools", "Locate DB", "Config dir", "Config", "Mirror", "Freshness",
+pub const LABELS: [&str; 36] = [
+    "Pkgtools", "Tools", "Locate DB", "Config dir", "Config", "Mirror", "Proxy", "Freshness",
     "Repos", "Cache", "Tag rules", "Verify", "Transport", "Credentials", "Repo release",
     "Repo arch", "Repo trust", "GPG keys", "Metadata", "Blacklist", "Pins", "Tag prio",
     "Configs", "Integrity", "Symlinks", "Writable", "Ownership", "Admin dir", "Packages",
-    "By source", "Connection", "Reachable", "Updates", "All repos", "Stock-db",
+    "Leftovers", "By source", "Connection", "Reachable", "Updates", "All repos", "Stock-db",
 ];
+
+/// The row slacker prints when upgradepkg left `<pkg>-upgraded-<time>`
+/// records behind; the record names follow it as unlabelled rows.
+pub const LEFTOVERS: &str = "Leftovers";
 
 pub const SECTIONS: [&str; 4] = ["Environment", "Setup", "Installed", "Online"];
 
@@ -158,6 +162,13 @@ pub fn parse(text: &str) -> Status {
             let (label, detail) = match_label(rest)?;
             Some(Row { mark, label: label.to_string(), detail: detail.to_string(), extra: Vec::new() })
         });
+        // The record names under a Leftovers row belong to it.
+        if let (Some(r), Some(prev)) = (&row, section.rows.last_mut()) {
+            if r.label.is_empty() && r.mark == Mark::Info && prev.label == LEFTOVERS {
+                prev.extra.push(r.detail.clone());
+                continue;
+            }
+        }
         match row {
             Some(r) => section.rows.push(r),
             None => out.unrecognized.push(line.to_string()),
@@ -216,11 +227,28 @@ mod tests {
     }
 
     #[test]
+    fn leftover_records_belong_to_their_row() {
+        let s = parse(&fixture("status-leftovers.txt"));
+        assert!(s.unrecognized.is_empty(), "{:?}", s.unrecognized);
+        let installed = s.sections.iter().find(|x| x.title == "Installed").unwrap();
+        let labels: Vec<&str> = installed.rows.iter().map(|r| r.label.as_str()).collect();
+        // The `? = no metadata` row under By source stays a row of its own.
+        assert_eq!(labels, ["Packages", "Leftovers", "By source", ""]);
+        let left = &installed.rows[1];
+        assert_eq!(left.mark, Mark::Warn);
+        assert!(left.detail.contains("slacker fix-upgrade"));
+        assert_eq!(left.extra, vec!["openssl-3.3.2-x86_64-1-upgraded-2026-11-20,14:35:12"]);
+        let v = s.verdict.unwrap();
+        assert!(v.items.contains(&(ItemKind::Step, "slacker fix-upgrade".to_string())));
+    }
+
+    #[test]
     fn prefix_labels_do_not_collide() {
         assert_eq!(match_label("Config dir /etc/slacker does not exist"), Some(("Config dir", "/etc/slacker does not exist")));
         assert_eq!(match_label("Configs    3 pending"), Some(("Configs", "3 pending")));
         assert_eq!(match_label("Config     repos and mirrors parse"), Some(("Config", "repos and mirrors parse")));
         assert_eq!(match_label("Repos      8 configured"), Some(("Repos", "8 configured")));
+        assert_eq!(match_label("Proxy      http://p:3128"), Some(("Proxy", "http://p:3128")));
         assert_eq!(match_label("Nonsense   x"), None);
     }
 

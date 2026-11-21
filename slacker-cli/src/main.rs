@@ -29,6 +29,7 @@ use cli::{Cli, Cmd};
 use commands::blacklist::{cmd_frozen, cmd_nodep, cmd_pin, cmd_undep, cmd_unfrozen, cmd_unpin};
 use commands::clean::{cmd_clean_cache, cmd_clean_system};
 use commands::find_mirror::cmd_find_mirror;
+use commands::fix_upgrade::cmd_fix_upgrade;
 use commands::install::{
     cmd_download, cmd_install, cmd_install_new, cmd_reinstall, cmd_remove, cmd_upgrade, cmd_upgrade_all,
 };
@@ -202,6 +203,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::Reinstall { patterns } => cmd_reinstall(cli, &cfg, patterns),
         Cmd::Remove { patterns } => cmd_remove(cli, &cfg, patterns),
         Cmd::RevertPkg { name } => cmd_revert_pkg(cli, &cfg, name),
+        Cmd::FixUpgrade => cmd_fix_upgrade(cli, &cfg),
         Cmd::Download { patterns, output } => cmd_download(cli, &cfg, patterns, output.as_deref()),
         Cmd::UpgradeAll => cmd_upgrade_all(cli, &cfg),
         Cmd::UpgradeDist { target } => cmd_upgrade_dist(cli, &cfg, target),
@@ -365,6 +367,7 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::Reinstall { .. } => "reinstall",
         Cmd::Remove { .. } => "remove",
         Cmd::RevertPkg { .. } => "revert-pkg",
+        Cmd::FixUpgrade => "fix-upgrade",
         Cmd::Download { .. } => "download",
         Cmd::UpgradeAll => "upgrade-all",
         Cmd::UpgradeDist { .. } => "upgrade-dist",

@@ -93,6 +93,15 @@ pub(crate) enum Cmd {
     /// key) and downgrades to it with `upgradepkg --reinstall`. Official packages
     /// only (the archive does not carry third-party repos), and only on -current.
     RevertPkg { name: String },
+    /// Finish upgrades that upgradepkg did not finish (power loss, crash).
+    ///
+    /// Finds the `<pkg>-upgraded-<time>` records upgradepkg leaves in the
+    /// package DB when it stops halfway, and runs the steps it did not finish,
+    /// with the pkgtools: `upgradepkg --install-new --reinstall`, `removepkg`
+    /// of the record, `upgradepkg --reinstall`. You choose the package from the
+    /// repos' candidates (or only the record is removed when nothing would be
+    /// deleted). Asks first; refuses while a pkgtool runs.
+    FixUpgrade,
     /// Download package files without installing them.
     ///
     /// Saved to the cache by default, or to a directory given with -o/--output.

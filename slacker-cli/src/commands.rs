@@ -3,6 +3,7 @@
 pub(crate) mod blacklist;
 pub(crate) mod clean;
 pub(crate) mod find_mirror;
+pub(crate) mod fix_upgrade;
 pub(crate) mod install;
 pub(crate) mod logs;
 pub(crate) mod new_config;

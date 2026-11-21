@@ -18,7 +18,9 @@
     - probe timeouts (FRESHNESS_TIMEOUT_SECS, PROBE_TIMEOUT_SECS, status
       Freshness, build_agent) do not cover the connect, which is ureq's 30 s
     - mirrors file updated.
+    - CMD: Add fix-upgrade to finish upgrades upgradepkg left unfinished; status reports leftover -upgraded- records
 - Update: slacker-gui
+    - Add place for `slacker fix-upgrade` for «Leftovers»
     - check-updates runs when the Updates page is opened or refresh is
       pressed, and not twice at the same time
     - install-new and upgrade-all do not re-run it (they cannot change it)

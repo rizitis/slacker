@@ -57,6 +57,51 @@ pub(crate) fn is_removed_record(name: &str) -> bool {
     }
 }
 
+/// Names of `<pkg>-upgraded-<timestamp>` records still in the installed-package
+/// DB dir, sorted. `upgradepkg` renames the old record this way before it
+/// installs the new package, and its `removepkg` step moves it to
+/// removed_packages/ once the new one is in. One left here means an upgrade
+/// that did not finish (the first install pass failed, a crash, a power loss),
+/// or an `upgradepkg` that is running right now. Read-only.
+pub fn leftover_upgrade_records(db_dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = match std::fs::read_dir(db_dir) {
+        Ok(e) => e
+            .flatten()
+            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .filter(|n| is_removed_record(n))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    out.sort();
+    out
+}
+
+/// Running installpkg, upgradepkg or removepkg processes, as (pid, tool),
+/// read from /proc. These are shell scripts, so the tool is the first or the
+/// second word of the command line (`/bin/bash /sbin/upgradepkg ...`).
+pub fn pkgtools_running() -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    let me = std::process::id();
+    let Ok(rd) = std::fs::read_dir("/proc") else { return out };
+    for e in rd.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+        if pid == me {
+            continue;
+        }
+        let Ok(raw) = std::fs::read(e.path().join("cmdline")) else { continue };
+        let words: Vec<&[u8]> = raw.split(|b| *b == 0).take(2).collect();
+        for w in words {
+            let base = w.rsplit(|b| *b == b'/').next().unwrap_or(w);
+            if let Ok(t @ ("installpkg" | "upgradepkg" | "removepkg")) = std::str::from_utf8(base) {
+                out.push((pid, t.to_string()));
+                break;
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 pub fn installed_by_name<'a>(installed: &'a [PkgId], name: &str) -> Option<&'a PkgId> {
     installed.iter().find(|p| p.name == name)
 }
@@ -101,6 +146,13 @@ pub fn upgrade_only(pkg_file: &Path, terse: bool) -> Result<(), String> {
 pub fn reinstall(pkg_file: &Path, terse: bool) -> Result<(), String> {
     let f = pkg_file.to_string_lossy();
     run("upgradepkg", &pkgtools_args(terse, &["--reinstall", &f]))
+}
+
+/// Reinstall if a package of this name is installed, install it if none is:
+/// `upgradepkg --install-new --reinstall`. The first step of fix-upgrade.
+pub fn reinstall_or_install(pkg_file: &Path, terse: bool) -> Result<(), String> {
+    let f = pkg_file.to_string_lossy();
+    run("upgradepkg", &pkgtools_args(terse, &["--install-new", "--reinstall", &f]))
 }
 
 /// Fresh install: `installpkg`.
@@ -154,6 +206,16 @@ pub fn version_id() -> Option<String> {
         }
     }
     None
+}
+
+/// `removepkg --skip-douninst`: removes a leftover `-upgraded-` record without
+/// running the uninstall script of the package of that name, which stays
+/// installed (removepkg would otherwise run it for the record).
+pub fn remove_record_only(name: &str) -> Result<(), String> {
+    if name.starts_with('-') || name.contains('/') {
+        return Err(format!("refusing to remove suspicious package name {name:?}"));
+    }
+    run("removepkg", &["--skip-douninst", name])
 }
 
 /// Remove an installed package by name (or tag): `removepkg`.
@@ -223,6 +285,30 @@ mod tests {
         assert!(!is_removed_record("bash-5.2.21-x86_64-3"));
         // defensive: a literal "-upgraded-" not followed by a digit is not a record
         assert!(!is_removed_record("my-upgraded-tool-1.0-x86_64-1"));
+    }
+
+    #[test]
+    fn leftover_upgrade_records_are_listed() {
+        let dir = std::env::temp_dir().join("slacker_test_leftover_upgraded");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in [
+            "openssl-3.3.3-x86_64-1",
+            "openssl-3.3.2-x86_64-1-upgraded-2026-11-20,14:35:12",
+            "my-upgraded-tool-1.0-x86_64-1",
+            "bash-5.2.21-x86_64-3-upgraded-2026-11-20,14:30:00",
+        ] {
+            std::fs::File::create(dir.join(n)).unwrap();
+        }
+        assert_eq!(
+            leftover_upgrade_records(&dir),
+            vec![
+                "bash-5.2.21-x86_64-3-upgraded-2026-11-20,14:30:00".to_string(),
+                "openssl-3.3.2-x86_64-1-upgraded-2026-11-20,14:35:12".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(leftover_upgrade_records(&dir).is_empty());
     }
 
     #[test]

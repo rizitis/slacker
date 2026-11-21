@@ -1,4 +1,4 @@
-.TH SLACKER 8 "November 2026" "slacker 0.14.1" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.14.2" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -255,6 +255,55 @@ can break the running system. Requires
 .B REVERT
 enabled in
 .IR slacker.conf .
+.TP
+.B fix-upgrade
+Finish package upgrades that
+.B upgradepkg
+did not finish (a power loss, a crash, a first install pass that failed).
+.B upgradepkg
+renames the old package record to
+.IR NAME-VERSION-ARCH-BUILD-upgraded-DATE,TIME ,
+installs the new package, removes the renamed record with
+.BR removepkg ,
+and installs the new package a second time; a renamed record still in
+.I ADM_DIR/packages/
+means it stopped somewhere in between
+.RB ( status
+reports it as
+.IR Leftovers ).
+For each such package
+.B fix-upgrade
+runs the steps
+.B upgradepkg
+did not finish, with the pkgtools and in this order:
+.IR "upgradepkg \-\-install\-new \-\-reinstall" ,
+.B removepkg
+of the leftover record, and
+.IR "upgradepkg \-\-reinstall" .
+The reinstall comes first because the record of an install cut off halfway may
+have no file list yet, and
+.B removepkg
+keeps only the files other records list. When the installed record of that
+package is complete and lists every file and symlink of the leftover record (a
+reinstall that was cut off after its install pass, for example), nothing would be
+deleted, and no package file is needed: only the record goes, with
+.IR "removepkg \-\-skip\-douninst" ,
+so the uninstall script of the package, which stays installed, is not run.
+Otherwise a package file is needed, and slacker does not pick it: it lists every
+candidate the repositories have, with its priority, whether it is exactly the
+installed build, and whether it would move the package to a source of lower
+priority; frozen candidates are not offered. You choose one, or skip (the
+default). The chosen file is fetched and checked like any install (release,
+architecture, package\-list and md5/GPG checks). With
+.B \-\-yes
+nobody is asked, so only a candidate that is exactly the installed build is
+taken. For a package no repository has, or one that was skipped, the three
+commands are printed, with the package file they need, for you to run by hand.
+It asks before changing anything
+.RB ( \-\-dry\-run
+changes nothing and asks nothing), and refuses to start while
+.BR installpkg ", " upgradepkg " or " removepkg
+is running, since a record is expected while they work.
 .SS Bulk operations
 .TP
 .B upgrade-all
@@ -632,7 +681,11 @@ configured and what to do next: active mirror and whether it is up to date with
 the upstream master, repos and priorities, verification policy, imported/pinned
 GPG keys, metadata freshness, whether every repository targets the same
 Slackware release as the running system, blacklist, the sources of installed
-packages, and
+packages, upgrades that
+.B upgradepkg
+left unfinished (see
+.BR \%fix\-upgrade ),
+and
 \(em when online \(em reachability and pending updates. When your mirror is more
 than 48 hours behind upstream it says so and points you at
 .BR find-mirror .
@@ -1634,6 +1687,17 @@ Roll a package back to a previous \-current version:
 .RS
 .nf
 slacker revert-pkg emacs
+.fi
+.RE
+.PP
+After a power loss during an upgrade, when
+.B status
+shows
+.IR Leftovers :
+.PP
+.RS
+.nf
+slacker fix-upgrade
 .fi
 .RE
 .SH SEE ALSO

@@ -39,7 +39,7 @@ pub fn page(ctx: &Ctx, resolved: &Resolved) -> Page {
                     if report.sections.is_empty() {
                         body3.append(&failed(&text, &crate::runner::describe(&st, crate::commands::Privilege::User)));
                     } else {
-                        render(&body3, &report, &version);
+                        render(&ctx3, &body3, &report, &version);
                     }
                     body3.append(&program_group(&ctx3, &version, &notes2));
                 });
@@ -63,7 +63,7 @@ pub fn page(ctx: &Ctx, resolved: &Resolved) -> Page {
     }
 }
 
-fn render(body: &gtk::Box, report: &Report, version: &str) {
+fn render(ctx: &Ctx, body: &gtk::Box, report: &Report, version: &str) {
     body.append(&hero(report, version));
 
     for section in &report.sections {
@@ -84,6 +84,9 @@ fn render(body: &gtk::Box, report: &Report, version: &str) {
             let row = widgets::row(title, &subtitle);
             row.add_prefix(&widgets::mark_tile(r.mark));
             g.add(&row);
+            if r.label == status::LEFTOVERS {
+                g.add(&fix_upgrade_row(ctx));
+            }
         }
         body.append(&g);
     }
@@ -95,6 +98,30 @@ fn render(body: &gtk::Box, report: &Report, version: &str) {
         g.add(&widgets::raw_text(&other.join("\n")));
         body.append(&g);
     }
+}
+
+/// Under the Leftovers row: what to run, and how, to finish the upgrades.
+fn fix_upgrade_row(ctx: &Ctx) -> adw::ActionRow {
+    let cmd = "slacker fix-upgrade";
+    let row = widgets::row(
+        &format!("<tt>{cmd}</tt>"),
+        "From a terminal, as root. It finishes what upgradepkg did not, with the pkgtools \
+         (reinstall, removepkg of the leftover record, reinstall), using the package from your repos. \
+         It shows each step and asks before it changes anything.",
+    );
+    // Markup only for the monospace title; the subtitle has no markup characters.
+    row.set_use_markup(true);
+    row.add_prefix(&widgets::tile("utilities-terminal-symbolic", None));
+    let b = widgets::flat_icon_button("edit-copy-symbolic", "Copy");
+    b.add_css_class("flat");
+    b.set_valign(gtk::Align::Center);
+    let ctx = ctx.clone();
+    b.connect_clicked(move |btn| {
+        btn.clipboard().set_text(cmd);
+        ctx.toast_short("Copied to the clipboard");
+    });
+    row.add_suffix(&b);
+    row
 }
 
 fn hero(report: &Report, version: &str) -> gtk::Box {
