@@ -29,10 +29,11 @@
 | libgcc_s (aaa_libraries ή gcc) | ✓ | ✓ | ✓ | το `libgcc_s.so.1` υπάρχει και στα δύο πακέτα |
 | pkgtools | ✓ | | | `installpkg`, `upgradepkg`, `removepkg` |
 | gnupg2 | ✓ | | | `gpg`/`gpg2`, έλεγχος υπογραφών |
-| coreutils | ✓ | | | `sha256sum`, `uname`, `id`, `date`, `df` |
-| bzip2 | ✓ | | | MANIFEST για το `file-search` |
+| coreutils | ✓ | | | `sha256sum`, `uname`, `id`, `date`, `df`, `stat` |
+| bzip2 | ✓ | | | MANIFEST.bz2, που το κατεβάζει το `update`, για το `file-search` και τον έλεγχο χώρου |
 | diffutils | ✓ | | | `diff` στο `new-config` |
 | vim | προαιρετικό | | | `vimdiff` στη συγχώνευση του `new-config` (αλλάζει με `SLACKER_MERGE`) |
+| less | προαιρετικό | | | pager για το `history` και το `show-changelog` σε τερματικό (αλλάζει με `PAGER`) |
 | slacker | | ✓ | | όλες οι ενέργειες γίνονται μέσω του slacker |
 | gtk4, libadwaita, glib2, pango | | ✓ | ✓ | |
 | gdk-pixbuf2 | | ✓ | ✓ | λογότυπο· στο flatpak και τα εικονίδια των εφαρμογών |
@@ -57,4 +58,4 @@
 - Το `libgcc_s.so.1` υπάρχει και στο `aaa_libraries` και στο `gcc`
   (ελέγχθηκε στο `/var/lib/pkgtools/packages`). Για να τρέξουν τα binaries
   αρκεί το `aaa_libraries`· το gcc χρειάζεται μόνο για το build.
-- Οι βιβλιοθήκες ελέγχθηκαν με `readelf -d`: slacker-cli (`libc`, `libm`, `libgcc_s`), slacker-gui 7.0.0 και slacker-flatpak 0.6.0.
+- Οι βιβλιοθήκες ελέγχθηκαν με `readelf -d`: slacker-cli (`libc`, `libm`, `libgcc_s`), slacker-gui 7.0.0 και slacker-flatpak 1.0.0.

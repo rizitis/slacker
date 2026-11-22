@@ -234,7 +234,12 @@ To reinstall a package that is already current, use
 .BR reinstall .
 .TP
 .BI reinstall " PATTERN..."
-Reinstall the currently installed version.
+Reinstall installed packages with the version and build the repository
+offers now, through
+.BR "upgradepkg \-\-reinstall" .
+This may differ from the installed one, newer or older; the plan then shows
+it as old \-> new, and nothing changes before the confirmation.
+A package file already in the cache is used only when it is that same file.
 .TP
 .BI remove " PATTERN..."
 Remove installed packages. A series written with the trailing

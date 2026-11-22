@@ -301,7 +301,8 @@ pub fn upgrade_only(pkg_file: &Path, terse: bool) -> Result<(), String> {
     run("upgradepkg", &pkgtools_args(terse, &[&f]))
 }
 
-/// Reinstall the same version: `upgradepkg --reinstall`.
+/// `upgradepkg --reinstall`: install this package file even when the same
+/// build is already installed.
 pub fn reinstall(pkg_file: &Path, terse: bool) -> Result<(), String> {
     let f = pkg_file.to_string_lossy();
     run("upgradepkg", &pkgtools_args(terse, &["--reinstall", &f]))

@@ -83,7 +83,10 @@ pub(crate) enum Cmd {
     Install { patterns: Vec<String> },
     /// Upgrade installed packages to the newest available revision.
     Upgrade { patterns: Vec<String> },
-    /// Reinstall the currently installed version.
+    /// Reinstall installed packages with the version the repo offers now.
+    ///
+    /// The repo's version and build may differ from the installed one; the
+    /// plan then shows it as old -> new, and asks before anything changes.
     Reinstall { patterns: Vec<String> },
     /// Remove installed packages.
     Remove { patterns: Vec<String> },
