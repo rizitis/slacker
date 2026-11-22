@@ -29,10 +29,11 @@ On Slackware the headers come in the same packages; there are no separate -dev p
 | libgcc_s (aaa_libraries or gcc) | ✓ | ✓ | ✓ | `libgcc_s.so.1` is in both packages |
 | pkgtools | ✓ | | | `installpkg`, `upgradepkg`, `removepkg` |
 | gnupg2 | ✓ | | | `gpg`/`gpg2`, signature checks |
-| coreutils | ✓ | | | `sha256sum`, `uname`, `id`, `date`, `df` |
-| bzip2 | ✓ | | | MANIFEST for `file-search` |
+| coreutils | ✓ | | | `sha256sum`, `uname`, `id`, `date`, `df`, `stat` |
+| bzip2 | ✓ | | | MANIFEST.bz2, fetched by `update`, for `file-search` and the disk-space check |
 | diffutils | ✓ | | | `diff` in `new-config` |
 | vim | optional | | | `vimdiff` when merging in `new-config` (changed with `SLACKER_MERGE`) |
+| less | optional | | | pager for `history` and `show-changelog` on a terminal (changed with `PAGER`) |
 | slacker | | ✓ | | every action goes through slacker |
 | gtk4, libadwaita, glib2, pango | | ✓ | ✓ | |
 | gdk-pixbuf2 | | ✓ | ✓ | logo; in flatpak also the application icons |
@@ -56,4 +57,4 @@ On Slackware the headers come in the same packages; there are no separate -dev p
 - `libgcc_s.so.1` is in both `aaa_libraries` and `gcc` (checked in
   `/var/lib/pkgtools/packages`). `aaa_libraries` is enough to run the
   binaries; gcc is needed only to build.
-- Libraries checked with `readelf -d`: slacker-cli (`libc`, `libm`, `libgcc_s`), slacker-gui 7.0.0 and slacker-flatpak 0.6.0.
+- Libraries checked with `readelf -d`: slacker-cli (`libc`, `libm`, `libgcc_s`), slacker-gui 7.0.0 and slacker-flatpak 1.0.0.

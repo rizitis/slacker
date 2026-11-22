@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
-use crate::{bl_installed, closest, current_uid, installed_source_label, Outcome};
+use crate::{bl_installed, closest, installed_source_label, Outcome};
 use crate::{manifest, pkg, repo, system, ui};
 use std::collections::HashSet;
 
@@ -234,20 +234,15 @@ fn hit_build_installed(package_filename: &str, installed_tags: &HashSet<String>)
 }
 
 pub(crate) fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, String> {
-    // MANIFEST is fetched lazily (it is large); make sure it's present. Track
-    // repos whose MANIFEST we could neither find nor fetch, so we can explain
-    // rather than silently return "not found".
-    let mut unavailable: Vec<String> = Vec::new();
-    for r in &cfg.repos {
-        let mpath = repo::meta_path(r, &cfg.cache_dir, repo::MANIFEST);
-        if mpath.exists() {
-            continue;
-        }
-        match repo::ensure_manifest(r, &cfg.cache_dir) {
-            Ok(true) => {}
-            Ok(false) | Err(_) => unavailable.push(r.name.clone()),
-        }
-    }
+    // `update` keeps every repo's MANIFEST in the cache; file-search only
+    // reads it. Repos without one are named at the end rather than silently
+    // giving "not found".
+    let unavailable: Vec<String> = cfg
+        .repos
+        .iter()
+        .filter(|r| !repo::meta_path(r, &cfg.cache_dir, repo::MANIFEST).exists())
+        .map(|r| r.name.clone())
+        .collect();
 
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     // Index installed packages by their full tag (name-version-arch-build) so a
@@ -289,20 +284,12 @@ pub(crate) fn cmd_file_search(cfg: &Config, filename: &str) -> Result<Outcome, S
         );
     }
 
-    // If some repos had no usable MANIFEST, say so — the first fetch writes into
-    // the root-owned cache, so a non-root run can't do it and would otherwise
-    // look like an empty result.
+    // Repos with no MANIFEST in the cache: the repo serves none, it did not
+    // match its CHECKSUMS.md5, or `update` has not run since this version.
     if !unavailable.is_empty() {
-        let list = unavailable.join(", ");
         eprintln!();
-        if current_uid() == Some(0) {
-            eprintln!("note: could not fetch the MANIFEST for: {list} (network or server error);");
-            eprintln!("      results above may be incomplete — try again later.");
-        } else {
-            eprintln!("note: the MANIFEST for: {list} is not cached yet, and downloading it");
-            eprintln!("      needs root (it is written into {}).", cfg.cache_dir.display());
-            eprintln!("      run once as root: slacker file-search {filename}");
-        }
+        eprintln!("note: no MANIFEST in the cache for: {}; results may be incomplete.", unavailable.join(", "));
+        eprintln!("      `slacker update` (as root) fetches it where the repo serves one.");
     }
 
     if !found {

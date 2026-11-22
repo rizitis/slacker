@@ -243,7 +243,8 @@ pub fn build(app: &adw::Application) {
             let first = loaded.borrow_mut().insert(p.name);
             if let Some(load) = &p.load {
                 // Search only takes focus; data pages load once, then on demand.
-                if first || p.name == "search" {
+                // Updates checks again each time it is opened.
+                if first || p.name == "search" || p.name == "updates" {
                     load();
                 }
             }

@@ -8,7 +8,7 @@ cd $(dirname $0) ; CWD=$(pwd)
 set -e
 
 PRGNAM=slacker
-VERSION=${VERSION:-0.14.1}
+VERSION=${VERSION:-0.14.2}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
@@ -38,6 +38,9 @@ if [ "$ARCH" = "i686" ]; then
   LIBDIRSUFFIX=""
 elif [ "$ARCH" = "x86_64" ]; then
   SLKCFLAGS="-O2 -march=x86-64 -mtune=generic -fPIC"
+  LIBDIRSUFFIX="64"
+elif [ "$ARCH" = "aarch64" ]; then
+  SLKCFLAGS="-O2 -march=armv8-a -mtune=generic -fPIC"
   LIBDIRSUFFIX="64"
 else
   SLKCFLAGS="-O2"
@@ -75,7 +78,6 @@ while true; do
     esac
 done
 
-# rust-version in both Cargo.toml must cover what their Cargo.lock needs
 # rust-version in both Cargo.toml must cover what their Cargo.lock needs
 if [ -f "$CWD/scripts/check-msrv.sh" ]; then
   if ! bash "$CWD/scripts/check-msrv.sh"; then
@@ -332,16 +334,37 @@ fi
 
 rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new /tmp/stockdb_test_*.txt
 echo "=============================================================="
+# login user, for cargo-audit and gpg signing
+ME=${SUDO_USER:-$(who -m | awk '{print $1}')}
+MEHOME=$(getent passwd "$ME" | cut -d: -f6)
+
 # audit the embedded dependency lists (cargo-auditable)
 if command -v cargo-audit >/dev/null 2>&1; then
   for b in slacker slacker-gui slacker-flatpak; do
-    [ -f $PKG/usr/bin/$b ] || continue
-    cargo audit bin $PKG/usr/bin/$b || echo "WARNING: cargo audit reported problems in $b"
+    [ -f "$PKG/usr/bin/$b" ] || continue
+    cargo audit bin "$PKG/usr/bin/$b" || echo "WARNING: cargo audit reported problems in $b"
   done
 else
-  echo "skip audit: cargo-audit not found for root or not installed."
+  if [ -n "$ME" ] && [ "$ME" != root ] && [ -x "$MEHOME/.cargo/bin/cargo-audit" ]; then
+    for b in slacker slacker-gui slacker-flatpak; do
+      [ -f "$PKG/usr/bin/$b" ] || continue
+      su - "$ME" -c "'$MEHOME/.cargo/bin/cargo-audit' audit bin '$PKG/usr/bin/$b'" \
+        || echo "WARNING: cargo audit reported problems in $b"
+    done
+  else
+    echo "skip audit: cargo-audit not found for root or for the login user"
+  fi
 fi
 echo "=============================================================="
-#sleep 1
-#gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
-echo "gpg --detach-sign --armor need user mode.........................."
+sleep 1
+PACK=$OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+
+if [ -z "$ME" ] || [ "$ME" = root ]; then
+  echo "skip gpg signing: no login user found"
+elif su - "$ME" -c "gpg --detach-sign --armor --output -" < "$PACK" > "$PACK.asc" \
+     && [ "$(head -n 1 "$PACK.asc")" = "-----BEGIN PGP SIGNATURE-----" ]; then
+  echo "signed as $ME: $PACK.asc"
+else
+  echo "gpg signing failed, removing $PACK.asc"
+  rm -f "$PACK.asc"
+fi

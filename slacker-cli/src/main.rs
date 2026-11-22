@@ -20,6 +20,8 @@ mod pkg;
 mod pkgdb;
 mod repo;
 mod revert;
+mod space;
+mod stale;
 mod system;
 mod template;
 mod ui;
@@ -28,7 +30,9 @@ use clap::Parser;
 use cli::{Cli, Cmd};
 use commands::blacklist::{cmd_frozen, cmd_nodep, cmd_pin, cmd_undep, cmd_unfrozen, cmd_unpin};
 use commands::clean::{cmd_clean_cache, cmd_clean_system};
+use commands::check_restart::cmd_check_restart;
 use commands::find_mirror::cmd_find_mirror;
+use commands::fix_upgrade::cmd_fix_upgrade;
 use commands::install::{
     cmd_download, cmd_install, cmd_install_new, cmd_reinstall, cmd_remove, cmd_upgrade, cmd_upgrade_all,
 };
@@ -202,6 +206,8 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::Reinstall { patterns } => cmd_reinstall(cli, &cfg, patterns),
         Cmd::Remove { patterns } => cmd_remove(cli, &cfg, patterns),
         Cmd::RevertPkg { name } => cmd_revert_pkg(cli, &cfg, name),
+        Cmd::FixUpgrade => cmd_fix_upgrade(cli, &cfg),
+        Cmd::CheckRestart => cmd_check_restart(&cfg),
         Cmd::Download { patterns, output } => cmd_download(cli, &cfg, patterns, output.as_deref()),
         Cmd::UpgradeAll => cmd_upgrade_all(cli, &cfg),
         Cmd::UpgradeDist { target } => cmd_upgrade_dist(cli, &cfg, target),
@@ -215,7 +221,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::History { name, last, since, installed, removed, upgraded } => {
             cmd_history(&cfg, name.as_deref(), *last, since.as_deref(), *installed, *removed, *upgraded)
         }
-        Cmd::GenerateTemplate { name } => cmd_generate_template(&cfg, name),
+        Cmd::GenerateTemplate { name } => cmd_generate_template(cli, &cfg, name),
         Cmd::InstallTemplate { name } => cmd_install_template(cli, &cfg, name),
         Cmd::RemoveTemplate { name } => cmd_remove_template(cli, &cfg, name),
         Cmd::DeleteTemplate { name } => cmd_delete_template(cli, &cfg, name),
@@ -346,9 +352,13 @@ fn ensure_privileged(cmd: &Cmd) -> Result<(), String> {
     } else {
         "you are not in the 'wheel' group; ask a system administrator".to_string()
     };
-    Err(format!(
-        "'{name}' modifies the system or cache and must be run as root — {hint}"
-    ))
+    // check-restart changes nothing; it needs root to read every process.
+    let why = if matches!(cmd, Cmd::CheckRestart) {
+        "reads every running process"
+    } else {
+        "modifies the system or cache"
+    };
+    Err(format!("'{name}' {why} and must be run as root — {hint}"))
 }
 
 /// Short command name for messages.
@@ -365,6 +375,8 @@ fn command_name(cmd: &Cmd) -> &'static str {
         Cmd::Reinstall { .. } => "reinstall",
         Cmd::Remove { .. } => "remove",
         Cmd::RevertPkg { .. } => "revert-pkg",
+        Cmd::FixUpgrade => "fix-upgrade",
+        Cmd::CheckRestart => "check-restart",
         Cmd::Download { .. } => "download",
         Cmd::UpgradeAll => "upgrade-all",
         Cmd::UpgradeDist { .. } => "upgrade-dist",
@@ -3042,6 +3054,21 @@ fn update_one_repo(
     } else {
         println!("  {}", ui::dim("GPG: skipped (verify policy)"));
     }
+    // MANIFEST last: it is checked against the CHECKSUMS.md5 verified above.
+    // Not having one is not a failure of the update.
+    match repo::refresh_manifest(r, &cfg.cache_dir, r.checks_packages_txt(&cfg.verify)) {
+        repo::ManifestRefresh::Fetched => println!("  {} ... ok", repo::MANIFEST_BZ2),
+        repo::ManifestRefresh::Unchanged => println!("  {} ... unchanged", repo::MANIFEST_BZ2),
+        repo::ManifestRefresh::Missing => println!("  {} ... not present", repo::MANIFEST_BZ2),
+        repo::ManifestRefresh::Mismatch => println!(
+            "  {}",
+            ui::yellow(&format!(
+                "{} does not match the md5 in CHECKSUMS.md5: not kept (file-search and the disk-space estimate go without it for '{}')",
+                repo::MANIFEST_BZ2,
+                r.name
+            ))
+        ),
+    }
     true
 }
 
@@ -3296,7 +3323,9 @@ pub(crate) fn is_current_codename(codename: Option<&str>) -> bool {
 /// A mirror lagging upstream by more than this is reported as stale.
 pub(crate) const FRESHNESS_MAX_LAG_SECS: i64 = 48 * 3600;
 
-/// How long to wait on each freshness probe before giving up (fail-open).
+/// How long to wait on each freshness probe, once connected, before giving up
+/// (fail-open). Connecting is not covered: ureq waits up to its own 30 s for
+/// that (see download::build_agent), so a mirror that is down costs 30 s here.
 const FRESHNESS_TIMEOUT_SECS: u64 = 8;
 
 /// Parse the timestamp from a PACKAGES.TXT header line into epoch seconds.

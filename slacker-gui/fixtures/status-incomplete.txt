@@ -1,0 +1,35 @@
+Environment
+  ✓ Pkgtools   installpkg, upgradepkg, removepkg present
+  ✓ Tools      gpg, bzip2, sha256sum, diff present
+  ✓ Config     repos and mirrors parse and cross-check cleanly
+
+Setup
+  · Mirror     no official repo configured (third-party only)
+  ✓ Repos      2 configured, priorities distinct
+  ✓ Cache      empty
+  ✓ Verify     every repo verifies packages
+  ✓ Transport  all repos use https or file
+  ✓ Repo release all match this system (24.04)
+  ✓ Repo arch  all match this system (x86_64)
+  ✓ Repo trust no repos are frozen
+  ✓ Metadata   cached for all repos (oldest 0s old)
+  ✓ Metadata   PACKAGES.TXT matches CHECKSUMS.md5 in 2 repo(s)
+  · Blacklist  0 rule(s)
+  ✓ Tag prio   every installed package's source can be ranked
+  ✓ Integrity  config + cache + state root-owned, no world-writable paths, no stray symlinks (18 checked)
+
+Installed
+  ✓ Packages   1
+  ! Incomplete 2 sign(s) of an install that did not finish (unless installpkg is running now); fix: `slacker fix-upgrade` as root
+  ·            foo-2-x86_64-1: install script did not run
+  ·            /home/claude/exp/root-e2e/installpkg-0a6b3092b737953772ed6819b455392d: left by installpkg
+  · CheckRestart not checked (needs root — re-run as root)
+  · By source  local 0, other 0, (no official repo) 1
+
+Online
+  ✓ Reachable  local (0 KB)
+  ✓ Updates    local is up to date
+  · All repos  run `slacker check-updates` for every repo
+
+slacker is configured. Recommended next steps, in order:
+  → slacker fix-upgrade

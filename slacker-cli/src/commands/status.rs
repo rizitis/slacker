@@ -759,6 +759,9 @@ fn freshness_urls(cfg: &Config) -> Option<(String, String)> {
 const CACHE_WARN_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
 const CACHE_STALE_DAYS: u64 = 30;
 
+/// How many leftover `-upgraded-` records `status` names before "+N more".
+const LEFTOVER_SAMPLE: usize = 10;
+
 fn status_full(cfg: &Config) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let (db, missing_meta) = PkgDb::load_available(cfg);
@@ -799,7 +802,8 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     // the one that touches the network. On -current we compare the main-tree
     // PACKAGES.TXT; on STABLE the release root is frozen, so we compare the
     // patches/ PACKAGES.TXT — that is the timestamp that moves when the server
-    // publishes security updates. Short timeout, FAILS OPEN: an unreachable or
+    // publishes security updates. Short read timeout (connecting can still take
+    // ureq's 30 s, see download::build_agent), FAILS OPEN: an unreachable or
     // unparseable side never yields a false "stale" verdict and never blocks.
     if let Some((up_url, mine_url)) = freshness_urls(cfg) {
         let t = std::time::Duration::from_secs(FRESHNESS_TIMEOUT_SECS);
@@ -1416,6 +1420,72 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     }
     let (per_repo, per_rule, per_other) = installed_attribution(cfg, Some(&db), &installed);
     srow(&ok, "Packages", &ui::white(&installed.len().to_string()));
+    // `upgradepkg` renames the old record to `<pkg>-upgraded-<T>` and removes
+    // it when the upgrade finishes; one still here is an upgrade that did not
+    // finish, or one running now. Shown only, nothing is changed.
+    let leftovers = system::leftover_upgrade_records(&cfg.pkg_db_dir);
+    if !leftovers.is_empty() {
+        srow(
+            &warn,
+            "Leftovers",
+            &ui::yellow(&format!(
+                "{} upgradepkg record(s) left in {}: an upgrade did not finish (unless upgradepkg is running now); fix: `slacker fix-upgrade` as root",
+                leftovers.len(),
+                cfg.pkg_db_dir.display()
+            )),
+        );
+        for name in leftovers.iter().take(LEFTOVER_SAMPLE) {
+            srow(&info, "", &ui::dim(name));
+        }
+        if leftovers.len() > LEFTOVER_SAMPLE {
+            srow(&info, "", &ui::dim(&format!("(+{} more)", leftovers.len() - LEFTOVER_SAMPLE)));
+        }
+    }
+    // What an install cut off leaves: a record with no file list (cut before
+    // installpkg wrote it), a record whose install script did not run, and
+    // installpkg's own `installpkg-<cookie>` directory in the root. Shown
+    // only, nothing is changed.
+    let incomplete = system::incomplete_records(&cfg.pkg_db_dir);
+    let install_tmps = system::installpkg_tmp_dirs(&system::system_root(&cfg.adm_dir));
+    let not_run = system::scripts_not_run(&cfg.pkg_db_dir, &install_tmps);
+    let mut cut_items: Vec<String> = incomplete.iter().map(|r| format!("{r}: no file list")).collect();
+    cut_items.extend(not_run.iter().map(|(r, _)| format!("{r}: install script did not run")));
+    cut_items.extend(install_tmps.iter().map(|t| format!("{}: left by installpkg", t.dir.display())));
+    if !cut_items.is_empty() {
+        srow(
+            &warn,
+            "Incomplete",
+            &ui::yellow(&format!(
+                "{} sign(s) of an install that did not finish (unless installpkg is running now); fix: `slacker fix-upgrade` as root",
+                cut_items.len()
+            )),
+        );
+        for item in cut_items.iter().take(LEFTOVER_SAMPLE) {
+            srow(&info, "", &ui::dim(item));
+        }
+        if cut_items.len() > LEFTOVER_SAMPLE {
+            srow(&info, "", &ui::dim(&format!("(+{} more)", cut_items.len() - LEFTOVER_SAMPLE)));
+        }
+    }
+    // Running programs that still use files an upgrade replaced. Needs root
+    // (every process, and what they have loaded); shown only when found.
+    let stale_procs = if current_uid() == Some(0) {
+        let r = crate::stale::scan(&cfg.pkg_db_dir, &cfg.adm_dir.join("removed_packages"));
+        if !r.procs.is_empty() {
+            srow(
+                &warn,
+                "CheckRestart",
+                &ui::yellow(&format!(
+                    "{} running program(s) still use files an upgrade replaced \u{2014} see `slacker check-restart`",
+                    r.procs.len()
+                )),
+            );
+        }
+        r.procs.len()
+    } else {
+        srow(&info, "CheckRestart", &ui::dim("not checked (needs root \u{2014} re-run as root)"));
+        0
+    };
     let mut parts: Vec<String> = repos
         .iter()
         .map(|r| {
@@ -1534,7 +1604,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
 
     // ---------- Verdict ----------
     // Recommended commands in the canonical post-install order:
-    //   update gpg -> update -> install-new -> upgrade-all.
+    //   update gpg -> update -> fix-upgrade -> install-new -> upgrade-all.
     let mut steps: Vec<&str> = Vec::new();
     if gpg_missing {
         steps.push("slacker update gpg");
@@ -1545,6 +1615,11 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     // the cache, so it must be refreshed before them.
     if metadata_incomplete || pending {
         steps.push("slacker update");
+    }
+    // An upgrade upgradepkg did not finish, or an install cut off before its
+    // file list, is fixed before anything else is installed or upgraded (after `update`, so the repo package is current).
+    if !leftovers.is_empty() || !cut_items.is_empty() {
+        steps.push("slacker fix-upgrade");
     }
     // A fresh/unsynced system, or one with pending changes, installs the newly
     // added packages BEFORE upgrading — install-new always precedes upgrade-all,
@@ -1582,6 +1657,11 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         notes.push(format!(
             "{unranked_pkgs} installed package(s) carry a build tag with no priority ({}) — they cannot be ranked, so they are kept and never upgraded; give each tag a priority in `repos`, or removepkg and install from a repo",
             unranked_tags.join(", ")
+        ));
+    }
+    if stale_procs > 0 {
+        notes.push(format!(
+            "{stale_procs} running program(s) still use files an upgrade replaced \u{2014} restart them; `slacker check-restart` lists them"
         ));
     }
     if security_problem {

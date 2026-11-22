@@ -101,6 +101,8 @@ touch "$SB/pkgdb/slkyes-upme-1.0-x86_64-1" "$SB/pkgdb/slkyes-old-0.9-x86_64-1"
 
 printf 'slkyes-hello\nslkyes-world\n' > "$CONF/templates/yescheck.template"
 printf 'slkyes-upme\n'                > "$CONF/templates/yesrm.template"
+printf 'slkyes-hello\n'               > "$CONF/templates/yesdel.template"
+printf 'slkyes-hello\n'               > "$CONF/templates/yesgen.template"
 
 # ---------------------------------------------------------------------------
 # Anything slacker prints when it is about to wait on stdin. Colour is off for
@@ -155,9 +157,11 @@ check "install (conflict)"          install slkyes-clash
 check "upgrade"                     upgrade slkyes-upme
 check "upgrade-all"                 upgrade-all
 check "install-new"                 install-new
+check "generate-template"           generate-template yesgen
 check "install-template"            install-template yescheck
 check "remove"                      remove slkyes-upme
 check "remove-template"             remove-template yesrm
+check "delete-template"             delete-template yesdel
 check "clean-system"                clean-system
 check "frozen"                      frozen slkyes-hello
 check "nodep"                       nodep slkyes-hello:slkyes-world

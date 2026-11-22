@@ -19,7 +19,7 @@
 #
 #  Architecture  (auto-detected — just match the directory in the line you pick)
 #  ----------------------------------------------------------------------------
-#        x86_64   ->   .../slackware64-current/
+#        x86_64   ->   .../slackware-current/
 #        32-bit   ->   .../slackware-current/
 #
 #  The few rules
@@ -84,12 +84,6 @@
 # http://ftp.cc.swin.edu.au/slackware/slackware-current/
 # http://mirror.aarnet.edu.au/pub/slackware/slackware-current/
 #
-#  --- BELARUS (BY) ----------------------------------------------------------
-# http://mirror.datacenter.by/pub/slackware/slackware-current/
-#
-# ---  BOINC Team Belgium ----------------------------------------------------
-# https://slackware.mirror-services.net/slackware/slackware-current/
-#
 #  --- BRAZIL (BR) -----------------------------------------------------------
 # http://ftp.slackware-brasil.com.br/slackware-current/
 #
@@ -115,6 +109,8 @@
 #  --- GERMANY (DE) ----------------------------------------------------------
 # http://ftp.gwdg.de/pub/linux/slackware/slackware-current/
 # http://ftp.tu-chemnitz.de/pub/linux/slackware/slackware-current/
+# https://ftp6.gwdg.de/pub/linux/slackware/slackware-current/
+# https://mirror.netcologne.de/slackware/slackware-current/
 #
 #  --- GREECE (GR) -----------------------------------------------------------
 # http://ftp.cc.uoc.gr/mirrors/linux/slackware/slackware-current/
@@ -141,6 +137,9 @@
 # http://ftp.slackware.pl/pub/slackware/slackware-current/
 # http://sunsite.icm.edu.pl/packages/linux-slackware/slackware-current/
 #
+#  --- Portugal -----------------------------------------------------------
+# https://ftp.rnl.tecnico.ulisboa.pt/pub/slackware/slackware-current/
+#
 #  --- RUSSIA (RU) -----------------------------------------------------------
 # http://mirror.rol.ru/slackware/slackware-current/
 # http://mirror.yandex.ru/slackware/slackware-current/
@@ -166,15 +165,12 @@
 #  --- UNITED KINGDOM (UK) ---------------------------------------------------
 # http://slackware.uk/slackware/slackware-current/
 # http://ftp.mirrorservice.org/sites/ftp.slackware.com/pub/slackware/slackware-current/
-# http://mirror.bytemark.co.uk/slackware/slackware-current/
 #
 #  --- UNITED STATES (US) ----------------------------------------------------
 # http://mirrors.us.kernel.org/slackware/slackware-current/
 # http://mirrors.xmission.com/slackware/slackware-current/
 # https://mirror.slackbuilds.org/slackware/slackware-current/
-# http://slackware.cs.utah.edu/pub/slackware/slackware-current/
 # http://slackware.mirrors.tds.net/pub/slackware/slackware-current/
 # http://spout.ussg.indiana.edu/linux/slackware/slackware-current/
-# https://mirrors.ocf.berkeley.edu/slackware/slackware-current/
 #
 # ============================================================================

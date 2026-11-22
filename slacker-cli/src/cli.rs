@@ -22,19 +22,19 @@ const HELP_STYLES: clap::builder::Styles = clap::builder::Styles::styled()
 )]
 pub(crate) struct Cli {
     /// Directory holding the plain-text config files.
-    #[arg(long, global = true, default_value = "/etc/slacker")]
+    #[arg(long, global = true, default_value = "/etc/slacker", help_heading = "Global options")]
     pub(crate) config_dir: PathBuf,
 
     /// Assume "yes" to confirmation prompts.
-    #[arg(short = 'y', long, global = true)]
+    #[arg(short = 'y', long, global = true, help_heading = "Global options")]
     pub(crate) yes: bool,
 
     /// Show what would happen without changing the system.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub(crate) dry_run: bool,
 
     /// Do not read .dep files / pull in dependencies for this run.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub(crate) no_deps: bool,
 
     #[command(subcommand)]
@@ -75,13 +75,18 @@ pub(crate) enum Cmd {
     /// job. Checks the environment (pkgtools and helper tools on PATH, config-file
     /// syntax), then mirror, repos, priorities, verification, GPG keys, metadata
     /// freshness, blacklist, the package admin dir, installed-package sources,
-    /// pending `.new` configs, and (if online) reachability and updates.
+    /// pending `.new` configs, upgrades and installs that did not finish (fixed
+    /// with `fix-upgrade`), running programs that still use replaced files (as
+    /// root), and (if online) reachability and updates.
     Status,
     /// Install new packages (refuses already-installed ones).
     Install { patterns: Vec<String> },
     /// Upgrade installed packages to the newest available revision.
     Upgrade { patterns: Vec<String> },
-    /// Reinstall the currently installed version.
+    /// Reinstall installed packages with the version the repo offers now.
+    ///
+    /// The repo's version and build may differ from the installed one; the
+    /// plan then shows it as old -> new, and asks before anything changes.
     Reinstall { patterns: Vec<String> },
     /// Remove installed packages.
     Remove { patterns: Vec<String> },
@@ -93,6 +98,28 @@ pub(crate) enum Cmd {
     /// key) and downgrades to it with `upgradepkg --reinstall`. Official packages
     /// only (the archive does not carry third-party repos), and only on -current.
     RevertPkg { name: String },
+    /// Finish upgrades and installs the pkgtools did not finish (power loss, crash).
+    ///
+    /// Finds the `<pkg>-upgraded-<time>` records upgradepkg leaves in the
+    /// package DB when it stops halfway, and runs the steps it did not finish,
+    /// with the pkgtools: `upgradepkg --install-new --reinstall`, `removepkg`
+    /// of the record, `upgradepkg --reinstall`. You choose the package from the
+    /// repos' candidates (or only the record is removed when nothing would be
+    /// deleted). A record with no file list, or one whose install script did
+    /// not run (an install cut off), is fixed with one `upgradepkg --reinstall`;
+    /// for a directory installpkg left in the root, the commands to remove it
+    /// are printed. Asks first; refuses while a pkgtool runs.
+    FixUpgrade,
+    /// List running programs that still use files an upgrade replaced.
+    ///
+    /// After an upgrade, a program that was already running keeps the old
+    /// program and libraries it had loaded. This lists those processes with the
+    /// packages of those files (removed packages first, with how many files of
+    /// each) and their command line, so you can restart them. Only
+    /// files listed in a pkgtools record count; a reinstall of the same build is
+    /// not reported. Programs and shared libraries only: scripts are not seen.
+    /// Changes nothing; run as root. Exit status 100 when something is found.
+    CheckRestart,
     /// Download package files without installing them.
     ///
     /// Saved to the cache by default, or to a directory given with -o/--output.

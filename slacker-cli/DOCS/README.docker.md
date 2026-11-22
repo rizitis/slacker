@@ -22,7 +22,7 @@ NOTE: the sbopkg-ci_slacker-very_mini-testing image is [WIP, in very early testi
 `ls /etc/slacker/templates/` list all templates, you may create your own templates there too.
 
 All images ships **without** gnupg and without a system CA store - slacker's TLS
-uses rustls with bundled roots, and packages are verified in two stages:
+uses rustls with bundled roots, and packages are verified in three steps:
 
 1. `slacker update` - fetches repo metadata **and this repo's depgraph.db**
    (md5-verified over HTTPS).

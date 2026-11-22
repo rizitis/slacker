@@ -1,6 +1,6 @@
     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
     ▒ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ▒
-    ▒          ██╗                ██╗ ░░slacker v0.14.1░░░ ▒
+    ▒          ██╗                ██╗ ░░slacker v0.14.2░░░ ▒
     ▒   ██████╗██║  █████╗ ██████╗██║ ██╗██████╗██╗████╗   ▒
     ▒   ██╔═══╝██║  ╚═══██╗██╔═══╝██║██╔╝██╔═██║████╔══╝   ▒
     ▒   ██████╗██║  ██████║██║    ████╔╝ ██████║██╔═╝      ▒
@@ -11,7 +11,7 @@
     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
 
 ████ LOADING PACKAGE INFO ██████████████████████████████████████████████
-[0x01] PACKAGE   : slacker v0.14.1_beta.7  [OK]
+[0x01] PACKAGE   : slacker v0.14.2_beta.7  [OK]
 [0x02] TYPE      : APPLICATION (cli + gui + flatpak gui)  [OK]
 [0x03] SIZE      : 2.8 MiB  [OK]
 [0x04] DATE      : 2026-11-14  [OK]
@@ -43,8 +43,11 @@
 [SRC] commands/ ........install | upgrade_dist | update | status | clean
 [SRC] commands/ ........new_config | revert_pkg | repos | blacklist
 [SRC] commands/ ........query | logs | find_mirror | templates
+[SRC] commands/ ........fix_upgrade | check_restart
 [SRC] helpers ..........config | pkgdb | repo | gpg | download | system
 [SRC] helpers ..........dist | mirrors | history | revert | stockdb | ui
+[SRC] helpers ..........manifest | space | stale | credentials | pkg
+[SRC] helpers ..........newconfig | template | changelog | banner
 [DOC] ARCHITECTURE.md ..where everything lives, and what never changes
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
@@ -77,5 +80,8 @@
 - var/lib/slacker: trust anchors (GPG pins, quarantine); keep it
 - var/cache/slacker: disposable; slacker clean-cache empties packages/
 - Installs through pkgtools only; never touches /var/adm by itself
+- Asks before removing or overwriting anything outside its own
+  cache and state; --yes answers for you. Only a .new identical
+  to the installed file is dropped unasked, as config() does
 - Repo follows Slackware Linux layout
 ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒

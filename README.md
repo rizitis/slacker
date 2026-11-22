@@ -173,6 +173,7 @@ report what you find:
 * [Georgi Sotirov](https://sotirov-bg.net/slackpack/about.cgi?q=site) - slacker use his slackpack repos and packages for stable.
 * [Matteo Bernardini ](https://slackware.ponce.cc/blog/) - slacker use his repo and packages.
 * [Danilo Macrì](https://forge.slackware.nl/danix) - For Pull Requests (shell-completions for slacker) and bug reports.
+* [Christophe Nguyen](https://forge.slackware.nl/gegechris99) - For the many bug reports and recommendations that made Slacker more functional and user-friendly
 * My real friend **@gcosbug** for the code oversight, the fixes and the endless time he has put in...
 
 > slacker is dedicated to the memory of my good friend from France Didier Spaier. Who was the creator and maintainer of Slint Linux.

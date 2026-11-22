@@ -78,10 +78,8 @@ pub const CHANGELOG: &str = "ChangeLog.txt";
 /// ChangeLog) are best-effort. The previous PACKAGES.TXT is retained as
 /// PACKAGES.TXT.prev so `install-new` can diff against it.
 ///
-/// MANIFEST.bz2 is fetched lazily by `ensure_manifest` (not here): from the
-/// repo root for third-party repos, or the per-arch subdir for the official
-/// one. The cached plain-text MANIFEST is dropped on each update so the next
-/// file-search re-fetches it.
+/// MANIFEST.bz2 is not fetched here but by `refresh_manifest`, which `update`
+/// calls once CHECKSUMS.md5 has been verified.
 ///
 /// With `check_consistency`, PACKAGES.TXT must match the md5 CHECKSUMS.md5
 /// lists for it (when it lists one); otherwise nothing is written and the
@@ -166,10 +164,8 @@ pub fn update_repo(
         }
     }
 
-    // NOTE: MANIFEST.bz2 is large (tens of MB for official Slackware) and only
-    // needed by file-search, so we fetch it lazily on first use, not here.
-    // Drop any cached (now stale) MANIFEST so the next file-search re-fetches.
-    let _ = std::fs::remove_file(dir.join(MANIFEST));
+    // MANIFEST.bz2 is fetched after this, by `refresh_manifest`, once the
+    // CHECKSUMS.md5 it is checked against has been verified.
     Ok(())
 }
 
@@ -274,23 +270,61 @@ pub fn fetch_changelog_text(
     Err(first_err.unwrap_or_else(|| format!("no ChangeLog URL for repo '{}'", repo.name)))
 }
 
-/// Ensure the decompressed MANIFEST exists for a repo, downloading it on
-/// demand. Used by file-search.
+/// What `refresh_manifest` did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ManifestRefresh {
+    /// Fetched, checked and in place.
+    Fetched,
+    /// CHECKSUMS.md5 lists the same MANIFEST.bz2 as the one in the cache.
+    Unchanged,
+    /// The repo serves none (or it could not be fetched); none is kept.
+    Missing,
+    /// It does not match the md5 CHECKSUMS.md5 lists for it; none is kept.
+    Mismatch,
+}
+
+/// Keeps the md5 of the MANIFEST.bz2 the cached MANIFEST came from.
+pub const MANIFEST_MD5: &str = "MANIFEST.bz2.md5";
+
+/// The md5 a CHECKSUMS.md5 lists for `rel` (`./rel` or `rel`), if any.
+pub fn listed_md5(checksums: &str, rel: &str) -> Option<String> {
+    checksums.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let (hash, path) = (parts.next()?, parts.next()?);
+        if parts.next().is_some() {
+            return None;
+        }
+        let ours = path.strip_prefix("./").unwrap_or(path) == rel;
+        (ours && hash.len() == 32 && hash.bytes().all(|c| c.is_ascii_hexdigit()))
+            .then(|| hash.to_ascii_lowercase())
+    })
+}
+
+/// Fetch a repo's MANIFEST.bz2 and keep it decompressed as MANIFEST, for
+/// file-search and the disk-space estimate. Called by `update` after the repo's
+/// CHECKSUMS.md5 has been fetched (and its signature checked).
 ///
-/// Third-party repos publish MANIFEST.bz2 at the repo root — the directory the
-/// URL points at, which also holds that repo's PACKAGES.TXT and CHECKSUMS — so
-/// we fetch `<url>/MANIFEST.bz2`. The official repo is the one exception: its
-/// URL is the distribution root (carrying PACKAGES.TXT, ChangeLog, …), but the
-/// MANIFEST.bz2 lives one level down in the per-arch package dir (`slackware64/`
-/// on 64-bit, `slackware/` on 32-bit). For the official repo we therefore also
-/// try that subdir. We never probe a third-party repo's location subdirs —
-/// doing so was what stalled file-search at the network timeout.
-pub fn ensure_manifest(repo: &Repo, cache_root: &Path) -> Result<bool, String> {
+/// Third-party repos publish MANIFEST.bz2 at the repo root, the directory the
+/// URL points at. The official repo's URL is the distribution root, and its
+/// MANIFEST.bz2 lives in the per-arch package dir (`slackware64/` on 64-bit,
+/// `slackware/` on 32-bit), so for it that subdir is tried too. A
+/// third-party repo's subdirs are never probed.
+///
+/// Checked like PACKAGES.TXT: with `check`, a MANIFEST.bz2 whose md5 is not
+/// the one the repo's CHECKSUMS.md5 lists for it is not kept (one not listed
+/// there is kept, as for PACKAGES.TXT). When the listed md5 is the one the
+/// cached MANIFEST came from, nothing is fetched. On any failure the old
+/// MANIFEST is removed, so a stale one is never used.
+pub fn refresh_manifest(repo: &Repo, cache_root: &Path, check: bool) -> ManifestRefresh {
+    use md5::{Digest, Md5};
     let dir = repo.cache_subdir(cache_root);
     let dest = dir.join(MANIFEST);
-    if dest.exists() {
-        return Ok(true);
-    }
+    let md5_file = dir.join(MANIFEST_MD5);
+    let drop_old = || {
+        let _ = std::fs::remove_file(&dest);
+        let _ = std::fs::remove_file(&md5_file);
+    };
+    let checksums = read_text_lossy(&dir.join(CHECKSUMS)).unwrap_or_default();
 
     let mut candidates: Vec<String> = vec![String::new()]; // "" == repo root
     if repo.official {
@@ -298,60 +332,75 @@ pub fn ensure_manifest(repo: &Repo, cache_root: &Path) -> Result<bool, String> {
             candidates.push(arch_dir);
         }
     }
+    let rel_of = |sub: &str| if sub.is_empty() { MANIFEST_BZ2.to_string() } else { format!("{sub}/{MANIFEST_BZ2}") };
 
-    println!("  fetching MANIFEST for '{}' (large, first time only):", repo.name);
-    let tmp_bz2 = dir.join("MANIFEST.bz2.part");
-
-    for sub in &candidates {
-        let (rel, label) = if sub.is_empty() {
-            (MANIFEST_BZ2.to_string(), repo.name.clone())
-        } else {
-            (format!("{sub}/{MANIFEST_BZ2}"), format!("{}/{sub}", repo.name))
-        };
-        let url = repo.join_url(&rel);
-        if download::download_to_progress(&url, &tmp_bz2, &label).is_err() {
-            continue;
-        }
-        // Decompress straight into the MANIFEST file, but cap the output so a
-        // bzip2 "decompression bomb" (a tiny .bz2 that expands to terabytes)
-        // can't fill the disk. Stream gpg/bzip2 stdout through a capped copy.
-        let mut child = match std::process::Command::new("bzip2")
-            .arg("-dc")
-            .arg(&tmp_bz2)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(_) => {
-                let _ = std::fs::remove_file(&tmp_bz2);
-                continue;
+    // Unchanged since the last fetch: keep it.
+    let have = std::fs::read_to_string(&md5_file).ok().map(|s| s.trim().to_string());
+    if dest.exists() {
+        if let Some(h) = &have {
+            if candidates.iter().any(|c| listed_md5(&checksums, &rel_of(c)).as_ref() == Some(h)) {
+                return ManifestRefresh::Unchanged;
             }
-        };
-        let mut out = match std::fs::File::create(&dest) {
-            Ok(f) => f,
-            Err(e) => {
-                let _ = std::fs::remove_file(&tmp_bz2);
-                return Err(format!("create MANIFEST: {e}"));
-            }
-        };
-        let copied = child
-            .stdout
-            .take()
-            .ok_or_else(|| "bzip2 produced no output".to_string())
-            .and_then(|mut s| download::capped_copy(&mut s, &mut out, download::MAX_DOWNLOAD));
-        let status = child.wait();
-        let _ = std::fs::remove_file(&tmp_bz2);
-        if copied.is_ok() && matches!(status, Ok(s) if s.success()) {
-            println!("  MANIFEST for '{}' ready", repo.name);
-            return Ok(true);
         }
-        let _ = std::fs::remove_file(&dest);
     }
 
-    let _ = std::fs::remove_file(&tmp_bz2);
-    println!("  no MANIFEST available for '{}'", repo.name);
-    Ok(false)
+    let tmp_bz2 = dir.join("MANIFEST.bz2.part");
+    let tmp_out = dir.join("MANIFEST.part");
+    let mut mismatch = false;
+    for sub in &candidates {
+        let rel = rel_of(sub);
+        let label = if sub.is_empty() { repo.name.clone() } else { format!("{}/{sub}", repo.name) };
+        let url = repo.join_url(&rel);
+        if download::download_to_progress(&url, &tmp_bz2, &label).is_err() {
+            let _ = std::fs::remove_file(&tmp_bz2);
+            continue;
+        }
+        let actual = match std::fs::read(&tmp_bz2) {
+            Ok(b) => format!("{:x}", Md5::digest(&b)),
+            Err(_) => continue,
+        };
+        if check {
+            if let Some(listed) = listed_md5(&checksums, &rel) {
+                if listed != actual {
+                    mismatch = true;
+                    let _ = std::fs::remove_file(&tmp_bz2);
+                    continue;
+                }
+            }
+        }
+        // Decompress, capped so a bzip2 "decompression bomb" cannot fill the
+        // disk, into a temporary file that replaces MANIFEST only when whole.
+        let ok = (|| -> Option<()> {
+            let mut child = std::process::Command::new("bzip2")
+                .arg("-dc")
+                .arg(&tmp_bz2)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok()?;
+            let mut out = std::fs::File::create(&tmp_out).ok()?;
+            let copied = child
+                .stdout
+                .take()
+                .ok_or(())
+                .and_then(|mut s| download::capped_copy(&mut s, &mut out, download::MAX_DOWNLOAD).map_err(|_| ()));
+            let status = child.wait().ok()?;
+            (copied.is_ok() && status.success()).then_some(())
+        })()
+        .is_some();
+        let _ = std::fs::remove_file(&tmp_bz2);
+        if ok && std::fs::rename(&tmp_out, &dest).is_ok() {
+            let _ = std::fs::write(&md5_file, format!("{actual}\n"));
+            return ManifestRefresh::Fetched;
+        }
+        let _ = std::fs::remove_file(&tmp_out);
+    }
+    drop_old();
+    if mismatch {
+        ManifestRefresh::Mismatch
+    } else {
+        ManifestRefresh::Missing
+    }
 }
 
 /// For the official Slackware repo only: the MANIFEST.bz2 sits in the per-arch
@@ -481,7 +530,7 @@ pub fn meta_path(repo: &Repo, cache_root: &Path, fname: &str) -> PathBuf {
 /// verification). PACKAGES.TXT goes too, so the repo's packages fall out of the
 /// database entirely rather than risk being installed unverified.
 pub fn invalidate_metadata(repo: &Repo, cache_root: &Path) {
-    for f in [PACKAGES_TXT, CHECKSUMS, CHECKSUMS_ASC, CHECKSUMS_SHA] {
+    for f in [PACKAGES_TXT, CHECKSUMS, CHECKSUMS_ASC, CHECKSUMS_SHA, MANIFEST, MANIFEST_MD5] {
         let _ = std::fs::remove_file(meta_path(repo, cache_root, f));
     }
 }

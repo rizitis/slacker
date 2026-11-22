@@ -1,4 +1,4 @@
-.TH SLACKER 8 "November 2026" "slacker 0.14.1" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.14.2" "Slackware Package Management"
 .SH NAME
 slacker \- minimal package manager for Slackware (slackpkg + slackpkg+ in one)
 .SH SYNOPSIS
@@ -42,6 +42,15 @@ examples \(em see the project wiki at
 .UR https://forge.slackware.nl/rizitis/slacker/wiki
 .UE .
 .SH OPTIONS
+These options are global: every command accepts them, before or after its name
+.RB ( "slacker \-\-yes upgrade\-all" " or " "slacker upgrade\-all \-\-yes" ),
+and
+.B \-\-help
+lists them under
+.IR "Global options" .
+A command that asks nothing, changes nothing or reads no dependencies does
+nothing with
+.BR \-\-yes ", " \-\-dry\-run " or " \-\-no\-deps .
 .TP
 .BI \-\-config\-dir " DIR"
 Directory holding the plain\-text configuration files. Default
@@ -72,8 +81,32 @@ its ChangeLog, the others by comparing CHECKSUMS.md5) and prints a status table.
 If nothing has changed it stops with \fIAll up\-to\-date\fR and touches nothing.
 Otherwise it lists the repositories that have updates and lets you refresh all
 of them, a chosen subset (by number), or none. Only the repositories you pick
-are downloaded; the rest \(em including their cached MANIFEST \(em are left
-untouched. The form
+are downloaded; the rest are left untouched.
+.IP
+For each repository it refreshes,
+.B update
+also fetches
+.I MANIFEST.bz2
+(the list of every file in every package) and keeps it decompressed in the
+cache, for
+.B file-search
+and the disk-space estimate (see
+.BR "DISK SPACE" ).
+It is fetched after
+.I CHECKSUMS.md5
+and its signature have been checked, and checked like
+.IR PACKAGES.TXT :
+one whose md5 is not the one
+.I CHECKSUMS.md5
+lists for it is not kept (one not listed there is kept). When the listed md5 is
+the one the cached MANIFEST came from, it is not fetched again. A repository
+with nothing new whose MANIFEST is not in the cache gets it too. A repository
+that serves none is not an error. The official repository's MANIFEST is in its
+.I slackware64/
+.RI ( slackware/ )
+directory.
+.IP
+The form
 .B update gpg
 downloads and imports each repository's GPG key into a private keyring, and
 should be run once before the first
@@ -121,8 +154,10 @@ says. Only package names are searched, never descriptions or files (see
 .BR file-search ).
 .TP
 .BI file-search " FILENAME"
-Report which package ships a given file, using the repository MANIFEST. The
-MANIFEST is downloaded on first use and can be large. Each hit is marked
+Report which package ships a given file, using the repository MANIFEST that
+.B update
+keeps in the cache. It downloads nothing, so it runs the same as any user; a
+repository with no MANIFEST in the cache is named at the end. Each hit is marked
 .I installed
 or
 .I uninstalled
@@ -199,7 +234,12 @@ To reinstall a package that is already current, use
 .BR reinstall .
 .TP
 .BI reinstall " PATTERN..."
-Reinstall the currently installed version.
+Reinstall installed packages with the version and build the repository
+offers now, through
+.BR "upgradepkg \-\-reinstall" .
+This may differ from the installed one, newer or older; the plan then shows
+it as old \-> new, and nothing changes before the confirmation.
+A package file already in the cache is used only when it is that same file.
 .TP
 .BI remove " PATTERN..."
 Remove installed packages. A series written with the trailing
@@ -255,6 +295,148 @@ can break the running system. Requires
 .B REVERT
 enabled in
 .IR slacker.conf .
+.TP
+.B fix-upgrade
+Finish package upgrades that
+.B upgradepkg
+did not finish (a power loss, a crash, a first install pass that failed).
+.B upgradepkg
+renames the old package record to
+.IR NAME-VERSION-ARCH-BUILD-upgraded-DATE,TIME ,
+installs the new package, removes the renamed record with
+.BR removepkg ,
+and installs the new package a second time; a renamed record still in
+.I ADM_DIR/packages/
+means it stopped somewhere in between
+.RB ( status
+reports it as
+.IR Leftovers ).
+For each such package
+.B fix-upgrade
+runs the steps
+.B upgradepkg
+did not finish, with the pkgtools and in this order:
+.IR "upgradepkg \-\-install\-new \-\-reinstall" ,
+.B removepkg
+of the leftover record, and
+.IR "upgradepkg \-\-reinstall" .
+The reinstall comes first because the record of an install cut off halfway may
+have no file list yet, and
+.B removepkg
+keeps only the files other records list. When the installed record of that
+package is complete and lists every file and symlink of the leftover record (a
+reinstall that was cut off after its install pass, for example), nothing would be
+deleted, and no package file is needed: only the record goes, with
+.IR "removepkg \-\-skip\-douninst" ,
+so the uninstall script of the package, which stays installed, is not run.
+Otherwise a package file is needed, and slacker does not pick it: it lists every
+candidate the repositories have, with its priority, whether it is exactly the
+installed build, and whether it would move the package to a source of lower
+priority; frozen candidates are not offered. You type its number, or press
+Enter to skip (the default); before anything runs, the commands are listed and
+asked about once more
+.RI ( "Run them now? [y/N]" ).
+An answer that is not a listed number, or not y or n, is asked again. The chosen file is fetched and checked like any install (release,
+architecture, package\-list and md5/GPG checks). With
+.B \-\-yes
+nobody is asked, so only a candidate that is exactly the installed build is
+taken. For a package no repository has, or one that was skipped, the three
+commands are printed, with the package file they need, for you to run by hand.
+.IP
+.B fix-upgrade
+also fixes an install cut off before its file list was written.
+.B installpkg
+writes the package record header first and appends the file list only after
+.B tar
+has extracted everything, so such a record has no
+.I FILE LIST:
+line, or no entry after it
+.RB ( status
+reports it as
+.IR Incomplete ).
+.B removepkg
+cannot remove what such a record does not list. The fix is one
+.IR "upgradepkg \-\-reinstall" ,
+with the package chosen as above: the package is installed again and its record
+written whole. A candidate that is not the same build is marked: files only the
+cut-off install put on disk stay. A record of a package that also has an
+.I \-upgraded\-
+record is fixed as an unfinished upgrade instead. When two records of the same
+package name are installed, nothing is done and the step is printed to run by
+hand.
+.IP
+.B installpkg
+unpacks the package's
+.I install/
+directory into
+.IR ROOT/installpkg-COOKIE ,
+runs
+.I doinst.sh
+from there, copies it to
+.IR ADM_DIR/scripts/ ,
+and removes the directory. One still there means an install was cut off after
+the unpack
+.RB ( status
+lists it under
+.IR Incomplete ).
+Its
+.I slack-desc
+names the package; when the record of that package is complete but no record of
+it has that
+.I doinst.sh
+in
+.IR ADM_DIR/scripts/ ,
+the install script did not run, and the package is fixed the same way, with
+.IR "upgradepkg \-\-reinstall" ,
+which runs it. The directory itself is not removed: no pkgtool removes it, so
+.B fix-upgrade
+prints the two commands
+.B installpkg
+would have run
+.RI ( "rm \-f DIR/do*inst.sh DIR/slack\-*" " and " "rmdir DIR" )
+for you to run after the fixes, and says so when the directory holds other
+files. The root is read from
+.BR ADM_DIR :
+the part before
+.IR var/adm ", " var/log " or " var/lib/pkgtools ,
+or
+.I /
+for any other
+.BR ADM_DIR .
+.IP
+It asks before changing anything
+.RB ( \-\-dry\-run
+changes nothing and asks nothing), and refuses to start while
+.BR installpkg ", " upgradepkg " or " removepkg
+is running, since a record is expected while they work.
+.TP
+.B check-restart
+List running programs that still use files an upgrade replaced.
+.B installpkg
+unpacks over the old files, so a program that was already running keeps the
+program and shared libraries it had loaded; the kernel shows them in
+.I /proc
+as deleted. A process is listed when an executable mapping (its program or a
+shared library) is deleted, its path is in the file list of an installed
+package (or of a record in
+.IR ADM_DIR/removed_packages/ ,
+shown as a removed package), and what is loaded differs from the file there
+now, so a reinstall of the same build is not listed. Processes in another mount
+namespace (containers) are counted but not checked. Each process is shown with its user,
+the packages of those files (the program's own first, then the removed
+packages, marked
+.IR removed ,
+then the others, each with how many of its files the process uses, most first),
+and its command line. The full names of the removed packages are listed once
+under the table. Both are cut to the terminal width, with the
+number of packages left out; in a pipe they are printed whole. Restarting them (or a reboot) is up
+to you. Scripts (python, perl, shell) and files read once at start are not seen.
+It changes nothing, but needs root to read every process, and takes the lock like
+the commands that change the system. Exit status
+.B 100
+when something is found,
+.B 0
+otherwise.
 .SS Bulk operations
 .TP
 .B upgrade-all
@@ -480,6 +662,12 @@ asks whether to run new-config right away, or runs it, instead.
 .TP
 .BI generate-template " NAME"
 Snapshot the installed package set into a template.
+If a template of that name already exists, asks before overwriting it;
+.B \-\-yes
+skips the question.
+With
+.B \-\-dry\-run
+nothing is written.
 .TP
 .BI install-template " NAME"
 Install every package listed in a template (following includes).
@@ -491,6 +679,9 @@ to delete only the template file use
 .TP
 .BI delete-template " NAME"
 Delete a template file. Installed packages are not touched.
+Asks before deleting;
+.B \-\-yes
+skips the question.
 .SS Blacklist
 .TP
 .BI frozen " RULE..."
@@ -632,7 +823,13 @@ configured and what to do next: active mirror and whether it is up to date with
 the upstream master, repos and priorities, verification policy, imported/pinned
 GPG keys, metadata freshness, whether every repository targets the same
 Slackware release as the running system, blacklist, the sources of installed
-packages, and
+packages, upgrades that
+.B upgradepkg
+left unfinished (see
+.BR \%fix\-upgrade ),
+running programs that still use replaced files (as root; see
+.BR \%check\-restart ),
+and
 \(em when online \(em reachability and pending updates. When your mirror is more
 than 48 hours behind upstream it says so and points you at
 .BR find-mirror .
@@ -732,6 +929,8 @@ Read-only commands
 run as any user. Commands that change the system, the cache, or the
 configuration (everything else) must be run as root; non-root invocations stop
 with a clear message before doing anything.
+.B check-restart
+changes nothing but also needs root, to read every running process.
 .PP
 Those same commands take an exclusive lock
 .RI ( /run/slacker.lock )
@@ -743,6 +942,39 @@ freely in parallel.
 Commands that write a configuration file
 .RB ( frozen ", " unfrozen ", " pin ", " unpin ", " nodep ", " undep ", " add-repo ", " del-repo ", " pri-repo ", " add-tag ", " del-tag ", " generate-template ", " upgrade-dist )
 refuse to write through a symbolic link and change nothing.
+.SH DISK SPACE
+Before
+.BR install ", " upgrade ", " reinstall ", " upgrade-all ", " install-new
+and
+.BR install-template ,
+slacker estimates the space the plan needs on each filesystem and compares it
+with the space free there. When it fits, nothing is printed. When it may not
+fit, it shows each filesystem that may be short, with what it needs and what
+is free, and asks
+.I "Continue anyway? [y/N]"
+(Enter stops, and nothing is changed). With
+.B \-\-yes
+it prints the same warning and continues; with
+.B \-\-dry\-run
+it prints it and asks nothing.
+.B upgrade-dist
+has its own checks and does not use this one.
+.PP
+The estimate is the whole new package, file by file from the cached MANIFEST:
+each file rounded up to the filesystem's block, one block for each directory
+that does not exist yet, the package record twice, plus 10%. That is what an
+upgrade can take at its peak when running programs keep the old files open
+(their space is freed only when they exit); otherwise the peak is lower, so the
+question can come when the plan would still fit. It was measured on ext4; on
+other filesystems (compression, other block layouts) the real figure can
+differ. A package in no cached MANIFEST is counted as twice its
+.I PACKAGES.TXT
+uncompressed size, and the warning says so. Packages not yet in the cache are
+counted, at their compressed size, on the filesystem of
+.BR CACHE_DIR .
+The free space is what
+.B df
+reports for unprivileged use.
 .SH PATTERNS
 A
 .I PATTERN
@@ -830,7 +1062,9 @@ package and need only be set to force a specific architecture.
 .B CACHE_DIR
 (default
 .IR /var/cache/slacker )
-holds downloaded metadata and packages (re-downloadable; safe to clear).
+holds downloaded metadata (with each repository's decompressed MANIFEST and
+the md5 of the MANIFEST.bz2 it came from) and packages (re-downloadable; safe to
+clear).
 .B STATE_DIR
 (default
 .IR /var/lib/slacker )
@@ -1519,7 +1753,9 @@ upgraded itself and must be re\-run.
 .TP
 .B 100
 There are pending updates (from
-.BR check-updates ).
+.BR check-updates ),
+or running programs that still use replaced files (from
+.BR check-restart ).
 .B check-updates
 also exits 100 for a repository whose cached
 .I PACKAGES.TXT
@@ -1634,6 +1870,27 @@ Roll a package back to a previous \-current version:
 .RS
 .nf
 slacker revert-pkg emacs
+.fi
+.RE
+.PP
+After an upgrade, see which running programs to restart:
+.PP
+.RS
+.nf
+slacker check-restart
+.fi
+.RE
+.PP
+After a power loss during an upgrade, when
+.B status
+shows
+.I Leftovers
+or
+.IR Incomplete :
+.PP
+.RS
+.nf
+slacker fix-upgrade
 .fi
 .RE
 .SH SEE ALSO

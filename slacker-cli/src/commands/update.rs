@@ -191,6 +191,7 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
 
     if needing.is_empty() {
         println!("\n{}", ui::green("All up-to-date — no news is good news."));
+        fill_missing_manifests(cfg, &repos, &[]);
         // Even when no repo changed, the stock-db must still be checked/
         // fetched: in a container it may be missing or stale regardless of
         // repo state (repos up-to-date != stock-db present & in sync).
@@ -248,8 +249,9 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
         }
     };
 
-    // ---- update phase: only the chosen repos (their stale MANIFEST is dropped
-    // by update_repo; every other repo is left untouched). ----
+    // ---- update phase: only the chosen repos (their MANIFEST is refreshed by
+    // update_one_repo; every other repo is left untouched, except that one
+    // with no MANIFEST in the cache gets it). ----
     let changelog_repo = changelog::changelog_repo(&cfg.repos).map(|r| r.name.clone());
     let mut out = UpdateOutcomes::default();
     println!();
@@ -257,6 +259,8 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
         let track = changelog_repo.as_deref() == Some(r.name.as_str());
         update_one_repo(cfg, r, track, &mut out);
     }
+    let updated: Vec<&str> = chosen.iter().map(|r| r.name.as_str()).collect();
+    fill_missing_manifests(cfg, &repos, &updated);
 
     if !out.failed_verify.is_empty() {
         println!(
@@ -332,4 +336,29 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
     }
     warn_unverified_repos(cfg);
     Ok(Outcome::Ok)
+}
+
+/// An up-to-date repo is not fetched again, so one that has no MANIFEST in the
+/// cache (from before `update` kept it, or a fetch that failed) gets it here,
+/// checked against the CHECKSUMS.md5 already in the cache (verified when that
+/// was fetched). Repos with a MANIFEST, frozen ones, and the ones in `done` are
+/// left alone. Only a fetched or refused MANIFEST is printed: a repo that
+/// serves none is tried again, quietly, on each update.
+fn fill_missing_manifests(cfg: &Config, repos: &[&config::Repo], done: &[&str]) {
+    for r in repos {
+        if done.contains(&r.name.as_str())
+            || repo::is_quarantined(&cfg.state_dir, &r.name)
+            || !repo::meta_path(r, &cfg.cache_dir, repo::PACKAGES_TXT).exists()
+            || repo::meta_path(r, &cfg.cache_dir, repo::MANIFEST).exists()
+        {
+            continue;
+        }
+        let what = match repo::refresh_manifest(r, &cfg.cache_dir, r.checks_packages_txt(&cfg.verify)) {
+            repo::ManifestRefresh::Fetched => ui::green("ok"),
+            repo::ManifestRefresh::Unchanged => continue,
+            repo::ManifestRefresh::Missing => continue,
+            repo::ManifestRefresh::Mismatch => ui::yellow("does not match the md5 in CHECKSUMS.md5: not kept"),
+        };
+        println!("  '{}': {} ... {}", r.name, repo::MANIFEST_BZ2, what);
+    }
 }

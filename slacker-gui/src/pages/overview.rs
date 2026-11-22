@@ -39,7 +39,7 @@ pub fn page(ctx: &Ctx, resolved: &Resolved) -> Page {
                     if report.sections.is_empty() {
                         body3.append(&failed(&text, &crate::runner::describe(&st, crate::commands::Privilege::User)));
                     } else {
-                        render(&body3, &report, &version);
+                        render(&ctx3, &body3, &report, &version);
                     }
                     body3.append(&program_group(&ctx3, &version, &notes2));
                 });
@@ -63,7 +63,7 @@ pub fn page(ctx: &Ctx, resolved: &Resolved) -> Page {
     }
 }
 
-fn render(body: &gtk::Box, report: &Report, version: &str) {
+fn render(ctx: &Ctx, body: &gtk::Box, report: &Report, version: &str) {
     body.append(&hero(report, version));
 
     for section in &report.sections {
@@ -84,6 +84,15 @@ fn render(body: &gtk::Box, report: &Report, version: &str) {
             let row = widgets::row(title, &subtitle);
             row.add_prefix(&widgets::mark_tile(r.mark));
             g.add(&row);
+            if r.label == status::LEFTOVERS {
+                g.add(&fix_upgrade_row(ctx));
+            }
+            if r.label == status::INCOMPLETE {
+                g.add(&fix_incomplete_row(ctx));
+            }
+            if r.label == status::CHECK_RESTART {
+                g.add(&check_restart_row(ctx));
+            }
         }
         body.append(&g);
     }
@@ -95,6 +104,59 @@ fn render(body: &gtk::Box, report: &Report, version: &str) {
         g.add(&widgets::raw_text(&other.join("\n")));
         body.append(&g);
     }
+}
+
+/// Under the Leftovers row: what to run, and how, to finish the upgrades.
+fn fix_upgrade_row(ctx: &Ctx) -> adw::ActionRow {
+    command_row(
+        ctx,
+        "slacker fix-upgrade",
+        "From a terminal, as root. It finishes what upgradepkg did not, with the pkgtools \
+         (reinstall, removepkg of the leftover record, reinstall), using the package from your repos. \
+         It shows each step and asks before it changes anything.",
+    )
+}
+
+/// Under the Incomplete row: the same command, which reinstalls the package
+/// and prints the commands for installpkg's directory.
+fn fix_incomplete_row(ctx: &Ctx) -> adw::ActionRow {
+    command_row(
+        ctx,
+        "slacker fix-upgrade",
+        "From a terminal, as root. It installs the package again with upgradepkg --reinstall, \
+         using the package from your repos, so the record is complete and the install script runs. \
+         It shows the step and asks before it changes anything. A directory installpkg left \
+         is not removed: it prints the two commands for you to run.",
+    )
+}
+
+/// Under the CheckRestart row. The GUI runs status as you, so that check is
+/// never made here; the command is for a terminal, as root.
+fn check_restart_row(ctx: &Ctx) -> adw::ActionRow {
+    command_row(
+        ctx,
+        "slacker check-restart",
+        "From a terminal, as root. It lists running programs that still use files an upgrade \
+         replaced, so you can restart them. It changes nothing.",
+    )
+}
+
+/// A terminal command, in monospace, with a copy button.
+fn command_row(ctx: &Ctx, cmd: &'static str, text: &str) -> adw::ActionRow {
+    let row = widgets::row(&format!("<tt>{cmd}</tt>"), text);
+    // Markup only for the monospace title; the subtitle has no markup characters.
+    row.set_use_markup(true);
+    row.add_prefix(&widgets::tile("utilities-terminal-symbolic", None));
+    let b = widgets::flat_icon_button("edit-copy-symbolic", "Copy");
+    b.add_css_class("flat");
+    b.set_valign(gtk::Align::Center);
+    let ctx = ctx.clone();
+    b.connect_clicked(move |btn| {
+        btn.clipboard().set_text(cmd);
+        ctx.toast_short("Copied to the clipboard");
+    });
+    row.add_suffix(&b);
+    row
 }
 
 fn hero(report: &Report, version: &str) -> gtk::Box {

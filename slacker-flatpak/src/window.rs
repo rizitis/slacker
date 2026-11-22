@@ -100,10 +100,15 @@ struct Ui {
     // Installed and Updates
     installed: gtk::Box,
     show_runtimes: Cell<bool>,
+    /// Installed lists ordered by flatpak's size, largest first.
+    largest_first: Cell<bool>,
     updates: gtk::Box,
     spinner: gtk::Spinner,
     refresh: gtk::Button,
     busy: Cell<bool>,
+    /// A refresh was asked for while one was running: run again after it,
+    /// so a change made meanwhile (an install, a remote switched) is read.
+    again: Cell<bool>,
     data: RefCell<Data>,
     /// The last check for updates, if any since the last change.
     checked: RefCell<Option<Checked>>,
@@ -233,10 +238,12 @@ pub fn build(app: &adw::Application) {
         group: RefCell::new("All".to_string()),
         installed,
         show_runtimes: Cell::new(false),
+        largest_first: Cell::new(false),
         updates,
         spinner: gtk::Spinner::builder().visible(false).tooltip_text("flatpak is running").build(),
         refresh: gtk::Button::builder().icon_name("view-refresh-symbolic").tooltip_text("Refresh").build(),
         busy: Cell::new(false),
+        again: Cell::new(false),
         data: RefCell::default(),
         checked: RefCell::default(),
         checking: Cell::new(false),
@@ -364,6 +371,7 @@ fn scrolled(content: &gtk::Box) -> gtk::ScrolledWindow {
 
 fn refresh(ui: &Rc<Ui>) {
     if ui.busy.replace(true) {
+        ui.again.set(true);
         return;
     }
     ui.refresh.set_sensitive(false);
@@ -389,6 +397,9 @@ fn refresh(ui: &Rc<Ui>) {
         ui.spinner.set_visible(false);
         ui.refresh.set_sensitive(true);
         ui.busy.set(false);
+        if ui.again.replace(false) {
+            refresh(&ui);
+        }
     });
 }
 
@@ -857,8 +868,22 @@ fn render_installed(ui: &Rc<Ui>) {
             glib::idle_add_local_once(move || render_installed(&ui3));
         });
     }
+    let by_size = adw::SwitchRow::builder()
+        .title("Largest first")
+        .subtitle("Ordered by the size flatpak reports for each one. Runtimes share files, so these sizes do not add up to the space used on disk.")
+        .active(ui.largest_first.get())
+        .build();
+    {
+        let ui2 = ui.clone();
+        by_size.connect_active_notify(move |s| {
+            ui2.largest_first.set(s.is_active());
+            let ui3 = ui2.clone();
+            glib::idle_add_local_once(move || render_installed(&ui3));
+        });
+    }
     let g = adw::PreferencesGroup::new();
     g.add(&sw);
+    g.add(&by_size);
     page.append(&g);
 
     items(ui, page, &d, &d.apps, false);
@@ -881,9 +906,13 @@ fn items(ui: &Rc<Ui>, page: &gtk::Box, d: &Data, items: &[Item], runtimes: bool)
     }
     let dups = parse::list::duplicates(items);
     for inst in [Inst::User, Inst::System] {
-        let mine: Vec<&Item> = items.iter().filter(|i| i.inst() == Some(inst)).collect();
+        let mut mine: Vec<&Item> = items.iter().filter(|i| i.inst() == Some(inst)).collect();
         if mine.is_empty() {
             continue;
+        }
+        if ui.largest_first.get() {
+            // Stable: equal or unknown sizes keep the order by name.
+            mine.sort_by_key(|i| std::cmp::Reverse(i.size_bytes()));
         }
         let what = if runtimes { "Runtimes" } else { "Applications" };
         let g = group(&format!("{what}, {}", heading(&d.installations, inst)), Some(&format!("{} installed", mine.len())));
@@ -901,6 +930,7 @@ fn items(ui: &Rc<Ui>, page: &gtk::Box, d: &Data, items: &[Item], runtimes: bool)
                         title: format!("Remove unused runtimes, {}", inst.words()),
                         inst,
                         argv: commands::uninstall_unused(inst),
+                        confirmed: false,
                     },
                 )
             });
@@ -989,7 +1019,6 @@ fn summary_of(ui: &Ui, id: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The catalog's web page for an application, if the catalog has one.
 /// The catalog's entry for an application, from the given remote when it is
 /// there, else from any remote.
 fn catalog_app(ui: &Ui, id: &str, remote: Option<&str>) -> Option<(String, parse::appstream::App)> {
@@ -1007,6 +1036,7 @@ fn day(ts: i64) -> Option<String> {
     glib::DateTime::from_unix_utc(ts).ok()?.format("%-d %b %Y").ok().map(|s| s.to_string())
 }
 
+/// The catalog's web page for an application, if the catalog has one.
 fn homepage_of(ui: &Ui, id: &str) -> Option<String> {
     ui.catalog.borrow().as_ref().and_then(|c| c.entries.iter().find(|e| e.app.id == id).and_then(|e| e.app.homepage.clone()))
 }
@@ -1214,7 +1244,7 @@ fn show_app(ui: &Rc<Ui>, t: Target) {
                     .build();
                 b.add_css_class("destructive-action");
                 let (ui2, spec_title) = (ui.clone(), format!("Uninstall {title}, {}", inst.words()));
-                b.connect_clicked(move |_| start(&ui2, txn::Spec { title: spec_title.clone(), inst, argv: argv.clone() }));
+                b.connect_clicked(move |_| start(&ui2, txn::Spec { title: spec_title.clone(), inst, argv: argv.clone(), confirmed: false }));
                 r.add_suffix(&b);
             }
             g.add(&r);
@@ -1432,6 +1462,7 @@ fn render_updates(ui: &Rc<Ui>) {
                     title: format!("Update, {}", inst.words()),
                     inst,
                     argv: commands::update(inst),
+                    confirmed: false,
                 },
             )
         });
@@ -1471,7 +1502,7 @@ fn render_updates(ui: &Rc<Ui>) {
                 let b = gtk::Button::builder().label("Update\u{2026}").valign(gtk::Align::Center).build();
                 b.set_tooltip_text(Some(&commands::display(&argv)));
                 let (ui2, title) = (ui.clone(), format!("Update {}, {}", u.title(), inst.words()));
-                b.connect_clicked(move |_| start(&ui2, txn::Spec { title: title.clone(), inst, argv: argv.clone() }));
+                b.connect_clicked(move |_| start(&ui2, txn::Spec { title: title.clone(), inst, argv: argv.clone(), confirmed: false }));
                 r.add_suffix(&b);
             }
             g.add(&r);
@@ -1648,9 +1679,7 @@ fn show_overview(ui: &Rc<Ui>) {
         page.append(&g);
     }
     page.append(&repair_group(ui, &d));
-    if let Some(g) = leftover_group(ui, &d) {
-        page.append(&g);
-    }
+    page.append(&unused_data_group(ui));
     if !d.notes.is_empty() {
         let g = group("Messages from flatpak", Some("As printed, with the command that printed them."));
         for (cmd, text) in &d.notes {
@@ -1708,7 +1737,7 @@ fn eol_group(d: &Data) -> Option<adw::PreferencesGroup> {
 fn repair_group(ui: &Rc<Ui>, d: &Data) -> adw::PreferencesGroup {
     let g = group(
         "Check the installations",
-        Some("Verifies every installed file against its checksum; changes nothing."),
+        Some("Check verifies every installed file against its checksum; it changes nothing."),
     );
     for inst in [Inst::User, Inst::System] {
         let argv = commands::repair_check(inst);
@@ -1716,22 +1745,23 @@ fn repair_group(ui: &Rc<Ui>, d: &Data) -> adw::PreferencesGroup {
         r.set_subtitle_selectable(false);
         let b = gtk::Button::builder().label("Check").valign(gtk::Align::Center).build();
         let (ui2, title) = (ui.clone(), format!("Check {} (no changes)", inst.words()));
-        b.connect_clicked(move |_| start(&ui2, txn::Spec { title: title.clone(), inst, argv: argv.clone() }));
+        b.connect_clicked(move |_| {
+            start(&ui2, txn::Spec { title: title.clone(), inst, argv: argv.clone(), confirmed: false })
+        });
         r.add_suffix(&b);
+        if inst == Inst::User {
+            let rb = gtk::Button::builder().label("Repair\u{2026}").valign(gtk::Align::Center).build();
+            let (ui2, lost) = (ui.clone(), bundle_titles(d, Some(Inst::User)));
+            rb.connect_clicked(move |_| confirm_repair(&ui2, &lost));
+            r.add_suffix(&rb);
+        }
         g.add(&r);
     }
-    // Applications installed from a .flatpak file: their remote has no URL.
-    let bundles: Vec<String> = d
-        .apps
-        .iter()
-        .filter(|a| {
-            d.remotes.iter().any(|r| r.name == a.origin && r.installation == a.installation && r.is_bundle_origin())
-        })
-        .map(|a| a.title().to_string())
-        .collect();
+    let bundles = bundle_titles(d, None);
     let mut text = String::from(
-        "If a check finds damaged files, repair them from a terminal: flatpak repair --user, or as root \
-         flatpak repair --system. Repair deletes what is damaged first and then downloads it again.",
+        "If a check finds damaged files, Repair\u{2026} fixes your user's installation. The system-wide one is \
+         repaired as root from a terminal: flatpak repair --system. Run without root, flatpak only checks it, \
+         so it is not offered here. Repair deletes what is damaged first and then downloads it again.",
     );
     if !bundles.is_empty() {
         text.push_str(&format!(
@@ -1746,101 +1776,79 @@ fn repair_group(ui: &Rc<Ui>, d: &Data) -> adw::PreferencesGroup {
     g
 }
 
-/// ~/.var/app: where flatpak keeps each application's data for this user.
-fn app_data_root() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".var/app")
+/// Applications installed from a .flatpak file (their remote has no URL),
+/// in one installation or in all.
+fn bundle_titles(d: &Data, inst: Option<Inst>) -> Vec<String> {
+    d.apps
+        .iter()
+        .filter(|a| inst.is_none_or(|i| a.inst() == Some(i)))
+        .filter(|a| {
+            d.remotes.iter().any(|r| r.name == a.origin && r.installation == a.installation && r.is_bundle_origin())
+        })
+        .map(|a| a.title().to_string())
+        .collect()
 }
 
-/// Data folders of applications that are no longer installed (an uninstall
-/// keeps them), each with Delete after a confirmation. None when there are
-/// none.
-fn leftover_group(ui: &Rc<Ui>, d: &Data) -> Option<adw::PreferencesGroup> {
-    let installed: std::collections::HashSet<String> = d.apps.iter().map(|a| a.id.clone()).collect();
-    let root = app_data_root();
-    let left = checks::leftover_data(&root, &installed);
-    if left.is_empty() {
-        return None;
-    }
-    let g = group(
-        "Data of uninstalled applications",
-        Some("Folders in ~/.var/app whose application is not installed in either Flatpak. Uninstall keeps an \
-              application's data; delete it here only if you no longer want it. Deleting cannot be undone."),
+/// `flatpak repair --user` asks nothing and starts at once, so we ask first.
+fn confirm_repair(ui: &Rc<Ui>, lost: &[String]) {
+    let argv = commands::repair(Inst::User);
+    let mut body = String::from(
+        "flatpak deletes the damaged files of your user's installation first and then downloads them again, \
+         so it needs the network. Stopping it halfway leaves the repair half done.",
     );
-    let installed = Rc::new(installed);
-    // The group goes away with its last row.
-    let left_count = Rc::new(Cell::new(left.len()));
-    let mut rows = Vec::new();
-    for (id, path) in left {
-        let r = row(&id, &format!("{}  \u{b7}  counting\u{2026}", path.display()));
-        r.set_subtitle_selectable(false);
-        let b = gtk::Button::builder().label("Delete\u{2026}").valign(gtk::Align::Center).build();
-        b.add_css_class("destructive-action");
-        {
-            let (ui2, g2, r2, id2, root2, installed2) =
-                (ui.clone(), g.clone(), r.clone(), id.clone(), root.clone(), installed.clone());
-            let count2 = left_count.clone();
-            b.connect_clicked(move |_| {
-                let path = root2.join(&id2);
-                let dialog = adw::AlertDialog::new(
-                    Some(&format!("Delete the data of {id2}?")),
-                    Some(&format!(
-                        "This deletes {} and everything in it: the application's settings and files. It cannot be \
-                         undone. Nothing else is touched.",
-                        path.display()
-                    )),
-                );
-                dialog.add_responses(&[("cancel", "Cancel"), ("delete", "Delete")]);
-                dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-                dialog.set_default_response(Some("cancel"));
-                dialog.set_close_response("cancel");
-                let (ui3, g3, r3, id3, root3, installed3) =
-                    (ui2.clone(), g2.clone(), r2.clone(), id2.clone(), root2.clone(), installed2.clone());
-                let count3 = count2.clone();
-                dialog.connect_response(None, move |_, resp| {
-                    if resp != "delete" {
-                        return;
-                    }
-                    let (ui4, g4, r4, id4, root4, installed4) =
-                        (ui3.clone(), g3.clone(), r3.clone(), id3.clone(), root3.clone(), installed3.clone());
-                    let count4 = count3.clone();
-                    glib::spawn_future_local(async move {
-                        let (id5, root5) = (id4.clone(), root4.clone());
-                        // What is installed now, not when the page opened.
-                        let mut now: std::collections::HashSet<String> =
-                            ui4.data.borrow().apps.iter().map(|a| a.id.clone()).collect();
-                        now.extend(installed4.iter().cloned());
-                        let res = gio::spawn_blocking(move || checks::delete_leftover(&root5, &id5, &now))
-                            .await
-                            .unwrap_or_else(|_| Err("the delete did not finish".to_string()));
-                        match res {
-                            Ok(()) => {
-                                g4.remove(&r4);
-                                count4.set(count4.get().saturating_sub(1));
-                                if count4.get() == 0 {
-                                    g4.set_visible(false);
-                                }
-                                toast(&ui4, &format!("Deleted the data of {id4}"));
-                            }
-                            Err(e) => toast_error(&ui4, &e),
-                        }
-                    });
-                });
-                dialog.present(Some(&ui2.window));
-            });
-        }
-        r.add_suffix(&b);
-        g.add(&r);
-        rows.push((r, path));
+    if !lost.is_empty() {
+        body.push_str(&format!(
+            "\n\nInstalled from a .flatpak file, so they cannot be downloaded again; if they are damaged they \
+             are deleted and you need their file again: {}.",
+            lost.join(", ")
+        ));
     }
-    // Sizes are counted off the main loop; a big folder takes a moment.
-    glib::spawn_future_local(async move {
-        for (r, path) in rows {
-            let p = path.clone();
-            let size = gio::spawn_blocking(move || checks::dir_size(&p)).await.unwrap_or(0);
-            r.set_subtitle(&glib::markup_escape_text(&format!("{}  \u{b7}  {}", path.display(), glib::format_size(size))));
+    body.push_str(&format!("\n\n{}", commands::display(&argv)));
+    let dialog = adw::AlertDialog::new(Some("Repair your user's installation?"), Some(&body));
+    dialog.add_responses(&[("cancel", "Cancel"), ("repair", "Repair")]);
+    dialog.set_response_appearance("repair", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    let ui2 = ui.clone();
+    dialog.connect_response(None, move |_, resp| {
+        if resp == "repair" {
+            start(
+                &ui2,
+                txn::Spec {
+                    title: "Repair your user's installation".to_string(),
+                    inst: Inst::User,
+                    argv: argv.clone(),
+                    confirmed: true,
+                },
+            );
         }
     });
-    Some(g)
+    dialog.present(Some(&ui.window));
+}
+
+/// Data that no installed application owns. flatpak finds it and asks about
+/// each folder; nothing is looked at or deleted here.
+fn unused_data_group(ui: &Rc<Ui>) -> adw::PreferencesGroup {
+    let g = group(
+        "Data of uninstalled applications",
+        Some("Uninstall keeps an application's data in ~/.var/app. flatpak can find the data no installed \
+              application owns and ask about each one before deleting it, with the permissions stored for it. \
+              Deleting cannot be undone."),
+    );
+    let argv = commands::delete_unused_data();
+    let r = row("Delete unused data", &commands::display(&argv));
+    r.set_subtitle_selectable(false);
+    let b = gtk::Button::builder().label("Review\u{2026}").valign(gtk::Align::Center).build();
+    let ui2 = ui.clone();
+    b.connect_clicked(move |_| {
+        start(
+            &ui2,
+            txn::Spec { title: "Delete data of uninstalled applications".to_string(), inst: Inst::User, argv: argv.clone(), confirmed: false },
+        )
+    });
+    r.add_suffix(&b);
+    g.add(&r);
+    g
 }
 
 fn show_remotes(ui: &Rc<Ui>) {
@@ -2215,7 +2223,7 @@ fn install_dialog(ui: &Rc<Ui>, hit: &Hit, remote: &str) {
             let inst = if user.is_active() { Inst::User } else { Inst::System };
             let Ok(argv) = commands::install(inst, &remote, &hit.id, &hit.branch) else { return };
             win.close();
-            start(&ui, txn::Spec { title: format!("Install {}, {}", hit.title(), inst.words()), inst, argv });
+            start(&ui, txn::Spec { title: format!("Install {}, {}", hit.title(), inst.words()), inst, argv, confirmed: false });
         });
     }
     win.present();

@@ -24,8 +24,9 @@ const MIRRORLIST_URL: &str = "https://mirrors.slackware.com/mirrorlist/";
 /// so this is far higher than MAX_PARALLEL (which is tuned for big downloads).
 const PROBE_POOL: usize = 24;
 
-/// Per-mirror probe timeout. A mirror that does not return its first line within
-/// this is treated as unreachable and dropped.
+/// Per-mirror probe timeout, once connected. A mirror that does not return its
+/// first line within this is treated as unreachable and dropped. Connecting is
+/// not covered: ureq waits up to its own 30 s for that (see build_agent).
 const PROBE_TIMEOUT_SECS: u64 = 5;
 
 /// A mirror that answered, with its measured latency and index timestamp.
