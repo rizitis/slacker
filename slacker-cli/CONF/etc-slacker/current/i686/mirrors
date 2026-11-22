@@ -19,7 +19,7 @@
 #
 #  Architecture  (auto-detected — just match the directory in the line you pick)
 #  ----------------------------------------------------------------------------
-#        x86_64   ->   .../slackware-current/
+#        x86_64   ->   .../slackware64-current/
 #        32-bit   ->   .../slackware-current/
 #
 #  The few rules
