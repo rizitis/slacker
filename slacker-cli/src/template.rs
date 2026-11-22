@@ -11,7 +11,7 @@ pub fn templates_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("templates")
 }
 
-fn template_path(config_dir: &Path, name: &str) -> PathBuf {
+pub(crate) fn template_path(config_dir: &Path, name: &str) -> PathBuf {
     // Accept both "mysystem" and "mysystem.template" — strip a redundant
     // extension so we never build "mysystem.template.template".
     let stem = name.strip_suffix(".template").unwrap_or(name);

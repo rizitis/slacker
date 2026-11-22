@@ -12,7 +12,14 @@ use crate::{
 };
 use std::collections::HashSet;
 
-pub(crate) fn cmd_generate_template(cfg: &Config, name: &str) -> Result<Outcome, String> {
+pub(crate) fn cmd_generate_template(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcome, String> {
+    let file = template::template_path(&cfg.config_dir, name);
+    if file.exists() && !cli.dry_run {
+        println!("The template file {} already exists.", file.display());
+        if !confirm("Overwrite it?", cli.yes) {
+            return Ok(Outcome::Ok);
+        }
+    }
     let db = PkgDb::load(cfg)?;
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     // Snapshot installed packages that are known to a repo (skip orphans).
@@ -22,6 +29,11 @@ pub(crate) fn cmd_generate_template(cfg: &Config, name: &str) -> Result<Outcome,
         .map(|p| p.name.clone())
         .filter(|n| !orphan_names.contains(n.as_str()))
         .collect();
+    if cli.dry_run {
+        let what = if file.exists() { "overwrite" } else { "write" };
+        println!("(dry-run) would {what} template with {} packages: {}", names.len(), file.display());
+        return Ok(Outcome::Ok);
+    }
     let path = template::generate(&cfg.config_dir, name, &names)?;
     println!("Wrote template with {} packages: {}", names.len(), path.display());
     Ok(Outcome::Ok)
@@ -140,6 +152,14 @@ pub(crate) fn cmd_delete_template(cli: &Cli, cfg: &Config, name: &str) -> Result
     if cli.dry_run {
         println!("(dry-run) would delete template file '{name}'");
         return Ok(Outcome::Ok);
+    }
+    let file = template::template_path(&cfg.config_dir, name);
+    if file.exists() {
+        println!("This will delete the template file {}.", file.display());
+        println!("(Installed packages are not touched.)");
+        if !confirm("Delete this template file?", cli.yes) {
+            return Ok(Outcome::Ok);
+        }
     }
     let path = template::delete(&cfg.config_dir, name)?;
     println!("Deleted template file: {}", path.display());

@@ -221,7 +221,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
         Cmd::History { name, last, since, installed, removed, upgraded } => {
             cmd_history(&cfg, name.as_deref(), *last, since.as_deref(), *installed, *removed, *upgraded)
         }
-        Cmd::GenerateTemplate { name } => cmd_generate_template(&cfg, name),
+        Cmd::GenerateTemplate { name } => cmd_generate_template(cli, &cfg, name),
         Cmd::InstallTemplate { name } => cmd_install_template(cli, &cfg, name),
         Cmd::RemoveTemplate { name } => cmd_remove_template(cli, &cfg, name),
         Cmd::DeleteTemplate { name } => cmd_delete_template(cli, &cfg, name),

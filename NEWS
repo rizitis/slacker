@@ -38,6 +38,8 @@ Version Beta 0.14.2
       "Continue anyway? [y/N]" when the disk space may not be enough
       (--yes only warns); silent when it fits
 - Update: slacker-gui
+    - generate-template asks before overwriting an existing template and honours --dry-run;
+      delete-template asks before deleting (--yes skips both questions).
     - Add place for `slacker check-restart` for «CheckRestart»
     - Doctor recognises the Proxy row (it went to "Other output")
     - Add place for `slacker fix-upgrade` for «Leftovers»

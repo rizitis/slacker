@@ -657,6 +657,12 @@ asks whether to run new-config right away, or runs it, instead.
 .TP
 .BI generate-template " NAME"
 Snapshot the installed package set into a template.
+If a template of that name already exists, asks before overwriting it;
+.B \-\-yes
+skips the question.
+With
+.B \-\-dry\-run
+nothing is written.
 .TP
 .BI install-template " NAME"
 Install every package listed in a template (following includes).
@@ -668,6 +674,9 @@ to delete only the template file use
 .TP
 .BI delete-template " NAME"
 Delete a template file. Installed packages are not touched.
+Asks before deleting;
+.B \-\-yes
+skips the question.
 .SS Blacklist
 .TP
 .BI frozen " RULE..."
