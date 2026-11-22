@@ -42,6 +42,15 @@ examples \(em see the project wiki at
 .UR https://forge.slackware.nl/rizitis/slacker/wiki
 .UE .
 .SH OPTIONS
+These options are global: every command accepts them, before or after its name
+.RB ( "slacker \-\-yes upgrade\-all" " or " "slacker upgrade\-all \-\-yes" ),
+and
+.B \-\-help
+lists them under
+.IR "Global options" .
+A command that asks nothing, changes nothing or reads no dependencies does
+nothing with
+.BR \-\-yes ", " \-\-dry\-run " or " \-\-no\-deps .
 .TP
 .BI \-\-config\-dir " DIR"
 Directory holding the plain\-text configuration files. Default

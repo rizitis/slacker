@@ -334,6 +334,10 @@ fi
 
 rm -rf /tmp/slacker_* /tmp/stockdb_test_*.db /tmp/stockdb_test_*.db.new /tmp/stockdb_test_*.txt
 echo "=============================================================="
+# login user, for cargo-audit and gpg signing
+ME=${SUDO_USER:-$(who -m | awk '{print $1}')}
+MEHOME=$(getent passwd "$ME" | cut -d: -f6)
+
 # audit the embedded dependency lists (cargo-auditable)
 if command -v cargo-audit >/dev/null 2>&1; then
   for b in slacker slacker-gui slacker-flatpak; do
@@ -341,8 +345,6 @@ if command -v cargo-audit >/dev/null 2>&1; then
     cargo audit bin "$PKG/usr/bin/$b" || echo "WARNING: cargo audit reported problems in $b"
   done
 else
-  ME=${SUDO_USER:-$(who -m | awk '{print $1}')}
-  MEHOME=$(getent passwd "$ME" | cut -d: -f6)
   if [ -n "$ME" ] && [ "$ME" != root ] && [ -x "$MEHOME/.cargo/bin/cargo-audit" ]; then
     for b in slacker slacker-gui slacker-flatpak; do
       [ -f "$PKG/usr/bin/$b" ] || continue

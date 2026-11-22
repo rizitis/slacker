@@ -22,19 +22,19 @@ const HELP_STYLES: clap::builder::Styles = clap::builder::Styles::styled()
 )]
 pub(crate) struct Cli {
     /// Directory holding the plain-text config files.
-    #[arg(long, global = true, default_value = "/etc/slacker")]
+    #[arg(long, global = true, default_value = "/etc/slacker", help_heading = "Global options")]
     pub(crate) config_dir: PathBuf,
 
     /// Assume "yes" to confirmation prompts.
-    #[arg(short = 'y', long, global = true)]
+    #[arg(short = 'y', long, global = true, help_heading = "Global options")]
     pub(crate) yes: bool,
 
     /// Show what would happen without changing the system.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub(crate) dry_run: bool,
 
     /// Do not read .dep files / pull in dependencies for this run.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub(crate) no_deps: bool,
 
     #[command(subcommand)]
@@ -75,7 +75,9 @@ pub(crate) enum Cmd {
     /// job. Checks the environment (pkgtools and helper tools on PATH, config-file
     /// syntax), then mirror, repos, priorities, verification, GPG keys, metadata
     /// freshness, blacklist, the package admin dir, installed-package sources,
-    /// pending `.new` configs, and (if online) reachability and updates.
+    /// pending `.new` configs, upgrades and installs that did not finish (fixed
+    /// with `fix-upgrade`), running programs that still use replaced files (as
+    /// root), and (if online) reachability and updates.
     Status,
     /// Install new packages (refuses already-installed ones).
     Install { patterns: Vec<String> },
@@ -108,8 +110,9 @@ pub(crate) enum Cmd {
     /// List running programs that still use files an upgrade replaced.
     ///
     /// After an upgrade, a program that was already running keeps the old
-    /// program and libraries it had loaded. This lists those processes, with the
-    /// files and the packages they come from, so you can restart them. Only
+    /// program and libraries it had loaded. This lists those processes with the
+    /// packages of those files (removed packages first, with how many files of
+    /// each) and their command line, so you can restart them. Only
     /// files listed in a pkgtools record count; a reinstall of the same build is
     /// not reported. Programs and shared libraries only: scripts are not seen.
     /// Changes nothing; run as root. Exit status 100 when something is found.
