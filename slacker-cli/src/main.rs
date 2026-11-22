@@ -20,6 +20,7 @@ mod pkg;
 mod pkgdb;
 mod repo;
 mod revert;
+mod space;
 mod stale;
 mod system;
 mod template;
@@ -3052,6 +3053,21 @@ fn update_one_repo(
         }
     } else {
         println!("  {}", ui::dim("GPG: skipped (verify policy)"));
+    }
+    // MANIFEST last: it is checked against the CHECKSUMS.md5 verified above.
+    // Not having one is not a failure of the update.
+    match repo::refresh_manifest(r, &cfg.cache_dir, r.checks_packages_txt(&cfg.verify)) {
+        repo::ManifestRefresh::Fetched => println!("  {} ... ok", repo::MANIFEST_BZ2),
+        repo::ManifestRefresh::Unchanged => println!("  {} ... unchanged", repo::MANIFEST_BZ2),
+        repo::ManifestRefresh::Missing => println!("  {} ... not present", repo::MANIFEST_BZ2),
+        repo::ManifestRefresh::Mismatch => println!(
+            "  {}",
+            ui::yellow(&format!(
+                "{} does not match the md5 in CHECKSUMS.md5: not kept (file-search and the disk-space estimate go without it for '{}')",
+                repo::MANIFEST_BZ2,
+                r.name
+            ))
+        ),
     }
     true
 }

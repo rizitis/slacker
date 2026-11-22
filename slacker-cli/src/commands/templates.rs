@@ -61,6 +61,9 @@ pub(crate) fn cmd_install_template(cli: &Cli, cfg: &Config, name: &str) -> Resul
     note_optional_suggests(&plan, resolve);
     let conflicts = detect_conflicts(&plan, &installed, resolve);
     report_conflicts(&conflicts);
+    if !crate::space::confirm_space(cfg, &plan, cli.yes, cli.dry_run) {
+        return Ok(Outcome::Ok);
+    }
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);

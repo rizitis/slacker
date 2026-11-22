@@ -72,8 +72,32 @@ its ChangeLog, the others by comparing CHECKSUMS.md5) and prints a status table.
 If nothing has changed it stops with \fIAll up\-to\-date\fR and touches nothing.
 Otherwise it lists the repositories that have updates and lets you refresh all
 of them, a chosen subset (by number), or none. Only the repositories you pick
-are downloaded; the rest \(em including their cached MANIFEST \(em are left
-untouched. The form
+are downloaded; the rest are left untouched.
+.IP
+For each repository it refreshes,
+.B update
+also fetches
+.I MANIFEST.bz2
+(the list of every file in every package) and keeps it decompressed in the
+cache, for
+.B file-search
+and the disk-space estimate (see
+.BR "DISK SPACE" ).
+It is fetched after
+.I CHECKSUMS.md5
+and its signature have been checked, and checked like
+.IR PACKAGES.TXT :
+one whose md5 is not the one
+.I CHECKSUMS.md5
+lists for it is not kept (one not listed there is kept). When the listed md5 is
+the one the cached MANIFEST came from, it is not fetched again. A repository
+with nothing new whose MANIFEST is not in the cache gets it too. A repository
+that serves none is not an error. The official repository's MANIFEST is in its
+.I slackware64/
+.RI ( slackware/ )
+directory.
+.IP
+The form
 .B update gpg
 downloads and imports each repository's GPG key into a private keyring, and
 should be run once before the first
@@ -121,8 +145,10 @@ says. Only package names are searched, never descriptions or files (see
 .BR file-search ).
 .TP
 .BI file-search " FILENAME"
-Report which package ships a given file, using the repository MANIFEST. The
-MANIFEST is downloaded on first use and can be large. Each hit is marked
+Report which package ships a given file, using the repository MANIFEST that
+.B update
+keeps in the cache. It downloads nothing, so it runs the same as any user; a
+repository with no MANIFEST in the cache is named at the end. Each hit is marked
 .I installed
 or
 .I uninstalled
@@ -885,6 +911,39 @@ freely in parallel.
 Commands that write a configuration file
 .RB ( frozen ", " unfrozen ", " pin ", " unpin ", " nodep ", " undep ", " add-repo ", " del-repo ", " pri-repo ", " add-tag ", " del-tag ", " generate-template ", " upgrade-dist )
 refuse to write through a symbolic link and change nothing.
+.SH DISK SPACE
+Before
+.BR install ", " upgrade ", " reinstall ", " upgrade-all ", " install-new
+and
+.BR install-template ,
+slacker estimates the space the plan needs on each filesystem and compares it
+with the space free there. When it fits, nothing is printed. When it may not
+fit, it shows each filesystem that may be short, with what it needs and what
+is free, and asks
+.I "Continue anyway? [y/N]"
+(Enter stops, and nothing is changed). With
+.B \-\-yes
+it prints the same warning and continues; with
+.B \-\-dry\-run
+it prints it and asks nothing.
+.B upgrade-dist
+has its own checks and does not use this one.
+.PP
+The estimate is the whole new package, file by file from the cached MANIFEST:
+each file rounded up to the filesystem's block, one block for each directory
+that does not exist yet, the package record twice, plus 10%. That is what an
+upgrade can take at its peak when running programs keep the old files open
+(their space is freed only when they exit); otherwise the peak is lower, so the
+question can come when the plan would still fit. It was measured on ext4; on
+other filesystems (compression, other block layouts) the real figure can
+differ. A package in no cached MANIFEST is counted as twice its
+.I PACKAGES.TXT
+uncompressed size, and the warning says so. Packages not yet in the cache are
+counted, at their compressed size, on the filesystem of
+.BR CACHE_DIR .
+The free space is what
+.B df
+reports for unprivileged use.
 .SH PATTERNS
 A
 .I PATTERN
@@ -972,7 +1031,9 @@ package and need only be set to force a specific architecture.
 .B CACHE_DIR
 (default
 .IR /var/cache/slacker )
-holds downloaded metadata and packages (re-downloadable; safe to clear).
+holds downloaded metadata (with each repository's decompressed MANIFEST and
+the md5 of the MANIFEST.bz2 it came from) and packages (re-downloadable; safe to
+clear).
 .B STATE_DIR
 (default
 .IR /var/lib/slacker )

@@ -670,6 +670,9 @@ pub(crate) fn cmd_install(cli: &Cli, cfg: &Config, patterns: &[String]) -> Resul
     let conflicts = detect_conflicts(&plan, &installed, resolve);
     report_conflicts(&conflicts);
     advise_console_for_foundational(&plan);
+    if !crate::space::confirm_space(cfg, &plan, cli.yes, cli.dry_run) {
+        return Ok(Outcome::Ok);
+    }
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -748,6 +751,9 @@ pub(crate) fn cmd_upgrade(cli: &Cli, cfg: &Config, patterns: &[String]) -> Resul
     let conflicts = detect_conflicts(&plan, &installed, resolve);
     report_conflicts(&conflicts);
     advise_console_for_foundational(&plan);
+    if !crate::space::confirm_space(cfg, &plan, cli.yes, cli.dry_run) {
+        return Ok(Outcome::Ok);
+    }
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -808,6 +814,9 @@ pub(crate) fn cmd_reinstall(cli: &Cli, cfg: &Config, patterns: &[String]) -> Res
     note_optional_suggests(&plan, resolve);
     let conflicts = detect_conflicts(&plan, &installed, resolve);
     report_conflicts(&conflicts);
+    if !crate::space::confirm_space(cfg, &plan, cli.yes, cli.dry_run) {
+        return Ok(Outcome::Ok);
+    }
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -1152,6 +1161,9 @@ pub(crate) fn cmd_upgrade_all(cli: &Cli, cfg: &Config) -> Result<Outcome, String
     let conflicts = detect_conflicts(&plan, &installed, resolve);
     report_conflicts(&conflicts);
     advise_console_for_foundational(&plan);
+    if !crate::space::confirm_space(cfg, &plan, cli.yes, cli.dry_run) {
+        return Ok(Outcome::Ok);
+    }
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);
@@ -1278,6 +1290,9 @@ pub(crate) fn cmd_install_new(cli: &Cli, cfg: &Config, repos: &[String]) -> Resu
     note_optional_suggests(&plan, resolve);
     let conflicts = detect_conflicts(&plan, &installed, resolve);
     report_conflicts(&conflicts);
+    if !crate::space::confirm_space(cfg, &plan, cli.yes, cli.dry_run) {
+        return Ok(Outcome::Ok);
+    }
     if cli.dry_run {
         println!("(dry-run: nothing changed)");
         return Ok(Outcome::Ok);

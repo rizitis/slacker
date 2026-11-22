@@ -26,11 +26,22 @@ Version Beta 0.14.2
       Freshness, build_agent) do not cover the connect, which is ureq's 30 s
     - mirrors file updated.
     - CMD: Add fix-upgrade to finish upgrades upgradepkg left unfinished; status reports leftover -upgraded- records
-
+    - fix-upgrade also fixes installs cut off by installpkg: a record with no
+      file list, or an install script that did not run; prints the commands
+      to remove installpkg's leftover /installpkg-<cookie> directory
+    - status: Incomplete row for those, with fix-upgrade as a step
+    - update fetches each repo's MANIFEST, checked against CHECKSUMS.md5,
+      again only when it changes
+    - file-search reads only the cached MANIFEST (no download, any user)
+      and is faster
+    - install/upgrade/reinstall/upgrade-all/install-new/install-template ask
+      "Continue anyway? [y/N]" when the disk space may not be enough
+      (--yes only warns); silent when it fits
 - Update: slacker-gui
     - Add place for `slacker check-restart` for «CheckRestart»
     - Doctor recognises the Proxy row (it went to "Other output")
     - Add place for `slacker fix-upgrade` for «Leftovers»
+    - Add place for `slacker fix-upgrade` for «Incomplete»
     - check-updates runs when the Updates page is opened or refresh is
       pressed, and not twice at the same time
     - install-new and upgrade-all do not re-run it (they cannot change it)
