@@ -59,7 +59,7 @@ use crate::cli::Cli;
 use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{
-    confirm, enforce_arch_match, enforce_package_list, enforce_release_match, fetch_and_verify,
+    enforce_arch_match, enforce_package_list, enforce_release_match, fetch_and_verify,
     installed_source_label, package_dest, InstallAction, Outcome, PlanItem,
 };
 use std::io::Write;
@@ -181,17 +181,68 @@ fn candidate_line(db: &PkgDb, cfg: &Config, f: &Fix, c: &crate::repo::AvailPkg) 
     )
 }
 
-/// Ask which candidate to use. Empty input, `s`, or anything not a listed
-/// number skips the package.
-fn ask_choice(n: usize) -> Option<usize> {
-    print!("  {} ", ui::blue("Choose [s]:"));
-    std::io::stdout().flush().ok();
+/// One line from stdin, trimmed; None at end of input or on an error.
+fn read_answer() -> Option<String> {
     let mut line = String::new();
-    if std::io::stdin().read_line(&mut line).is_err() {
-        return None;
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line.trim().to_string()),
     }
-    match line.trim().parse::<usize>() {
-        Ok(k) if (1..=n).contains(&k) => Some(k - 1),
+}
+
+/// Ask which candidate to use. Enter or `s` skips the package; anything that
+/// is not a listed number is asked again. End of input skips.
+fn ask_choice(n: usize) -> Option<usize> {
+    loop {
+        print!("  {} ", ui::blue("Type a number, or Enter to skip:"));
+        std::io::stdout().flush().ok();
+        let answer = read_answer()?;
+        match parse_choice(&answer, n) {
+            Choice::Pick(k) => return Some(k),
+            Choice::Skip => return None,
+            Choice::Again => println!("  {}", ui::yellow(&format!("Please type a number from 1 to {n}, or press Enter to skip."))),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Choice {
+    Pick(usize),
+    Skip,
+    Again,
+}
+
+fn parse_choice(answer: &str, n: usize) -> Choice {
+    if answer.is_empty() || answer.eq_ignore_ascii_case("s") {
+        return Choice::Skip;
+    }
+    match answer.parse::<usize>() {
+        Ok(k) if (1..=n).contains(&k) => Choice::Pick(k - 1),
+        _ => Choice::Again,
+    }
+}
+
+/// "Run them now? [y/N]": `y`/`yes` runs, Enter or `n`/`no` does not, anything
+/// else is asked again. End of input is a no. With --yes nothing is asked.
+fn ask_run(yes: bool) -> bool {
+    if yes {
+        return true;
+    }
+    loop {
+        print!("{} {} ", ui::blue("Run them now?"), ui::blue("[y/N]"));
+        std::io::stdout().flush().ok();
+        let Some(answer) = read_answer() else { return false };
+        match yes_no(&answer) {
+            Some(v) => return v,
+            None => println!("{}", ui::yellow("Please answer y or n.")),
+        }
+    }
+}
+
+fn yes_no(answer: &str) -> Option<bool> {
+    match answer.to_ascii_lowercase().as_str() {
+        "y" | "yes" => Some(true),
+        "" | "n" | "no" => Some(false),
         _ => None,
     }
 }
@@ -332,7 +383,7 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
     // ---------- the user picks the package ----------
     let ask = !cli.yes && !cli.dry_run;
     for f in fixes.iter_mut().filter(|f| !f.record_only && f.blocked.is_none() && !f.cands.is_empty()) {
-        println!("\n{}", ui::white(&format!("{}: which package to reinstall it from?", f.name)));
+        println!("\n{}", ui::white(&format!("{}: which package should be used to finish it?", f.name)));
         for (i, c) in f.cands.iter().enumerate() {
             println!("  {}) {}", i + 1, candidate_line(&db, cfg, f, c));
         }
@@ -419,12 +470,12 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
     }
 
     if !todo.is_empty() {
-        println!("\n{}", ui::blue("slacker will run:"));
+        println!("\n{}", ui::blue("These commands will run, one after the other:"));
         for f in &todo {
             let c = f.chosen.expect("filtered");
             println!("  {} {}", ui::white(&f.name), ui::dim(&format!("with {} from {}", c.id.tag(), c.repo)));
-            for (i, step) in steps_for(f, &c.filename).iter().enumerate() {
-                println!("    {}. {step}", i + 1);
+            for step in steps_for(f, &c.filename) {
+                println!("    {step}");
             }
         }
         // The same guards as any install: release, architecture, package list.
@@ -449,7 +500,7 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
         return Ok(Outcome::Ok);
     }
     println!();
-    if !confirm("Proceed?", cli.yes) {
+    if !ask_run(cli.yes) {
         println!("Nothing changed.");
         return Ok(Outcome::Ok);
     }
@@ -543,7 +594,7 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
 
 #[cfg(test)]
 mod tests {
-    use super::{manual_steps, record_only};
+    use super::{manual_steps, parse_choice, record_only, yes_no, Choice};
 
     #[test]
     fn record_only_when_the_installed_record_lists_everything() {
@@ -572,6 +623,20 @@ mod tests {
         std::fs::write(db.join(live), "PACKAGE NAME: x\n").unwrap();
         assert!(!record_only(&db, rec, live));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn answers_are_read_or_asked_again() {
+        assert_eq!(parse_choice("", 2), Choice::Skip);
+        assert_eq!(parse_choice("S", 2), Choice::Skip);
+        assert_eq!(parse_choice("2", 2), Choice::Pick(1));
+        assert_eq!(parse_choice("3", 2), Choice::Again);
+        assert_eq!(parse_choice("y", 2), Choice::Again);
+        assert_eq!(yes_no("Y"), Some(true));
+        assert_eq!(yes_no("yes"), Some(true));
+        assert_eq!(yes_no(""), Some(false));
+        assert_eq!(yes_no("n"), Some(false));
+        assert_eq!(yes_no("1"), None);
     }
 
     #[test]

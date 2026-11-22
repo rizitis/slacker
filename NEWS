@@ -17,6 +17,16 @@ Version Beta 0.14.2
     - Fix doc comments placed above the wrong functions.
     - DESIGN.md updated.
 - Update: slacker-cli
+    - Update crates: url 2.5.8 -> 2.5.9 (RUSTSEC-2026-0592), form_urlencoded 1.2.3
+      - Crate:     url
+        Version:   2.5.8
+        Title:     Stack overflow in `Url::origin()` on nested `blob:` URLs
+        Date:      2026-11-20
+        ID:        RUSTSEC-2026-0592
+        URL:       https://rustsec.org/advisories/RUSTSEC-2026-0592
+        Solution:  Upgrade to >=2.5.9 (patched)
+        error: 1 vulnerability found in /tmp/FORGE/package-slacker/usr/bin/slacker
+        WARNING: cargo audit reported problems in slacker
     - CMD: Add check-restart to list running programs that still use files an
       upgrade replaced (program or shared library, with user, packages and
       command line); changes nothing, needs root, exit 100 when found

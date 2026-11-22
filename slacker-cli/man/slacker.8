@@ -318,8 +318,11 @@ so the uninstall script of the package, which stays installed, is not run.
 Otherwise a package file is needed, and slacker does not pick it: it lists every
 candidate the repositories have, with its priority, whether it is exactly the
 installed build, and whether it would move the package to a source of lower
-priority; frozen candidates are not offered. You choose one, or skip (the
-default). The chosen file is fetched and checked like any install (release,
+priority; frozen candidates are not offered. You type its number, or press
+Enter to skip (the default); before anything runs, the commands are listed and
+asked about once more
+.RI ( "Run them now? [y/N]" ).
+An answer that is not a listed number, or not y or n, is asked again. The chosen file is fetched and checked like any install (release,
 architecture, package\-list and md5/GPG checks). With
 .B \-\-yes
 nobody is asked, so only a candidate that is exactly the installed build is
@@ -406,8 +409,13 @@ package (or of a record in
 shown as a removed package), and what is loaded differs from the file there
 now, so a reinstall of the same build is not listed. Processes in another mount
 namespace (containers) are counted but not checked. Each process is shown with its user,
-the files with their packages, and its command line (cut to the terminal width;
-whole in a pipe); restarting them (or a reboot) is up
+the packages of those files (the program's own first, then the removed
+packages, marked
+.IR removed ,
+then the others, each with how many of its files the process uses, most first),
+and its command line. The full names of the removed packages are listed once
+under the table. Both are cut to the terminal width, with the
+number of packages left out; in a pipe they are printed whole. Restarting them (or a reboot) is up
 to you. Scripts (python, perl, shell) and files read once at start are not seen.
 It changes nothing, but needs root to read every process, and takes the lock like
 the commands that change the system. Exit status
