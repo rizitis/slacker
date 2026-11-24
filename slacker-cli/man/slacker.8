@@ -172,6 +172,11 @@ asks for the exact match whatever
 .B SEARCH
 says. Only package names are searched, never descriptions or files (see
 .BR file-search ).
+An installed package is shown with its installed version, labelled with the
+repository its build comes from (the exact build if a repository still has it,
+otherwise the one with the same build tag); a newer build there, and every other
+repository that ships the name, are listed after it as
+.IR "(also: ...)" .
 .TP
 .BI file-search " FILENAME"
 Report which package ships a given file, using the repository MANIFEST that
@@ -381,9 +386,9 @@ with the package chosen as above: the package is installed again and its record
 written whole. A candidate that is not the same build is marked: files only the
 cut-off install put on disk stay. A record of a package that also has an
 .I \-upgraded\-
-record is fixed as an unfinished upgrade instead. When two records of the same
-package name are installed, nothing is done and the step is printed to run by
-hand.
+record is fixed as an unfinished upgrade instead. When two records of a kernel
+package are installed, nothing is done and the step is printed to run by hand;
+two records of any other package are fixed first (see below).
 .IP
 .B installpkg
 unpacks the package's
@@ -423,6 +428,45 @@ or
 .I /
 for any other
 .BR ADM_DIR .
+.IP
+Two records of the same package name in
+.I ADM_DIR/packages/
+.RB ( status
+reports them as
+.IR Duplicates )
+come from
+.BR slackpkg 's
+.B upgrade
+and
+.BR upgrade-all ,
+which rename a leftover
+.I \-upgraded\-
+record back to its old name, or from
+.B installpkg
+on a package that is already installed. Until one is gone slacker cannot tell
+which one is installed.
+.B fix-upgrade
+lists the records and you type the number of the one to keep, or press Enter to
+skip (the default); every other record is removed with
+.IR "removepkg \-\-skip\-douninst" ,
+which removes only the files no other record lists, and does not run the
+uninstall script of the package, which stays installed. With
+.B \-\-yes
+nothing is picked and the command is printed instead. Kernel packages are left
+out: keeping an older kernel next to the new one with
+.B installpkg
+is a normal choice, and
+.B status
+shows them as information
+.RI ( Kernels ).
+Every command that installs, upgrades or removes packages, except
+.BR upgrade-dist ,
+shows the same records first and asks
+.IR "Continue anyway? [y/N]" ;
+.B \-\-yes
+continues and
+.B \-\-dry\-run
+only shows them. Please use one package manager on a system.
 .IP
 It asks before changing anything
 .RB ( \-\-dry\-run
@@ -881,8 +925,17 @@ GPG keys, metadata freshness, whether every repository targets the same
 Slackware release as the running system, blacklist, the sources of installed
 packages, upgrades that
 .B upgradepkg
-left unfinished (see
+left unfinished and packages with more than one record (see
 .BR \%fix\-upgrade ),
+an active
+.B KEEP_N_LAST_PKG_METADATA
+in
+.IR /etc/slackpkg/slackpkg.conf ,
+which makes slackpkg delete the old records that
+.B history
+and
+.B revert-pkg
+read,
 running programs that still use replaced files (as root; see
 .BR \%check\-restart ),
 and
@@ -1940,9 +1993,10 @@ slacker check-restart
 After a power loss during an upgrade, when
 .B status
 shows
-.I Leftovers
+.IR Leftovers ,
+.I Incomplete
 or
-.IR Incomplete :
+.IR Duplicates :
 .PP
 .RS
 .nf

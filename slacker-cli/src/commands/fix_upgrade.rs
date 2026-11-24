@@ -247,13 +247,60 @@ fn yes_no(answer: &str) -> Option<bool> {
     }
 }
 
+/// Two or more records of one package name (see `crate::duplicates_to_fix`).
+/// The user picks the record to keep (Enter skips); every other record goes
+/// with `removepkg --skip-douninst RECORD`, which removes only the files no
+/// other record lists. The uninstall script is skipped because the package
+/// of that name stays installed. Nothing is picked with --yes, and nothing is
+/// asked with --dry-run: the commands are printed for the admin.
+fn fix_duplicates(cli: &Cli, cfg: &Config, dups: &[(String, Vec<String>)]) -> Result<(), String> {
+    println!(
+        "{}",
+        ui::yellow(&format!(
+            "More than one record for the same package in {} (slackpkg upgrade/upgrade-all renames a leftover -upgraded- record back to its old name; installpkg on an installed package adds a second one). Please use one package manager on this system.",
+            cfg.pkg_db_dir.display()
+        ))
+    );
+    let ask = !cli.yes && !cli.dry_run;
+    for (name, recs) in dups {
+        println!("\n{}", ui::white(&format!("{name}: which record is the installed one, to keep?")));
+        for (i, r) in recs.iter().enumerate() {
+            println!("  {}) {r}", i + 1);
+        }
+        println!("  s) skip, I will do it myself");
+        let keep = if ask { ask_choice(recs.len()) } else { None };
+        let Some(k) = keep else {
+            let why = if cli.yes {
+                "--yes: slacker does not pick one"
+            } else if cli.dry_run {
+                "dry-run: nothing was asked"
+            } else {
+                "skipped"
+            };
+            println!(
+                "{}",
+                ui::yellow(&format!("{name}: not fixed here ({why}). Keep one record and remove each other one, as root, with:"))
+            );
+            println!("  removepkg --skip-douninst RECORD");
+            continue;
+        };
+        for r in recs.iter().enumerate().filter(|(i, _)| *i != k).map(|(_, r)| r) {
+            println!("  removepkg --skip-douninst {r}");
+            system::remove_record_only(r)?;
+        }
+        println!("{}", ui::green(&format!("{name}: kept {}", recs[k])));
+    }
+    Ok(())
+}
+
 pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String> {
     let leftovers = system::leftover_upgrade_records(&cfg.pkg_db_dir);
     let incomplete = system::incomplete_records(&cfg.pkg_db_dir);
     let tmps = system::installpkg_tmp_dirs(&system::system_root(&cfg.adm_dir));
-    if leftovers.is_empty() && incomplete.is_empty() && tmps.is_empty() {
+    let dups = crate::duplicates_to_fix(cfg);
+    if leftovers.is_empty() && incomplete.is_empty() && tmps.is_empty() && dups.is_empty() {
         println!(
-            "Nothing to fix: no `-upgraded-` record and no record without a file list in {}, no directory installpkg left in {}.",
+            "Nothing to fix: no `-upgraded-` record, no record without a file list and no package with two records in {}, no directory installpkg left in {}.",
             cfg.pkg_db_dir.display(),
             system::system_root(&cfg.adm_dir).display()
         );
@@ -268,6 +315,15 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
             "running now: {}; its records are not leftovers yet. Wait for it to finish, then run `slacker fix-upgrade` again. Nothing was changed.",
             list.join(", ")
         ));
+    }
+
+    // Two records of one name first: until one is gone, which package is
+    // installed is not known, and the steps below read it.
+    if !dups.is_empty() {
+        fix_duplicates(cli, cfg, &dups)?;
+        if leftovers.is_empty() && incomplete.is_empty() && tmps.is_empty() {
+            return Ok(Outcome::Ok);
+        }
     }
 
     let db = PkgDb::load(cfg)?;

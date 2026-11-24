@@ -8,9 +8,13 @@ use std::collections::HashSet;
 
 /// Pick the candidate a `search` hit should display. `search` returns the
 /// priority winner per name, but when the package is INSTALLED we want the
-/// candidate matching the installed source (same build tag), so the `[repo]`
-/// label and version name where it actually came from — not merely the
-/// highest-priority repo.
+/// candidate matching the installed source, so the `[repo]` label names where
+/// it actually came from — not merely the highest-priority repo. The exact
+/// installed build is preferred: official builds carry no tag in the main tree
+/// and in patches/extra/testing alike, so a tag alone would name the first of
+/// those, not the one the build came from. Failing that, the same build tag.
+/// The line always shows the INSTALLED version (see `print_search_row`), never
+/// this candidate's.
 ///
 /// `None` means there is no candidate that describes the installed state, and
 /// the caller distinguishes the two ways that happens:
@@ -29,7 +33,33 @@ pub(crate) fn search_display<'a>(
     candidates
         .iter()
         .copied()
-        .find(|c| c.id.build_tag() == i.build_tag())
+        .find(|c| c.id.tag() == i.tag())
+        .or_else(|| candidates.iter().copied().find(|c| c.id.build_tag() == i.build_tag()))
+}
+
+/// The `(also: ...)` entries of a `search` line: the first candidate of every
+/// repo (candidates come priority-ordered) other than the line's own `label`.
+/// The label's repo is listed too when its build is not the installed one, so
+/// an update that repo offers is not hidden behind the installed version.
+pub(crate) fn also_entries(
+    candidates: &[&repo::AvailPkg],
+    label: &str,
+    installed: Option<&pkg::PkgId>,
+) -> Vec<String> {
+    let mut seen_repos: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+    for c in candidates {
+        let r = c.repo.as_str();
+        if seen_repos.contains(&r) {
+            continue;
+        }
+        seen_repos.push(r);
+        let is_the_line = r == label && installed.map_or(true, |i| c.id.tag() == i.tag());
+        if !is_the_line {
+            out.push(format!("{r} {}-{}", c.id.name, c.id.version));
+        }
+    }
+    out
 }
 
 /// A line of `search` output: a package some repo offers, or (partial search
@@ -123,17 +153,24 @@ pub(crate) fn cmd_search(cfg: &Config, term: &str, partial: bool) -> Result<Outc
         );
     } else {
         let mut msg = format!("No package named '{term}'.");
-        if let Some(s) = closest(term, db.available_names()) {
+        let near = closest(term, db.available_names());
+        if let Some(s) = &near {
             msg.push_str(&format!(" Did you mean '{s}'?"));
         }
         println!("{msg}");
-        println!(
-            "{}",
-            ui::dim(&format!(
-                "search matches exact names — try `slacker file-search {term}` for a file, \
-                 or `slacker info {term}` or `slacker search {term} --partial`."
-            ))
-        );
+        // Every command suggested here works as printed: `info` only for the
+        // name that exists.
+        let hint = match &near {
+            Some(s) => format!(
+                "search matches exact names — try `slacker search {term} --partial`, `slacker info {s}`, \
+                 or `slacker file-search {term}` for a file."
+            ),
+            None => format!(
+                "search matches exact names — try `slacker search {term} --partial`, \
+                 or `slacker file-search {term}` for a file."
+            ),
+        };
+        println!("{}", ui::dim(&hint));
     }
     Ok(Outcome::NothingFound)
 }
@@ -164,9 +201,12 @@ fn print_search_row(db: &PkgDb, installed: &[pkg::PkgId], row: &SearchRow) {
     let shown = search_display(inst, &cands);
 
     // Source label, name and version, taken from whichever of the three the
-    // line is really about.
+    // line is really about. An installed package always shows its installed
+    // version: the matching candidate only names the repo, and may already be
+    // newer (after `update`, before the upgrade).
     let (label, name, version) = match (shown, inst) {
-        (Some(c), _) => (c.repo.clone(), c.id.name.as_str(), c.id.version.as_str()),
+        (Some(c), Some(i)) => (c.repo.clone(), i.name.as_str(), i.version.as_str()),
+        (Some(c), None) => (c.repo.clone(), c.id.name.as_str(), c.id.version.as_str()),
         (None, Some(i)) => (
             installed_source_label(i).to_string(),
             i.name.as_str(),
@@ -196,15 +236,7 @@ fn print_search_row(db: &PkgDb, installed: &[pkg::PkgId], row: &SearchRow) {
     // called "testing-7.1.7". `candidates` is priority-ordered, so the first
     // entry seen for a repo is the one that repo would resolve to — later
     // builds of the same name in the same repo are not listed.
-    let mut seen_repos: Vec<&str> = Vec::new();
-    let mut others: Vec<String> = Vec::new();
-    for c in &cands {
-        let r = c.repo.as_str();
-        if r != label && !seen_repos.contains(&r) {
-            seen_repos.push(r);
-            others.push(format!("{r} {}-{}", c.id.name, c.id.version));
-        }
-    }
+    let others = also_entries(&cands, &label, inst);
     let also = if others.is_empty() {
         String::new()
     } else {

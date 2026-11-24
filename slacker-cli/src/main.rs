@@ -192,6 +192,9 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
     } else {
         None
     };
+    if changes_packages(&cli.command) {
+        duplicate_guard(cli, &cfg)?;
+    }
     match &cli.command {
         Cmd::Update { mode } => cmd_update(cli, &cfg, mode.as_deref()),
         Cmd::Search { partial, exact, pattern } => {
@@ -245,6 +248,70 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
 }
 
 // ---- helpers -------------------------------------------------------------
+
+/// Commands that install, upgrade or remove packages. fix-upgrade is not one
+/// of them here: it is what fixes the duplicate records. upgrade-dist is left
+/// as it is (r-tz's decision).
+fn changes_packages(cmd: &Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::Install { .. }
+            | Cmd::Upgrade { .. }
+            | Cmd::Reinstall { .. }
+            | Cmd::Remove { .. }
+            | Cmd::RevertPkg { .. }
+            | Cmd::UpgradeAll
+            | Cmd::InstallNew { .. }
+            | Cmd::CleanSystem
+            | Cmd::InstallTemplate { .. }
+            | Cmd::RemoveTemplate { .. }
+    )
+}
+
+/// Names with more than one record in the package DB, kernel packages left
+/// out (keeping an older kernel next to the new one with installpkg is a
+/// normal choice; `status` shows those).
+pub(crate) fn duplicates_to_fix(cfg: &Config) -> Vec<(String, Vec<String>)> {
+    system::duplicate_records(&cfg.pkg_db_dir)
+        .into_iter()
+        .filter(|(name, _)| !is_kernel_pkg(name))
+        .collect()
+}
+
+/// Before a command that changes packages: with two records of one name,
+/// slacker cannot tell which one is installed, so it says so and asks
+/// "Continue anyway? [y/N]". --yes continues (the user takes responsibility),
+/// --dry-run only shows it.
+fn duplicate_guard(cli: &Cli, cfg: &Config) -> Result<(), String> {
+    let dups = duplicates_to_fix(cfg);
+    if dups.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "{}",
+        ui::yellow(&format!("More than one record for the same package in {}:", cfg.pkg_db_dir.display()))
+    );
+    for (name, recs) in &dups {
+        println!("  {}: {}", name, recs.join(", "));
+    }
+    println!(
+        "slackpkg upgrade/upgrade-all does this when it renames a leftover\n\
+         -upgraded- record of a cut-off upgrade back to its old name; installpkg\n\
+         on a package that is already installed does it too. Until one record is\n\
+         removed, slacker cannot tell which one is installed.\n\
+         Fix: slacker fix-upgrade (it asks which record to keep).\n\
+         {}",
+        ui::white("Please use one package manager on this system.")
+    );
+    if cli.dry_run {
+        return Ok(());
+    }
+    if confirm("Continue anyway?", cli.yes) {
+        Ok(())
+    } else {
+        Err("stopped before any change; run `slacker fix-upgrade` first. Nothing was changed.".into())
+    }
+}
 
 /// Holds the open lock file. Dropping it closes the fd, which releases the
 /// flock; the kernel also releases it automatically if the process dies.
@@ -753,7 +820,7 @@ const UPGRADE_FIRST: &[&str] = &["aaa_glibc-solibs", "pkgtools", "tar", "xz", "f
 
 /// The kernel goes last: its doinst runs geninitrd, which copies mkinitrd (or
 /// dracut), kmod, udev, lvm2 and their libraries into the initrd, so they must
-/// already be upgraded. Same as slackpkg's upgrade-all. kernel_armvN is ARM.
+/// already be upgraded. slackpkg's upgrade-all also puts the kernel last. kernel_armvN is ARM.
 pub(crate) fn upgrade_last(name: &str) -> bool {
     name == "kernel-generic"
         || name
@@ -1840,7 +1907,7 @@ fn report_batch_failures(
 /// flavour — so that prefix is matched too. No x86 package starts with
 /// `kernel_` (kernel-headers, kernel-source and kernel-firmware all use a dash),
 /// so this adds nothing on x86.
-fn is_kernel_pkg(name: &str) -> bool {
+pub(crate) fn is_kernel_pkg(name: &str) -> bool {
     name.starts_with("kernel-generic")
         || name.starts_with("kernel-huge")
         || name == "kernel-modules"
@@ -3674,7 +3741,7 @@ mod selection_tests {
 #[cfg(test)]
 mod collect_tests {
     use super::*;
-    use crate::commands::query::search_display;
+    use crate::commands::query::{also_entries, search_display};
     use crate::commands::install::{abort_on_misses, plan_alternatives, selector_miss_hint};
     use crate::commands::upgrade_dist::dist_upgrade_sets;
 
@@ -3796,6 +3863,53 @@ mod collect_tests {
         // a tagless (-current) installed build is official Slackware.
         let inst_official = pkg::PkgId::parse("flatpak-1.18.0-x86_64-1").unwrap();
         assert_eq!(installed_source_label(&inst_official), "official");
+    }
+
+    #[test]
+    fn search_line_names_the_installed_build_and_keeps_updates_visible() {
+        // Official: tagless builds in patches (higher priority) and slackware.
+        let patches = av("foo-1.1-x86_64-1", "patches");
+        let main = av("foo-1.0-x86_64-1", "slackware");
+        let cands = [&patches, &main];
+
+        // Installed 1.0 from slackware: the exact build wins over the first
+        // tagless one, so the label is slackware, not patches; the patches
+        // update stays visible under "also".
+        let inst = pkg::PkgId::parse("foo-1.0-x86_64-1").unwrap();
+        let shown = search_display(Some(&inst), &cands).unwrap();
+        assert_eq!(shown.repo, "slackware");
+        assert_eq!(also_entries(&cands, &shown.repo, Some(&inst)), vec!["patches foo-1.1".to_string()]);
+
+        // Installed 0.9, no repo has it any more: same tag, first tagless
+        // candidate names the repo; that repo's 1.1 is listed, as is slackware.
+        let old = pkg::PkgId::parse("foo-0.9-x86_64-1").unwrap();
+        let shown = search_display(Some(&old), &cands).unwrap();
+        assert_eq!(shown.repo, "patches");
+        assert_eq!(
+            also_entries(&cands, &shown.repo, Some(&old)),
+            vec!["patches foo-1.1".to_string(), "slackware foo-1.0".to_string()]
+        );
+
+        // Third-party repo with its own tag, update pending: label conraid, its
+        // newer build listed under "also".
+        let cf_new = av("slacker-0.14.4-x86_64-1cf", "conraid");
+        let cands = [&cf_new];
+        let inst_cf = pkg::PkgId::parse("slacker-0.14.2-x86_64-1cf").unwrap();
+        let shown = search_display(Some(&inst_cf), &cands).unwrap();
+        assert_eq!(shown.repo, "conraid");
+        assert_eq!(also_entries(&cands, &shown.repo, Some(&inst_cf)), vec!["conraid slacker-0.14.4".to_string()]);
+
+        // Installed exactly what the repo has: nothing extra.
+        let inst_same = pkg::PkgId::parse("slacker-0.14.4-x86_64-1cf").unwrap();
+        assert!(also_entries(&cands, "conraid", Some(&inst_same)).is_empty());
+
+        // Not installed: the winner's own repo is the line, as before.
+        assert!(also_entries(&cands, "conraid", None).is_empty());
+
+        // Own build no repo knows (_FRG): label is the tag, every repo listed.
+        let inst_frg = pkg::PkgId::parse("slacker-0.14.3-x86_64-1_FRG").unwrap();
+        assert!(search_display(Some(&inst_frg), &cands).is_none());
+        assert_eq!(also_entries(&cands, "_FRG", Some(&inst_frg)), vec!["conraid slacker-0.14.4".to_string()]);
     }
 
     #[test]

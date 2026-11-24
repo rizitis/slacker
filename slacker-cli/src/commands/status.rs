@@ -1467,6 +1467,55 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
             srow(&info, "", &ui::dim(&format!("(+{} more)", cut_items.len() - LEFTOVER_SAMPLE)));
         }
     }
+    // Two records of one package name: slacker cannot tell which one is
+    // installed. Kernel packages are shown apart, as information only:
+    // keeping an older kernel next to the new one with installpkg is a
+    // normal choice. Shown only, nothing is changed.
+    let (kernel_dups, dups): (Vec<_>, Vec<_>) = system::duplicate_records(&cfg.pkg_db_dir)
+        .into_iter()
+        .partition(|(name, _)| crate::is_kernel_pkg(name));
+    if !dups.is_empty() {
+        srow(
+            &warn,
+            "Duplicates",
+            &ui::yellow(&format!(
+                "{} package(s) with more than one record in {}: slackpkg upgrade/upgrade-all renames a leftover -upgraded- record back to its old name, and installpkg on an installed package adds a second one; fix: `slacker fix-upgrade` as root. Please use one package manager on this system",
+                dups.len(),
+                cfg.pkg_db_dir.display()
+            )),
+        );
+        for (name, recs) in dups.iter().take(LEFTOVER_SAMPLE) {
+            srow(&info, "", &ui::dim(&format!("{name}: {}", recs.join(", "))));
+        }
+        if dups.len() > LEFTOVER_SAMPLE {
+            srow(&info, "", &ui::dim(&format!("(+{} more)", dups.len() - LEFTOVER_SAMPLE)));
+        }
+    }
+    if !kernel_dups.is_empty() {
+        srow(
+            &info,
+            "Kernels",
+            &ui::dim("more than one record of a kernel package (normal when an older kernel is kept with installpkg)"),
+        );
+        for (name, recs) in &kernel_dups {
+            srow(&info, "", &ui::dim(&format!("{name}: {}", recs.join(", "))));
+        }
+    }
+    // slackpkg's KEEP_N_LAST_PKG_METADATA deletes old `-upgraded-` records
+    // from removed_packages/ and removed_scripts/, which history and
+    // revert-pkg read. Shown only when it is set; nothing is changed.
+    let slackpkg_conf = system::system_root(&cfg.adm_dir).join("etc/slackpkg/slackpkg.conf");
+    let keep_n_last = system::slackpkg_keep_n_last(&slackpkg_conf);
+    if let Some(n) = keep_n_last {
+        srow(
+            &warn,
+            "Slackpkg",
+            &ui::yellow(&format!(
+                "KEEP_N_LAST_PKG_METADATA={n} in {}: after most of its commands slackpkg deletes all but the last {n} old records of each package from removed_packages/ and removed_scripts/, so `slacker history` and `slacker revert-pkg` lose them; comment it out to keep them",
+                slackpkg_conf.display()
+            )),
+        );
+    }
     // Running programs that still use files an upgrade replaced. Needs root
     // (every process, and what they have loaded); shown only when found.
     let stale_procs = if current_uid() == Some(0) {
@@ -1618,7 +1667,7 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
     }
     // An upgrade upgradepkg did not finish, or an install cut off before its
     // file list, is fixed before anything else is installed or upgraded (after `update`, so the repo package is current).
-    if !leftovers.is_empty() || !cut_items.is_empty() {
+    if !leftovers.is_empty() || !cut_items.is_empty() || !dups.is_empty() {
         steps.push("slacker fix-upgrade");
     }
     // A fresh/unsynced system, or one with pending changes, installs the newly
@@ -1628,8 +1677,22 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         steps.push("slacker install-new");
         steps.push("slacker upgrade-all");
     }
+    // .new files are what upgrades leave behind, so they come last.
+    if pending_new > 0 {
+        steps.push("slacker new-config");
+    }
     // Advisories: real issues that are not a command to run in this sequence.
     let mut notes: Vec<String> = Vec::new();
+    // Why fix-upgrade is a step when packages have two records, and the
+    // advice that goes with it.
+    if !dups.is_empty() {
+        let names: Vec<&str> = dups.iter().take(3).map(|(n, _)| n.as_str()).collect();
+        let more = if dups.len() > 3 { format!(" (+{} more)", dups.len() - 3) } else { String::new() };
+        notes.push(format!(
+            "more than one record of {}{more}; please use one package manager on this system",
+            names.join(", ")
+        ));
+    }
     if !list_mismatch.is_empty() {
         notes.push(format!(
             "the cached package list of {} is not the one its CHECKSUMS.md5 describes (a stale local copy, or files fetched while the mirror was mid-sync) — `slacker update` fetches both again; installs and upgrades from it are refused until then. This check reads only the local cache: if `slacker update` fails with the same error, the repo's server is serving inconsistent files",
@@ -1657,6 +1720,12 @@ fn status_full(cfg: &Config) -> Result<Outcome, String> {
         notes.push(format!(
             "{unranked_pkgs} installed package(s) carry a build tag with no priority ({}) — they cannot be ranked, so they are kept and never upgraded; give each tag a priority in `repos`, or removepkg and install from a repo",
             unranked_tags.join(", ")
+        ));
+    }
+    if let Some(n) = keep_n_last {
+        notes.push(format!(
+            "comment out the line KEEP_N_LAST_PKG_METADATA={n} in {}",
+            slackpkg_conf.display()
         ));
     }
     if stale_procs > 0 {

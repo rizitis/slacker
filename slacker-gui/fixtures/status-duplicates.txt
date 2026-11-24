@@ -1,0 +1,37 @@
+Environment
+  ✓ Pkgtools   installpkg, upgradepkg, removepkg present
+  ✓ Tools      gpg, bzip2, sha256sum, diff present
+  ✓ Config     repos and mirrors parse and cross-check cleanly
+
+Setup
+  ✓ Mirror     https://mirror.example/slackware64-current
+  ✓ Repos      1 configured, priorities distinct
+  ✓ Cache      300 B in 1 file(s)
+  ! Verify     OFF for: slackware
+  ✓ Transport  all repos use https or file
+  ✓ Repo release all match this system (24.04)
+  ✓ Repo arch  all match this system (x86_64)
+  ✓ Repo trust no repos are frozen
+  ✓ Metadata   cached for all repos (oldest 18m old)
+  · Blacklist  0 rule(s)
+  ✓ Tag prio   every installed package's source can be ranked
+  ✓ Integrity  config + cache + state root-owned, no world-writable paths, no stray symlinks (12 checked)
+
+Installed
+  ✓ Packages   4
+  ! Duplicates 1 package(s) with more than one record in /var/lib/pkgtools/packages: slackpkg upgrade/upgrade-all renames a leftover -upgraded- record back to its old name, and installpkg on an installed package adds a second one; fix: `slacker fix-upgrade` as root. Please use one package manager on this system
+  ·            foo: foo-1-x86_64-1, foo-2-x86_64-1
+  · Kernels    more than one record of a kernel package (normal when an older kernel is kept with installpkg)
+  ·            kernel-generic: kernel-generic-6.18.1-x86_64-1, kernel-generic-6.18.2-x86_64-1
+  ! Slackpkg   KEEP_N_LAST_PKG_METADATA=3 in /etc/slackpkg/slackpkg.conf: after most of its commands slackpkg deletes all but the last 3 old records of each package from removed_packages/ and removed_scripts/, so `slacker history` and `slacker revert-pkg` lose them; comment it out to keep them
+  · By source  slackware 4
+
+Online
+  ✗ Reachable  slackware unreachable: connection timed out
+
+slacker is configured. Recommended next steps, in order:
+  → slacker fix-upgrade
+  ! more than one record of foo; please use one package manager on this system
+  ! verification is OFF for slackware — set VERIFY=all in slacker.conf or verify= per repo
+  ! the mirror did not respond — check your network or the active line in `mirrors`
+  ! comment out the line KEEP_N_LAST_PKG_METADATA=3 in /etc/slackpkg/slackpkg.conf

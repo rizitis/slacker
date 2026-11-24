@@ -90,6 +90,9 @@ fn render(ctx: &Ctx, body: &gtk::Box, report: &Report, version: &str) {
             if r.label == status::INCOMPLETE {
                 g.add(&fix_incomplete_row(ctx));
             }
+            if r.label == status::DUPLICATES {
+                g.add(&fix_duplicates_row(ctx));
+            }
             if r.label == status::CHECK_RESTART {
                 g.add(&check_restart_row(ctx));
             }
@@ -127,6 +130,17 @@ fn fix_incomplete_row(ctx: &Ctx) -> adw::ActionRow {
          using the package from your repos, so the record is complete and the install script runs. \
          It shows the step and asks before it changes anything. A directory installpkg left \
          is not removed: it prints the two commands for you to run.",
+    )
+}
+
+/// Under the Duplicates row: the same command, which asks which record to keep.
+fn fix_duplicates_row(ctx: &Ctx) -> adw::ActionRow {
+    command_row(
+        ctx,
+        "slacker fix-upgrade",
+        "From a terminal, as root. It lists the records of each package and asks which one to keep; \
+         the others are removed with removepkg --skip-douninst, which removes only the files no other \
+         record lists. Please use one package manager on this system.",
     )
 }
 
@@ -214,13 +228,32 @@ fn hero(report: &Report, version: &str) -> gtk::Box {
         }
         text.append(&flow);
     }
+    // Notes are other matters than the steps: each on a line of its own with
+    // the warning icon (the `!` of the CLI), set apart from the step chips.
+    let mut first = true;
     for (kind, t) in &items {
         if *kind == ItemKind::Step {
             continue;
         }
-        let l = gtk::Label::builder().label(t).xalign(0.0).wrap(true).build();
-        l.add_css_class(if *kind == ItemKind::Note { "hero-note" } else { "dim-label" });
-        text.append(&l);
+        let l = gtk::Label::builder().label(t).xalign(0.0).wrap(true).hexpand(true).build();
+        if *kind == ItemKind::Note {
+            l.add_css_class("hero-note");
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let mark = widgets::icon("dialog-warning-symbolic", 16);
+            mark.set_valign(gtk::Align::Start);
+            mark.set_margin_top(2);
+            mark.add_css_class("hero-note");
+            line.append(&mark);
+            line.append(&l);
+            if first && !steps.is_empty() {
+                line.set_margin_top(12);
+            }
+            text.append(&line);
+        } else {
+            l.add_css_class("dim-label");
+            text.append(&l);
+        }
+        first = false;
     }
     hero.append(&text);
     hero

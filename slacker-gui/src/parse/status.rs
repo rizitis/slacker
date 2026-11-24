@@ -28,12 +28,12 @@ impl Mark {
 }
 
 /// Every label `status` prints (srow calls in main.rs), plus the empty one.
-pub const LABELS: [&str; 38] = [
+pub const LABELS: [&str; 41] = [
     "Pkgtools", "Tools", "Locate DB", "Config dir", "Config", "Mirror", "Proxy", "Freshness",
     "Repos", "Cache", "Tag rules", "Verify", "Transport", "Credentials", "Repo release",
     "Repo arch", "Repo trust", "GPG keys", "Metadata", "Blacklist", "Pins", "Tag prio",
     "Configs", "Integrity", "Symlinks", "Writable", "Ownership", "Admin dir", "Packages",
-    "Leftovers", "Incomplete", "CheckRestart", "By source", "Connection", "Reachable", "Updates", "All repos", "Stock-db",
+    "Leftovers", "Incomplete", "Duplicates", "Kernels", "Slackpkg", "CheckRestart", "By source", "Connection", "Reachable", "Updates", "All repos", "Stock-db",
 ];
 
 /// The row slacker prints when upgradepkg left `<pkg>-upgraded-<time>`
@@ -44,6 +44,15 @@ pub const LEFTOVERS: &str = "Leftovers";
 /// no file list, an install script that did not run, installpkg's own
 /// directory); each follows it as an unlabelled row.
 pub const INCOMPLETE: &str = "Incomplete";
+
+/// The row slacker prints when a package has more than one record in the
+/// package DB (kernel packages apart); each `name: records` follows it as
+/// an unlabelled row.
+pub const DUPLICATES: &str = "Duplicates";
+
+/// Information only: more than one record of a kernel package, normal when
+/// an older kernel is kept with installpkg; each follows it as above.
+pub const KERNELS: &str = "Kernels";
 
 /// The row about running programs that still use replaced files. The GUI
 /// never runs as root, so it shows "not checked (needs root …)" there.
@@ -171,9 +180,13 @@ pub fn parse(text: &str) -> Status {
             let (label, detail) = match_label(rest)?;
             Some(Row { mark, label: label.to_string(), detail: detail.to_string(), extra: Vec::new() })
         });
-        // The record names under a Leftovers or Incomplete row belong to it.
+        // The record names under a Leftovers, Incomplete, Duplicates or
+        // Kernels row belong to it.
         if let (Some(r), Some(prev)) = (&row, section.rows.last_mut()) {
-            if r.label.is_empty() && r.mark == Mark::Info && (prev.label == LEFTOVERS || prev.label == INCOMPLETE) {
+            if r.label.is_empty()
+                && r.mark == Mark::Info
+                && [LEFTOVERS, INCOMPLETE, DUPLICATES, KERNELS].contains(&prev.label.as_str())
+            {
                 prev.extra.push(r.detail.clone());
                 continue;
             }
@@ -267,6 +280,27 @@ mod tests {
         assert_eq!(inc.extra.len(), 2);
         assert_eq!(inc.extra[0], "foo-2-x86_64-1: install script did not run");
         assert!(inc.extra[1].ends_with(": left by installpkg"));
+        let v = s.verdict.unwrap();
+        assert!(v.items.contains(&(ItemKind::Step, "slacker fix-upgrade".to_string())));
+    }
+
+    #[test]
+    fn duplicate_records_belong_to_their_row() {
+        let s = parse(&fixture("status-duplicates.txt"));
+        assert!(s.unrecognized.is_empty(), "{:?}", s.unrecognized);
+        let installed = s.sections.iter().find(|x| x.title == "Installed").unwrap();
+        let labels: Vec<&str> = installed.rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, ["Packages", "Duplicates", "Kernels", "Slackpkg", "By source"]);
+        let dup = &installed.rows[1];
+        assert_eq!(dup.mark, Mark::Warn);
+        assert!(dup.detail.contains("slacker fix-upgrade"));
+        assert_eq!(dup.extra, vec!["foo: foo-1-x86_64-1, foo-2-x86_64-1"]);
+        let k = &installed.rows[2];
+        assert_eq!(k.mark, Mark::Info);
+        assert_eq!(k.extra, vec!["kernel-generic: kernel-generic-6.18.1-x86_64-1, kernel-generic-6.18.2-x86_64-1"]);
+        let sp = &installed.rows[3];
+        assert_eq!(sp.mark, Mark::Warn);
+        assert!(sp.detail.starts_with("KEEP_N_LAST_PKG_METADATA=3"));
         let v = s.verdict.unwrap();
         assert!(v.items.contains(&(ItemKind::Step, "slacker fix-upgrade".to_string())));
     }

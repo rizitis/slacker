@@ -1,4 +1,25 @@
+- Update: slacker-gui
+    - Doctor: shows the new Duplicates, Kernels and Slackpkg rows, with the
+      fix-upgrade command under Duplicates.
+    - Doctor: each note in the top box is on its own line with a warning icon,
+      set apart from the steps.
 - Update: slacker-cli
+    - status: new Duplicates row for a package with more than one record in the
+      package DB (left by slackpkg's upgrade/upgrade-all or by installpkg); kernel
+      packages are shown apart, as information only, in a Kernels row.
+    - fix-upgrade: fixes duplicate records; it asks which record to keep and
+      removes the others with removepkg --skip-douninst.
+    - Commands that install, upgrade or remove packages (not upgrade-dist) show
+      duplicate records first and ask "Continue anyway? [y/N]".
+    - status: new Slackpkg row when KEEP_N_LAST_PKG_METADATA is active in
+      slackpkg.conf, since it deletes the records history and revert-pkg read.
+    - status: pending .new files make `slacker new-config` the last step.
+    - search: an installed package shows its installed version (it showed the repo's,
+      so a pending update read as installed, in slacker-gui too); the label names the
+      repo of the exact build (official: slackware, not patches); a newer build of
+      that repo is listed under (also: ...)
+      When an exact search finds nothing, the hint suggests `info` only for
+      the near name it found ("Did you mean"), so every suggested command works as printed
     - Add more checks for broken mirrors or repos:
       a repo whose new PACKAGES.TXT is dated before the cached one is not taken
       by default (mirror behind, or switched to an older one); update asks, and with

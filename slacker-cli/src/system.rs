@@ -120,6 +120,59 @@ pub fn incomplete_records(db_dir: &Path) -> Vec<String> {
     out
 }
 
+/// Package names with more than one installed record, each with its records,
+/// sorted. `-upgraded-` records are not counted (fix-upgrade handles them as
+/// an unfinished upgrade). Two records of one name come from slackpkg's
+/// upgrade/upgrade-all renaming a leftover `-upgraded-` record back to its
+/// old name, or from installpkg on a package already installed. Read-only.
+pub fn duplicate_records(db_dir: &Path) -> Vec<(String, Vec<String>)> {
+    let mut by_name: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(db_dir) {
+        for e in entries.flatten() {
+            let Some(rec) = e.file_name().to_str().map(str::to_string) else { continue };
+            if is_removed_record(&rec) {
+                continue;
+            }
+            if let Some(id) = PkgId::parse(&rec) {
+                by_name.entry(id.name).or_default().push(rec);
+            }
+        }
+    }
+    by_name
+        .into_iter()
+        .filter(|(_, recs)| recs.len() > 1)
+        .map(|(name, mut recs)| {
+            recs.sort();
+            (name, recs)
+        })
+        .collect()
+}
+
+/// The value of an active `KEEP_N_LAST_PKG_METADATA` in slackpkg.conf (a
+/// number above 0 on a line that is not commented out), else None. slackpkg
+/// then deletes all but the last N `-upgraded-` records of each package from
+/// removed_packages/ and removed_scripts/ after most of its commands. A value
+/// set only in the environment cannot be seen from here. Read-only.
+pub fn slackpkg_keep_n_last(conf: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(conf).ok()?;
+    keep_n_last_value(&text)
+}
+
+/// The last uncommented `KEEP_N_LAST_PKG_METADATA=` in a slackpkg.conf, if it
+/// is a number above 0 (what slackpkg's `-gt 0` test accepts).
+pub(crate) fn keep_n_last_value(text: &str) -> Option<u32> {
+    let mut val = None;
+    for line in text.lines() {
+        let l = line.trim();
+        let l = l.strip_prefix("export ").map(str::trim_start).unwrap_or(l);
+        if let Some(v) = l.strip_prefix("KEEP_N_LAST_PKG_METADATA=") {
+            let v = v.split('#').next().unwrap_or("").trim().trim_matches(|c| c == '"' || c == '\'');
+            val = Some(v.to_string());
+        }
+    }
+    val?.parse::<u32>().ok().filter(|n| *n > 0)
+}
+
 /// The root the pkgtools install into, read from ADM_DIR: the part before
 /// `var/adm`, `var/log` or `var/lib/pkgtools`, or `/` for any other ADM_DIR.
 pub fn system_root(adm_dir: &Path) -> PathBuf {
@@ -560,5 +613,45 @@ mod tests {
         assert!(record_present(&dir, "aaa_glibc-solibs-2.42-x86_64-1"));
         // a package whose install did not land has no record
         assert!(!record_present(&dir, "pkgtools-15.1-noarch-32"));
+    }
+
+    #[test]
+    fn duplicate_records_groups_by_name_and_skips_upgraded() {
+        let dir = std::env::temp_dir().join("slacker_test_duplicate_records");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for r in [
+            "foo-2-x86_64-1",
+            "foo-1-x86_64-1",
+            "bar-1-x86_64-1",
+            "bar-1-x86_64-1-upgraded-2026-11-24,10:00:00",
+            "kernel-generic-6.18.1-x86_64-1",
+            "kernel-generic-6.18.2-x86_64-1",
+        ] {
+            std::fs::File::create(dir.join(r)).unwrap();
+        }
+        assert_eq!(
+            duplicate_records(&dir),
+            vec![
+                ("foo".to_string(), vec!["foo-1-x86_64-1".to_string(), "foo-2-x86_64-1".to_string()]),
+                (
+                    "kernel-generic".to_string(),
+                    vec!["kernel-generic-6.18.1-x86_64-1".to_string(), "kernel-generic-6.18.2-x86_64-1".to_string()]
+                ),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keep_n_last_only_when_active() {
+        // as shipped: commented out
+        assert_eq!(keep_n_last_value("# previous lists\n#KEEP_N_LAST_PKG_METADATA=3\n"), None);
+        assert_eq!(keep_n_last_value("KEEP_N_LAST_PKG_METADATA=3\n"), Some(3));
+        assert_eq!(keep_n_last_value("  KEEP_N_LAST_PKG_METADATA=\"5\"  # keep 5\n"), Some(5));
+        // the last assignment wins, as when the shell sources it
+        assert_eq!(keep_n_last_value("KEEP_N_LAST_PKG_METADATA=3\nKEEP_N_LAST_PKG_METADATA=0\n"), None);
+        assert_eq!(keep_n_last_value("KEEP_N_LAST_PKG_METADATA=\n"), None);
+        assert_eq!(keep_n_last_value("KEEP_N_LAST_PKG_METADATA=abc\n"), None);
     }
 }
