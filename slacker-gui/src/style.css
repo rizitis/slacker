@@ -10,6 +10,7 @@
 @define-color accent_fg_color #ffffff;
 @define-color accent_color #ff8a84;
 @define-color slk_purple #c47fd5;
+@define-color slk_blue #5aa9e6;
 
 /* ---- typography ---- */
 
@@ -124,6 +125,7 @@ button.tag-button { padding: 0; min-height: 0; min-width: 0; border-radius: 999p
 .source-line { margin: 0 10px 0 4px; }
 .tag.accent { color: @accent_color; }
 .tag.purple { color: @slk_purple; }
+.tag.blue { color: @slk_blue; }
 
 .pri-badge {
   min-width: 42px;

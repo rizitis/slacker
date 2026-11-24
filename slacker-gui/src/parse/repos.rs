@@ -32,10 +32,27 @@ pub struct TagRule {
     pub unused: bool,
 }
 
+/// One line of the "Repository contents" table (slacker 0.14.3 and later).
+/// None where slacker prints `?`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Contents {
+    pub name: String,
+    pub offers: Option<u32>,
+    /// What upgrade-all would take from this repo.
+    pub upgrades: Option<u32>,
+    /// As slacker prints it (`14.2G`).
+    pub download: Option<String>,
+    pub installed: Option<String>,
+    /// `YYYY-MM-DD HH:MM`, UTC.
+    pub date: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct Repos {
     pub repos: Vec<Repo>,
     pub tags: Vec<TagRule>,
+    /// Empty with an older slacker, which does not print the table.
+    pub contents: Vec<Contents>,
     pub total_installed: Option<u32>,
     /// `Installed under other build tags: N [tag=n, ...]`
     pub other_tags: Option<String>,
@@ -49,6 +66,7 @@ enum Section {
     None,
     Repos,
     Tags,
+    Contents,
 }
 
 pub fn parse(text: &str) -> Repos {
@@ -67,6 +85,10 @@ pub fn parse(text: &str) -> Repos {
             section = Section::Tags;
             continue;
         }
+        if t.starts_with("Repository contents") && t.ends_with(':') {
+            section = Section::Contents;
+            continue;
+        }
         if let Some(n) = t.strip_prefix("Total installed packages: ") {
             section = Section::None;
             out.total_installed = n.parse().ok();
@@ -80,14 +102,15 @@ pub fn parse(text: &str) -> Repos {
             out.notes.push(t.to_string());
             continue;
         }
-        let is_header = t.starts_with("Pri |");
-        let is_rule = t.starts_with("-----+");
+        let is_header = t.starts_with("Pri |") || (section == Section::Contents && t.starts_with("Name "));
+        let is_rule = t.starts_with("-----+") || (section == Section::Contents && t.starts_with('-'));
         if is_header || is_rule {
             continue;
         }
         let parsed = match section {
             Section::Repos => parse_repo(t).map(|r| out.repos.push(r)),
             Section::Tags => parse_tag(t).map(|r| out.tags.push(r)),
+            Section::Contents => parse_contents(t).map(|r| out.contents.push(r)),
             Section::None => None,
         };
         if parsed.is_none() {
@@ -126,6 +149,28 @@ fn parse_repo(t: &str) -> Option<Repo> {
         }
     }
     Some(Repo { priority, name, installed, verify, url, flags, state })
+}
+
+fn parse_contents(t: &str) -> Option<Contents> {
+    let cells: Vec<&str> = t.split(" | ").map(str::trim).collect();
+    if cells.len() != 6 {
+        return None;
+    }
+    let known = |c: &str| (c != "?").then(|| c.to_string());
+    let num = |c: &str| -> Option<Option<u32>> {
+        match c {
+            "?" => Some(None),
+            n => n.parse().ok().map(Some),
+        }
+    };
+    Some(Contents {
+        name: cells[0].to_string(),
+        offers: num(cells[1])?,
+        upgrades: num(cells[2])?,
+        download: known(cells[3]),
+        installed: known(cells[4]),
+        date: known(cells[5]),
+    })
 }
 
 fn parse_tag(t: &str) -> Option<TagRule> {
@@ -175,6 +220,29 @@ mod tests {
         assert!(r.repos[3].flags.is_empty());
         let t = &r.tags[6];
         assert_eq!((t.name.as_str(), t.tag.as_str(), t.installed), ("x86_64_rtz", "x86_64_rtz", 2));
+    }
+
+    #[test]
+    fn contents_table() {
+        let r = parse(&fixture("list-repos-contents.txt"));
+        assert!(r.unrecognized.is_empty(), "{:?}", r.unrecognized);
+        // the two tables above it read as before
+        assert_eq!(r.repos.len(), 8);
+        assert_eq!(r.tags.len(), 7);
+        assert_eq!(r.total_installed, Some(2226));
+        assert_eq!(r.contents.len(), 8);
+        let p = &r.contents[0];
+        assert_eq!((p.name.as_str(), p.offers, p.upgrades), ("patches", Some(187), Some(3)));
+        assert_eq!(p.download.as_deref(), Some("1.9G"));
+        assert_eq!(p.date.as_deref(), Some("2026-11-24 05:12"));
+        let last = r.contents.last().unwrap();
+        assert_eq!((last.installed.clone(), last.date.clone()), (None, None));
+    }
+
+    #[test]
+    fn older_slacker_has_no_contents() {
+        let r = parse(&fixture("list-repos.txt"));
+        assert!(r.contents.is_empty());
     }
 
     #[test]

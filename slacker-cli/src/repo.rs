@@ -249,6 +249,37 @@ fn header_date(text: &str) -> Option<(String, i64)> {
     Some((line.split_once(';')?.1.trim().to_string(), when))
 }
 
+/// The date on the first line of the cached PACKAGES.TXT of `repo`, as
+/// `YYYY-MM-DD HH:MM` (UTC), or None when there is no cache or the first line
+/// carries no date (some third-party lists have none). Reads one line.
+pub fn cached_list_date(repo: &Repo, cache_root: &Path) -> Option<String> {
+    use std::io::BufRead;
+    let f = std::fs::File::open(repo.cache_subdir(cache_root).join(PACKAGES_TXT)).ok()?;
+    let mut first = String::new();
+    for l in std::io::BufReader::new(f).split(b'\n') {
+        let l = String::from_utf8_lossy(&l.ok()?).to_string();
+        if !l.trim().is_empty() {
+            first = l;
+            break;
+        }
+    }
+    let (s, _) = header_date(&first)?;
+    list_date_label(&s)
+}
+
+/// `Tue Nov 24 10:00:00 UTC 2026` -> `2026-11-24 10:00`.
+pub(crate) fn list_date_label(s: &str) -> Option<String> {
+    let f: Vec<&str> = s.split_whitespace().collect();
+    if f.len() != 6 || f[4] != "UTC" {
+        return None;
+    }
+    let mon = crate::month_num(f[1])?;
+    let day: u32 = f[2].parse().ok()?;
+    let hm = f[3].get(..5)?;
+    let year: u32 = f[5].parse().ok()?;
+    Some(format!("{year}-{mon:02}-{day:02} {hm}"))
+}
+
 /// `(new, cached)` header dates when the fetched list is dated strictly before
 /// the cached one. A missing cache or an unreadable date on either side gives
 /// None: nothing to compare, the list is taken as before.
@@ -1173,6 +1204,14 @@ mod older_list_tests {
         let p = std::env::temp_dir().join(format!("slacker_older_{}_{name}", std::process::id()));
         std::fs::write(&p, text).unwrap();
         p
+    }
+
+    #[test]
+    fn list_date_label_formats_the_header_date() {
+        assert_eq!(list_date_label("Tue Nov 24 10:00:00 UTC 2026").as_deref(), Some("2026-11-24 10:00"));
+        assert_eq!(list_date_label("Wed Jun  4 08:05:59 UTC 2025").as_deref(), Some("2025-06-04 08:05"));
+        assert_eq!(list_date_label("Tue Nov 24 10:00:00 2026"), None);
+        assert_eq!(list_date_label("not a date"), None);
     }
 
     #[test]

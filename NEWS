@@ -1,9 +1,19 @@
+Version Beta 0.14.3
+=====
 - Update: slacker-gui
     - Doctor: shows the new Duplicates, Kernels and Slackpkg rows, with the
       fix-upgrade command under Duplicates.
     - Doctor: each note in the top box is on its own line with a warning icon,
       set apart from the steps.
+    - Repositories: each repo shows its packages, sizes and list date, a
+      "to upgrade" pill and tile, and the official repo is marked in blue.
 - Update: slacker-cli
+    - list-repos: a third table, Repository contents, shows for each repo the
+      packages it offers, how many upgrade-all would take from it, the download
+      and installed size, and the date of its PACKAGES.TXT (from the cache).
+    - Long messages and errors are no longer one line: a short first line, then
+      the explanation on indented, dimmed lines (fix-upgrade, update, pin, the
+      plan checks, credentials and others).
     - status: new Duplicates row for a package with more than one record in the
       package DB (left by slackpkg's upgrade/upgrade-all or by installpkg); kernel
       packages are shown apart, as information only, in a Kernels row.
@@ -13,14 +23,15 @@
       duplicate records first and ask "Continue anyway? [y/N]".
     - status: new Slackpkg row when KEEP_N_LAST_PKG_METADATA is active in
       slackpkg.conf, since it deletes the records history and revert-pkg read.
-    - status: pending .new files make `slacker new-config` the last step.
+    - status: pending .new files make `slacker new-config` the last step, and
+      duplicate records add a note asking to use one package manager.
     - search: an installed package shows its installed version (it showed the repo's,
       so a pending update read as installed, in slacker-gui too); the label names the
       repo of the exact build (official: slackware, not patches); a newer build of
       that repo is listed under (also: ...)
       When an exact search finds nothing, the hint suggests `info` only for
       the near name it found ("Did you mean"), so every suggested command works as printed
-    - Add more checks for broken mirrors or repos:
+    - Add: more checks for broken mirrors or repos:
       a repo whose new PACKAGES.TXT is dated before the cached one is not taken
       by default (mirror behind, or switched to an older one); update asks, and with
       --yes keeps yours, so a scheduled update never takes an older list
@@ -31,11 +42,11 @@
     - new-config: /etc/gshadow is protected like passwd, shadow and group
       (aaa_base ships an empty gshadow.new; Overwrite all, upgrade-dist's
       All new and NEWCONFIG_OVERWRITE globs would have replaced it)
-    - Docs: man and wiki upgrade-dist say which slacker.conf settings apply
+- Update: wiki and man pages
+      - Docs: man and wiki upgrade-dist say which slacker.conf settings apply
       during it and which do not (blacklist, pins, priorities,
       NEWCONFIG_OVERWRITE/REMOVE), and that the blacklist stays empty
       afterwards with the rules in blacklist.bak
-- Update: wiki and man pages
 ---
 
 Version Beta 0.14.2

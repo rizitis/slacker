@@ -7,7 +7,7 @@ use adw::prelude::*;
 use super::Page;
 use crate::commands;
 use crate::ctx::Ctx;
-use crate::parse::repos::{self, Repo, RepoState, Repos};
+use crate::parse::repos::{self, Contents, Repo, RepoState, Repos};
 use crate::widgets::{self, Tone};
 
 pub fn page(ctx: &Ctx) -> Page {
@@ -85,6 +85,11 @@ fn render(ctx: &Ctx, body: &gtk::Box, r: &Repos) {
     if let Some(t) = r.total_installed {
         stat(t.to_string(), "packages installed");
     }
+    // Only with a slacker that prints the contents table.
+    if !r.contents.is_empty() {
+        let n: u32 = r.contents.iter().filter_map(|c| c.upgrades).sum();
+        stat(n.to_string(), "to upgrade");
+    }
     let flagged = r.repos.iter().filter(|x| x.state != RepoState::Normal).count();
     stat(flagged.to_string(), "frozen or unreachable");
     body.append(&strip);
@@ -97,7 +102,8 @@ fn render(ctx: &Ctx, body: &gtk::Box, r: &Repos) {
     let taken: Rc<Vec<(i32, String)>> =
         Rc::new(r.repos.iter().map(|x| (x.priority, x.name.clone())).collect());
     for repo in &r.repos {
-        let row = repo_row(repo, Some(repo.priority) == top);
+        let contents = r.contents.iter().find(|c| c.name == repo.name);
+        let row = repo_row(repo, contents, Some(repo.priority) == top);
         row.set_activatable(true);
         row.set_tooltip_text(Some("Change priority"));
         let edit = widgets::flat_icon_button("document-edit-symbolic", "Change priority");
@@ -153,8 +159,41 @@ fn render(ctx: &Ctx, body: &gtk::Box, r: &Repos) {
     }
 }
 
-fn repo_row(repo: &Repo, top: bool) -> adw::ActionRow {
-    let row = widgets::row(&repo.name, &repo.url);
+/// `14.2G` -> `14.2 GiB`, as slacker's sizes are powers of 1024.
+fn size_label(s: &str) -> String {
+    for (suf, unit) in [('G', "GiB"), ('M', "MiB"), ('K', "KiB")] {
+        if let Some(n) = s.strip_suffix(suf) {
+            return format!("{n} {unit}");
+        }
+    }
+    s.to_string()
+}
+
+/// The line under the URL: `1512 packages · 14.2 GiB (58.0 GiB installed) ·
+/// 2026-11-23`. Only what slacker knows; None when it knows nothing.
+fn contents_line(c: &Contents) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(n) = c.offers {
+        parts.push(format!("{n} packages"));
+    }
+    match (&c.download, &c.installed) {
+        (Some(d), Some(i)) => parts.push(format!("{} ({} installed)", size_label(d), size_label(i))),
+        (Some(d), None) => parts.push(size_label(d)),
+        (None, Some(i)) => parts.push(format!("{} installed", size_label(i))),
+        (None, None) => {}
+    }
+    if let Some(d) = &c.date {
+        parts.push(d.split(' ').next().unwrap_or(d).to_string());
+    }
+    (!parts.is_empty()).then(|| parts.join(" \u{00B7} "))
+}
+
+fn repo_row(repo: &Repo, contents: Option<&Contents>, top: bool) -> adw::ActionRow {
+    let subtitle = match contents.and_then(contents_line) {
+        Some(l) => format!("{}\n{l}", repo.url),
+        None => repo.url.clone(),
+    };
+    let row = widgets::row(&repo.name, &subtitle);
     row.add_prefix(&widgets::priority_badge(repo.priority, top));
 
     let pills = gtk::Box::builder()
@@ -163,6 +202,9 @@ fn repo_row(repo: &Repo, top: bool) -> adw::ActionRow {
         .build();
     let add = |l: gtk::Label| pills.append(&l);
 
+    if let Some(n) = contents.and_then(|c| c.upgrades).filter(|n| *n > 0) {
+        add(widgets::pill(&format!("{n} to upgrade"), Tone::Accent));
+    }
     match repo.state {
         RepoState::Frozen => add(widgets::pill("frozen", Tone::Error)),
         RepoState::Unreachable => add(widgets::pill("unreachable", Tone::Warning)),
@@ -170,7 +212,7 @@ fn repo_row(repo: &Repo, top: bool) -> adw::ActionRow {
     }
     for f in &repo.flags {
         let tone = match f.as_str() {
-            "official" => Tone::Accent,
+            "official" => Tone::Blue,
             "insecure" => Tone::Warning,
             _ => Tone::Neutral,
         };

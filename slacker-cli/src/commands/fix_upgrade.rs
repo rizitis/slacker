@@ -312,7 +312,9 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
     if !running.is_empty() {
         let list: Vec<String> = running.iter().map(|(p, t)| format!("{t} (PID {p})")).collect();
         return Err(format!(
-            "running now: {}; its records are not leftovers yet. Wait for it to finish, then run `slacker fix-upgrade` again. Nothing was changed.",
+            "running now: {}\n\
+             its records are not leftovers yet. Wait for it to finish, then run\n\
+             `slacker fix-upgrade` again. Nothing was changed.",
             list.join(", ")
         ));
     }

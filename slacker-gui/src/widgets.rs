@@ -12,6 +12,8 @@ pub enum Tone {
     Warning,
     Error,
     Purple,
+    /// Slackware blue, for the official repository.
+    Blue,
 }
 
 pub fn pill(text: &str, tone: Tone) -> gtk::Label {
@@ -24,6 +26,7 @@ pub fn pill(text: &str, tone: Tone) -> gtk::Label {
         Tone::Warning => l.add_css_class("warning"),
         Tone::Error => l.add_css_class("error"),
         Tone::Purple => l.add_css_class("purple"),
+        Tone::Blue => l.add_css_class("blue"),
     }
     l
 }

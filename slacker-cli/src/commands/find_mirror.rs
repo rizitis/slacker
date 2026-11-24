@@ -52,14 +52,14 @@ pub(crate) fn cmd_find_mirror(config_dir: &std::path::Path) -> Result<Outcome, S
     // instead of a wrong answer.
     if osuosl_tree_prefix(arch).is_none() {
         return Err(format!(
-            "find-mirror only knows the official Slackware mirror list, which has no {arch} trees — \
-             for Slackware ARM pick a mirror yourself (project home: https://arm.slackware.com) \
+            "find-mirror only knows the official Slackware mirror list, which has no {arch} trees\n\
+             for Slackware ARM pick a mirror yourself (project home: https://arm.slackware.com)\n\
              and make it the single active line in {}",
             config_dir.join("mirrors").display()
         ));
     }
     let dir = slackware_dir(arch).ok_or(
-        "cannot determine your Slackware release/arch — check /etc/os-release and the `arch` line in slacker.conf",
+        "cannot determine your Slackware release/arch\ncheck /etc/os-release and the `arch` line in slacker.conf",
     )?;
     let subpath = format!("{dir}/PACKAGES.TXT");
     println!("{}", ui::blue("Finding the fastest up-to-date Slackware mirror"));

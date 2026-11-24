@@ -99,9 +99,20 @@ fn main() -> ExitCode {
         Ok(Outcome::SelfUpgrade) => ExitCode::from(50),
         Ok(Outcome::Pending) => ExitCode::from(100),
         Err(e) => {
-            eprintln!("slacker: {} {e}", ui::err_label());
+            print_error(&e);
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Print an error: its first line after `slacker: error:`, and every line
+/// after a `\n` indented and dim, as the explanation of it. Error texts keep
+/// what happened on the first line and put the rest after a `\n`.
+fn print_error(e: &str) {
+    let mut lines = e.lines();
+    eprintln!("slacker: {} {}", ui::err_label(), lines.next().unwrap_or(""));
+    for l in lines {
+        eprintln!("  {}", ui::dim(l));
     }
 }
 
@@ -2168,8 +2179,8 @@ fn enforce_release_match(cfg: &Config, plan: &[PlanItem], allow: bool) -> Result
         return Ok(());
     }
     Err(format!(
-        "refusing to mix releases — installing {}-release packages on a {sys_show} system can \
-         break it. Point the repo at the {sys_show} tree, or pass --yes to override.",
+        "refusing to mix releases — installing {}-release packages on a {sys_show} system can break it.\n\
+         Point the repo at the {sys_show} tree, or pass --yes to override.",
         bad.first().map(|b| b.2.as_str()).unwrap_or("another"),
     ))
 }
@@ -2241,7 +2252,7 @@ fn enforce_arch_match(cfg: &Config, plan: &[PlanItem], allow: bool) -> Result<()
         return Ok(());
     }
     Err(format!(
-        "refusing: installing {}-architecture packages on a {sys} system cannot work. \
+        "refusing: installing {}-architecture packages on a {sys} system cannot work.\n\
          Check that the repo/mirror points at the right Slackware tree for this arch.",
         bad.first().map(|b| b.2.as_str()).unwrap_or("another"),
     ))
@@ -2280,8 +2291,8 @@ fn enforce_package_list(cfg: &Config, plan: &[PlanItem]) -> Result<(), String> {
         );
     }
     Err(format!(
-        "refusing: the cached package list of {} is not the one its CHECKSUMS.md5 describes \
-         (a mirror mid-sync or a stale cached copy), so the versions above cannot be trusted. \
+        "refusing: the cached package list of {} is not the one its CHECKSUMS.md5 describes\n\
+         (a mirror mid-sync or a stale cached copy), so the versions above cannot be trusted.\n\
          Nothing was changed. Run `slacker update` and try again.",
         bad.iter().map(|b| b.0.as_str()).collect::<Vec<_>>().join(", ")
     ))

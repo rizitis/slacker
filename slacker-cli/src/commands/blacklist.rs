@@ -411,9 +411,9 @@ pub(crate) fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Out
     if config::name_has_pattern_chars(name) {
         let is_glob = name.contains(['*', '?']);
         return Err(format!(
-            "pin takes an EXACT package name — no {} (got \"{name}\"). \
-             For pattern freezing use `slacker frozen`, which accepts both globs \
-             (`*`, `?`) and regexes; e.g. `slacker frozen \"{name}\"`.",
+            "pin takes an EXACT package name — no {} (got \"{name}\").\n\
+             For pattern freezing use `slacker frozen`, which accepts both globs (`*`, `?`)\n\
+             and regexes; e.g. `slacker frozen \"{name}\"`.",
             if is_glob { "shell wildcards" } else { "patterns" }
         ));
     }

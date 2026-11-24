@@ -100,6 +100,115 @@ fn installed_attribution(
 /// verify policy, URL, and how many installed packages came from it; then the
 /// build-tag priority lines and a grand total. Per-repo counts need the package
 /// DB (from `update`); without it the repo list still prints, counts as `?`.
+/// One repo's line in the "Repository contents" table of list-repos, all
+/// read from the cache. None for a value slacker does not know: no metadata,
+/// a frozen or unreachable repo, a package without a size, a list with no
+/// date.
+struct RepoContents {
+    name: String,
+    offers: Option<usize>,
+    upgrades: Option<usize>,
+    download_k: Option<u64>,
+    installed_k: Option<u64>,
+    date: Option<String>,
+}
+
+fn repo_contents(cfg: &Config, db: &PkgDb, missing: &[String], installed: &[pkg::PkgId]) -> Vec<RepoContents> {
+    // Exactly what upgrade-all would propose (before dependencies), counted
+    // under the repo each upgrade would come from.
+    let (ups, _held) = db.upgrades_for(installed, &cfg.tag_priorities);
+    let mut upgr: HashMap<&str, usize> = HashMap::new();
+    for u in &ups {
+        *upgr.entry(u.available.repo.as_str()).or_default() += 1;
+    }
+    cfg.repos_by_priority()
+        .into_iter()
+        .map(|r| {
+            let known = !missing.iter().any(|m| m == &r.name) && !repo::is_quarantined(&cfg.state_dir, &r.name);
+            if !known {
+                return RepoContents {
+                    name: r.name.clone(),
+                    offers: None,
+                    upgrades: None,
+                    download_k: None,
+                    installed_k: None,
+                    date: None,
+                };
+            }
+            let pkgs: Vec<&repo::AvailPkg> = db.packages_of(&r.name).collect();
+            let sum = |f: fn(&repo::AvailPkg) -> Option<u64>| -> Option<u64> {
+                pkgs.iter().map(|p| f(p)).sum::<Option<u64>>()
+            };
+            RepoContents {
+                name: r.name.clone(),
+                offers: Some(pkgs.len()),
+                upgrades: Some(upgr.get(r.name.as_str()).copied().unwrap_or(0)),
+                download_k: sum(|p| p.size_k),
+                installed_k: sum(|p| p.size_uncompressed_k),
+                date: repo::cached_list_date(r, &cfg.cache_dir),
+            }
+        })
+        .collect()
+}
+
+/// The third table of list-repos: what each repo offers, how many of the
+/// installed packages upgrade-all would take from it, the sizes and the date
+/// of its PACKAGES.TXT. Read from the cache only; `?` where unknown.
+fn print_repo_contents(cfg: &Config, db: &PkgDb, missing: &[String], installed: &[pkg::PkgId]) {
+    let rows = repo_contents(cfg, db, missing, installed);
+    if rows.is_empty() {
+        return;
+    }
+    let q = |v: Option<String>| v.unwrap_or_else(|| "?".to_string());
+    let cells: Vec<[String; 6]> = rows
+        .iter()
+        .map(|c| {
+            [
+                c.name.clone(),
+                q(c.offers.map(|n| n.to_string())),
+                q(c.upgrades.map(|n| n.to_string())),
+                q(c.download_k.map(|k| crate::space::human(k * 1024))),
+                q(c.installed_k.map(|k| crate::space::human(k * 1024))),
+                q(c.date.clone()),
+            ]
+        })
+        .collect();
+    let heads = ["Name", "Offers", "Upgr", "Download", "Installed", "PACKAGES.TXT"];
+    let mut w = heads.map(str::len);
+    for row in &cells {
+        for (i, c) in row.iter().enumerate() {
+            w[i] = w[i].max(c.chars().count());
+        }
+    }
+    let sep = ui::dim(" | ");
+    println!();
+    println!("{}", ui::blue("Repository contents (from the last `slacker update`):"));
+    println!(
+        "  {}{sep}{}{sep}{}{sep}{}{sep}{}{sep}{}",
+        ui::blue(&format!("{:<1$}", heads[0], w[0])),
+        ui::blue(&format!("{:>1$}", heads[1], w[1])),
+        ui::blue(&format!("{:>1$}", heads[2], w[2])),
+        ui::blue(&format!("{:>1$}", heads[3], w[3])),
+        ui::blue(&format!("{:>1$}", heads[4], w[4])),
+        ui::blue(heads[5]),
+    );
+    println!(
+        "  {}",
+        ui::dim(&w.iter().map(|n| "-".repeat(*n)).collect::<Vec<_>>().join("-+-"))
+    );
+    for row in &cells {
+        println!(
+            "  {}{sep}{}{sep}{}{sep}{}{sep}{}{sep}{}",
+            ui::white(&format!("{:<1$}", row[0], w[0])),
+            ui::cyan(&format!("{:>1$}", row[1], w[1])),
+            ui::cyan(&format!("{:>1$}", row[2], w[2])),
+            ui::cyan(&format!("{:>1$}", row[3], w[3])),
+            ui::cyan(&format!("{:>1$}", row[4], w[4])),
+            ui::dim(&row[5]),
+        );
+    }
+}
+
 pub(crate) fn cmd_list_repos(cfg: &Config) -> Result<Outcome, String> {
     let installed = system::installed_packages(&cfg.pkg_db_dir)?;
     let (db, missing) = PkgDb::load_available(cfg);
@@ -236,6 +345,8 @@ pub(crate) fn cmd_list_repos(cfg: &Config) -> Result<Outcome, String> {
             println!("{line}");
         }
     }
+
+    print_repo_contents(cfg, &db, &missing, &installed);
 
     println!();
     println!(

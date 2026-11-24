@@ -915,7 +915,23 @@ shown as
 .RI ( official ),
 .RI ( immutable ),
 .RI ( subtree ),
-and a quarantine marker when a repo is frozen.
+and a quarantine marker when a repo is frozen. A third table,
+.IR "Repository contents" ,
+is read from the cache of the last
+.BR update ,
+with no network: for each repo how many packages it offers, how many of the
+installed packages
+.B upgrade-all
+would take from it (the same choice
+.B upgrade-all
+makes, before dependencies; frozen packages are not counted), the total
+download and installed size of its packages, and the date on the first line of
+its
+.IR PACKAGES.TXT ,
+in UTC.
+.I ?
+stands for what slacker does not know: a repo with no metadata, a frozen or
+unreachable one, a package list with a missing size, or a list with no date.
 .TP
 .B status
 Health\-check the whole setup and report whether slacker is correctly

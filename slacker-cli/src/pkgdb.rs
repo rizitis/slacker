@@ -727,6 +727,11 @@ impl PkgDb {
             .collect()
     }
 
+    /// The loaded packages of the named repo.
+    pub fn packages_of<'a>(&'a self, repo: &'a str) -> impl Iterator<Item = &'a AvailPkg> + 'a {
+        self.all.iter().filter(move |p| p.repo == repo)
+    }
+
     /// Whether any loaded package comes from the named repo. clean-system uses
     /// this to refuse running when a baseline repo's metadata is missing.
     pub fn has_repo_packages(&self, repo: &str) -> bool {

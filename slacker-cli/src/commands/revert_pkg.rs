@@ -92,7 +92,7 @@ fn revert_fetch_and_gpg_verify(
         }
         gpg::Verify::Tampered(m) => Err(format!("{m} — refusing to install")),
         gpg::Verify::NoSignature => Err(format!(
-            "no GPG signature for {} in the cumulative archive — refusing \
+            "no GPG signature for {} in the cumulative archive — refusing\n\
              (revert requires a valid Slackware signature)",
             dest.display()
         )),
@@ -235,8 +235,9 @@ pub(crate) fn cmd_revert_pkg(cli: &Cli, cfg: &Config, name: &str) -> Result<Outc
     // now rather than after a version has been chosen.
     if !locations.contains_key(name) {
         return Err(format!(
-            "could not locate '{name}' in the cumulative archive (not in its PACKAGES.TXT — it may \
-             have left -current, or live under extra/ or patches/, which revert does not cover)"
+            "could not locate '{name}' in the cumulative archive\n\
+             (not in its PACKAGES.TXT — it may have left -current, or live under extra/ or\n\
+             patches/, which revert does not cover)"
         ));
     }
 
