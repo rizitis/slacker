@@ -16,7 +16,7 @@ const HELP_STYLES: clap::builder::Styles = clap::builder::Styles::styled()
 #[command(
     name = "slacker",
     version,
-    about = "slackpkg + slackpkg+ in one, minimal Rust tool",
+    about = "A real Slackware package manager written in Rust",
     after_help = "Run `slacker <command> --help` for the full description and examples.",
     styles = HELP_STYLES
 )]
