@@ -1,7 +1,15 @@
 - Update: slacker-cli
     - Cosmetic fixes, kernel reminder:
-      says geninitrd rebuilds the initrd and runs update-grub (/etc/default/geninitrd),
-      LILO needs `lilo`, own steps go in /etc/geninitrd.d/
+      geninitrd normally rebuilds the initrd, runs update-grub and reinstalls LILO
+      (see /etc/default/geninitrd and /etc/geninitrd.d/).
+      Your own steps go in /etc/geninitrd.d/.
+    - new-config: /etc/gshadow is protected like passwd, shadow and group
+      (aaa_base ships an empty gshadow.new; Overwrite all, upgrade-dist's
+      All new and NEWCONFIG_OVERWRITE globs would have replaced it)
+    - Docs: man and wiki upgrade-dist say which slacker.conf settings apply
+      during it and which do not (blacklist, pins, priorities,
+      NEWCONFIG_OVERWRITE/REMOVE), and that the blacklist stays empty
+      afterwards with the rules in blacklist.bak
 ---
 
 Version Beta 0.14.2

@@ -544,6 +544,42 @@ the network.
 runs non\-interactively;
 .B \-\-dry\-run
 shows the whole plan and the URL transform but writes nothing.
+.IP
+What applies from the configuration during the upgrade:
+.BR VERIFY ,
+.BR PROXY / NO_PROXY ,
+.BR MAX_PARALLEL ,
+.BR TERSE ,
+.BR BANNER ,
+.B IGNORE_TAGS
+(the clean\-system step is the ordinary
+.BR clean-system )
+and
+.BR NEWCONFIG_KEEP ;
+the protected configuration files are never replaced. Not applied, on purpose:
+the
+.I blacklist
+(frozen rules, pins and dependency exclusions; it is emptied), repository
+priorities (third\-party repositories are disabled),
+.BR NEWCONFIG_OVERWRITE " and " NEWCONFIG_REMOVE
+(those files are shown like any other),
+.BR RESOLVE_DEPS ,
+.B RESOLVE_STOCK
+and
+.B NEWCONFIG_AFTER
+(new\-config always runs). So in the clean\-system step a package that the
+blacklist or a pin used to keep is listed like any other package that is not
+part of the release; only packages with an
+.B IGNORE_TAGS
+build tag, the
+.I make-kernel-backup
+kernel and slacker itself are never listed, and with
+.B \-\-yes
+everything listed is removed. After a successful upgrade the
+.I blacklist
+stays empty; your rules are in
+.IR blacklist.bak ,
+to put back by hand.
 .TP
 .B clean-system
 List installed packages that are no longer part of the official distribution
@@ -1213,7 +1249,7 @@ up. When a file matches more than one, KEEP wins over REMOVE, and REMOVE over
 OVERWRITE. A glob in
 .B NEWCONFIG_OVERWRITE
 never replaces
-.IR /etc/passwd ", " shadow ", " group ", " rc.inet1.conf ", " rc.local " or " rc.local_shutdown ;
+.IR /etc/passwd ", " shadow ", " group ", " gshadow ", " rc.inet1.conf ", " rc.local " or " rc.local_shutdown ;
 only their exact path does. In
 .B upgrade-dist
 only

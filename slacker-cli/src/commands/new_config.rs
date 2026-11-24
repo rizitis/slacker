@@ -85,13 +85,15 @@ fn choice_line(prefix: &str, entries: &[(&str, &str)], default_key: &str) -> Str
 /// They hold settings unique to this machine, and the `etc` and
 /// `network-scripts` packages ship a `.new` for each on every upgrade — so they
 /// turn up in ordinary `-current` updates, not only in a dist-upgrade.
-/// Patrick's own 15.0→16.0 script skips the first five. `rc.local_shutdown` is
+/// Patrick's own 15.0→16.0 script skips passwd, shadow, group, rc.inet1.conf
+/// and rc.local. `gshadow` is shipped by aaa_base as an empty `gshadow.new`
+/// and slackpkg exempts it too (24 Nov 2026). `rc.local_shutdown` is
 /// slacker's addition: it is the shutdown-side twin of `rc.local` (run by
 /// `rc.6`), holds the same kind of user-written commands, and deserves the same
 /// protection whether or not a package ever ships a `.new` for it.
 ///
 /// The reason is carried per file rather than described in one sentence,
-/// because these are NOT one kind of thing: three are the account database,
+/// because these are NOT one kind of thing: four are the account database,
 /// one is the network bring-up, and `rc.local` / `rc.local_shutdown` are the
 /// user's own start-up and shutdown commands. Saying "accounts and network
 /// setup" about either of those is simply untrue, and a warning the reader can
@@ -103,6 +105,10 @@ const PROTECTED_CONFIGS: &[(&str, &str)] = &[
     ("/etc/passwd", "your user accounts — replacing it deletes every account on this system"),
     ("/etc/shadow", "the passwords for those accounts — replacing it locks everyone out"),
     ("/etc/group", "your groups and their members — replacing it drops every membership"),
+    (
+        "/etc/gshadow",
+        "the group passwords and group administrators — replacing it removes them (the shipped one is empty)",
+    ),
     (
         "/etc/rc.d/rc.inet1.conf",
         "your network configuration — replacing it can leave this machine offline",
@@ -775,6 +781,7 @@ mod tests {
             "/etc/passwd",
             "/etc/shadow",
             "/etc/group",
+            "/etc/gshadow",
             "/etc/rc.d/rc.inet1.conf",
             "/etc/rc.d/rc.local",
             "/etc/rc.d/rc.local_shutdown",
@@ -790,7 +797,7 @@ mod tests {
         assert!(!is_protected_config(Path::new("/home/user/passwd")));
 
         // Every exempt file states its OWN reason. They are not one kind of
-        // thing — three are the account database, one is the network bring-up,
+        // thing — four are the account database, one is the network bring-up,
         // and rc.local / rc.local_shutdown are the user's own start-up and
         // shutdown commands — so a blanket "accounts and network setup" would be
         // visibly untrue for those two, and a warning a reader can see is wrong
