@@ -1870,14 +1870,15 @@ fn kernel_reboot_reminder(plan: &[PlanItem]) {
     println!("  {}", ui::dim(kernel_bootloader_hint(x86)));
 }
 
-/// The hint line under the kernel reminder. LILO, ELILO and GRUB are x86
-/// bootloaders; they do not exist on Slackware ARM, whose kernel package
-/// (kernel_armv8) runs os-initrd-mgr from its own install script, so there only
-/// the closing sentence is shown.
+/// The hint line under the kernel reminder. On x86, geninitrd rebuilds the
+/// initrd and runs update-grub when the kernel is installed; LILO still needs
+/// `lilo`. Slackware ARM has none of these: its kernel package (kernel_armv8)
+/// runs os-initrd-mgr from its own install script, so there only the closing
+/// sentence is shown.
 fn kernel_bootloader_hint(x86: bool) -> &'static str {
     if x86 {
-        "LILO: run `lilo`  |  ELILO/UEFI: `eliloconfig`  |  GRUB: `update-grub`  \
-         |  This message is a reminder; generally speaking, you should not need to act on it."
+        "geninitrd normally rebuilds the initrd and runs update-grub (see /etc/default/geninitrd).  \
+         LILO: run `lilo`.  Your own steps go in /etc/geninitrd.d/."
     } else {
         "This message is a reminder; generally speaking, you should not need to act on it."
     }

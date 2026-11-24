@@ -1,3 +1,9 @@
+- Update: slacker-cli
+    - Cosmetic fixes, kernel reminder:
+      says geninitrd rebuilds the initrd and runs update-grub (/etc/default/geninitrd),
+      LILO needs `lilo`, own steps go in /etc/geninitrd.d/
+---
+
 Version Beta 0.14.2
 =====
 - Update: slacker-flatpak
