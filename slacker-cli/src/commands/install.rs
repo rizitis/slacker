@@ -852,11 +852,11 @@ pub(crate) fn cmd_remove(cli: &Cli, cfg: &Config, patterns: &[String]) -> Result
         if !missing.is_empty() {
             eprintln!(
                 "{}",
-                ui::yellow(&format!(
-                    "note: no package data for {} — series and @repo freeze rules cannot be checked \
-                     for its packages (run `slacker update`)",
-                    missing.join(", ")
-                ))
+                ui::yellow(&format!("note: no package data for {}", missing.join(", ")))
+            );
+            eprintln!(
+                "  {}",
+                ui::dim("series and @repo freeze rules cannot be checked for its packages (run `slacker update`)")
             );
         }
         Some(db)

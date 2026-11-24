@@ -86,14 +86,9 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
             }
         }
         if newly > 0 {
-            println!(
-                "\n{}",
-                ui::yellow(
-                    "A key was pinned for the first time. Verify each fingerprint above against \
-                     the repository's officially published key before trusting it — slacker will \
-                     refuse the repo if its key ever changes."
-                )
-            );
+            println!("\n{}", ui::yellow("A key was pinned for the first time."));
+            println!("  {}", ui::dim("Verify each fingerprint above against the repository's officially published"));
+            println!("  {}", ui::dim("key before trusting it — slacker will refuse the repo if its key ever changes."));
         }
         return Ok(Outcome::Ok);
     }
@@ -271,31 +266,21 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
                 out.failed_verify.join(", ")
             ))
         );
-        println!(
-            "{}",
-            ui::blue(
-                "If you trust one, set `verify=none` (or `verify=md5`) for it in the repos file, \
-                 or import its key with `slacker update gpg`, then run `slacker update` again."
-            )
-        );
+        println!("  {}", ui::dim("If you trust one, set `verify=none` (or `verify=md5`) for it in the repos file,"));
+        println!("  {}", ui::dim("or import its key with `slacker update gpg`, then run `slacker update` again."));
     }
     if !out.inconsistent.is_empty() {
         println!(
             "\n{}",
             ui::red(&format!(
-                "{} repo(s) were NOT updated: the mirror served a PACKAGES.TXT that does not match \
-                 its CHECKSUMS.md5: {}.",
+                "{} repo(s) were NOT updated: {}.",
                 out.inconsistent.len(),
                 out.inconsistent.join(", ")
             ))
         );
-        println!(
-            "{}",
-            ui::blue(
-                "The mirror is mid-sync or serves a stale cached copy. Their previous metadata was \
-                 kept unchanged. Run `slacker update` again later, or choose another mirror."
-            )
-        );
+        println!("  {}", ui::dim("The mirror served a PACKAGES.TXT that does not match its CHECKSUMS.md5."));
+        println!("  {}", ui::dim("The mirror is mid-sync or serves a stale cached copy. Their previous metadata"));
+        println!("  {}", ui::dim("was kept unchanged. Run `slacker update` again later, or choose another mirror."));
     }
     if !out.older.is_empty() {
         println!(
@@ -306,14 +291,14 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
                 out.older.join(", ")
             ))
         );
-        println!(
-            "{}",
-            ui::blue(
-                "Your newer metadata was kept. The mirror is behind, or you switched to an older one: \
-                 run `slacker update` later or use another mirror (`slacker status` shows the official \
-                 mirror's freshness). To take the older list on purpose, answer y when `slacker update` asks (without --yes)."
-            )
-        );
+        for l in [
+            "Your newer metadata was kept. The mirror is behind, or you switched to an older one:",
+            "run `slacker update` later or use another mirror (`slacker status` shows the official",
+            "mirror's freshness). To take the older list on purpose, answer y when `slacker update`",
+            "asks (without --yes).",
+        ] {
+            println!("  {}", ui::dim(l));
+        }
     }
     if !out.hard_frozen.is_empty() {
         println!(
@@ -324,13 +309,8 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
                 out.hard_frozen.join(", ")
             ))
         );
-        println!(
-            "{}",
-            ui::blue(
-                "These will stay frozen until you run `slacker trust-repo NAME` (only if you are \
-                 sure), or `slacker del-repo NAME` to remove them."
-            )
-        );
+        println!("  {}", ui::dim("These will stay frozen until you run `slacker trust-repo NAME` (only if you are"));
+        println!("  {}", ui::dim("sure), or `slacker del-repo NAME` to remove them."));
     }
     if !out.soft_frozen.is_empty() {
         println!(
@@ -341,13 +321,8 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
                 out.soft_frozen.join(", ")
             ))
         );
-        println!(
-            "{}",
-            ui::blue(
-                "The next `slacker update` retries them automatically; they recover on their own \
-                 once reachable. If one is gone for good, `slacker del-repo NAME`."
-            )
-        );
+        println!("  {}", ui::dim("The next `slacker update` retries them automatically; they recover on their own"));
+        println!("  {}", ui::dim("once reachable. If one is gone for good, `slacker del-repo NAME`."));
     }
     if cfg.resolve_stock {
         refresh_stock_db(cfg);

@@ -278,6 +278,24 @@ pub(crate) fn duplicates_to_fix(cfg: &Config) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
+/// Where two records of one name come from, and what to do, under the list
+/// of them: dim lines, then the advice in white. `fix_hint` adds the line
+/// that names fix-upgrade (left out inside fix-upgrade itself).
+pub(crate) fn explain_duplicates(fix_hint: bool) {
+    let mut lines = vec![
+        "slackpkg upgrade/upgrade-all renames a leftover -upgraded- record back",
+        "to its old name; installpkg on an installed package adds a second one.",
+        "Until one is removed, slacker cannot tell which one is installed.",
+    ];
+    if fix_hint {
+        lines.push("Fix: slacker fix-upgrade (it asks which record to keep).");
+    }
+    for l in lines {
+        println!("  {}", ui::dim(l));
+    }
+    println!("{}", ui::white("Please use one package manager on this system."));
+}
+
 /// Before a command that changes packages: with two records of one name,
 /// slacker cannot tell which one is installed, so it says so and asks
 /// "Continue anyway? [y/N]". --yes continues (the user takes responsibility),
@@ -292,17 +310,9 @@ fn duplicate_guard(cli: &Cli, cfg: &Config) -> Result<(), String> {
         ui::yellow(&format!("More than one record for the same package in {}:", cfg.pkg_db_dir.display()))
     );
     for (name, recs) in &dups {
-        println!("  {}: {}", name, recs.join(", "));
+        println!("  {}: {}", ui::white(name), recs.join(", "));
     }
-    println!(
-        "slackpkg upgrade/upgrade-all does this when it renames a leftover\n\
-         -upgraded- record of a cut-off upgrade back to its old name; installpkg\n\
-         on a package that is already installed does it too. Until one record is\n\
-         removed, slacker cannot tell which one is installed.\n\
-         Fix: slacker fix-upgrade (it asks which record to keep).\n\
-         {}",
-        ui::white("Please use one package manager on this system.")
-    );
+    explain_duplicates(true);
     if cli.dry_run {
         return Ok(());
     }
@@ -1209,12 +1219,8 @@ fn confirm_conflicts(
         return Ok(confirm(prompt, assume_yes));
     }
     if assume_yes {
-        println!(
-            "{}",
-            ui::yellow(
-                "--yes: proceeding despite the conflict(s); the conflicting installed package(s) are left in place."
-            )
-        );
+        println!("{}", ui::yellow("--yes: proceeding despite the conflict(s)"));
+        println!("  {}", ui::dim("the conflicting installed package(s) are left in place."));
         return Ok(true);
     }
     // Distinct installed packages we would remove if asked.
@@ -1924,12 +1930,8 @@ fn kernel_reboot_reminder(plan: &[PlanItem]) {
     }
     println!();
     println!("{}", ui::yellow("/// !!!! --- A kernel package was upgraded.---- !!!! ///"));
-    println!(
-        "  {}",
-        ui::white(
-            "Before rebooting: make sure the bootloader is updated; if you use an initrd or custom hooks, make sure everything is in place."
-        )
-    );
+    println!("  {}", ui::white("Before rebooting: make sure the bootloader is updated;"));
+    println!("  {}", ui::white("if you use an initrd or custom hooks, make sure everything is in place."));
     let x86 = plan
         .iter()
         .filter(|it| is_kernel_pkg(&it.pkg.id.name))
@@ -2042,13 +2044,8 @@ fn perl_rebuild_reminder(pkg_db_dir: &std::path::Path, plan: &[PlanItem]) {
         "{}",
         ui::yellow(&format!("/// !!!! --- Perl {old} was upgraded to {new}. ---- !!!! ///"))
     );
-    println!(
-        "  {}",
-        ui::white(
-            "Perl only looks for modules in directories named after its own version, so anything \
-             built against the old one is no longer on its path."
-        )
-    );
+    println!("  {}", ui::white("Perl only looks for modules in directories named after its own version,"));
+    println!("  {}", ui::white("so anything built against the old one is no longer on its path."));
     let (names, total) = packages_with_perl_version_files(pkg_db_dir, &old, PERL_REBUILD_SHOW);
     if total == 0 {
         println!(
@@ -2597,11 +2594,11 @@ fn fetch_and_verify_metered(
             // controls too. Be honest: this is integrity, not authenticity.
             println!(
                 "  {}",
-                ui::yellow(&format!(
-                    "integrity only: {} — NOT cryptographically authenticated (no GPG signature; \
-                     enable gpg for this repo)",
-                    checks.join(" + ")
-                ))
+                ui::yellow(&format!("integrity only: {}", checks.join(" + ")))
+            );
+            println!(
+                "    {}",
+                ui::dim("NOT cryptographically authenticated (no GPG signature; enable gpg for this repo)")
             );
         }
     }
@@ -2928,13 +2925,8 @@ fn warn_unverified_repos(cfg: &Config) {
             "WARNING: verification is OFF for {who} — packages from there install completely unchecked."
         ))
     );
-    println!(
-        "{}",
-        ui::blue(
-            "Are you sure? For protection set VERIFY=all in slacker.conf (or verify=gpg,md5 on the \
-             repo line in repos), then run `slacker update gpg` to import keys."
-        )
-    );
+    println!("  {}", ui::dim("Are you sure? For protection set VERIFY=all in slacker.conf (or verify=gpg,md5"));
+    println!("  {}", ui::dim("on the repo line in repos), then run `slacker update gpg` to import keys."));
 }
 
 /// Fetch one repo's metadata and run its GPG verification. On a verification
@@ -3173,14 +3165,16 @@ fn update_one_repo(
         repo::ManifestRefresh::Fetched => println!("  {} ... ok", repo::MANIFEST_BZ2),
         repo::ManifestRefresh::Unchanged => println!("  {} ... unchanged", repo::MANIFEST_BZ2),
         repo::ManifestRefresh::Missing => println!("  {} ... not present", repo::MANIFEST_BZ2),
-        repo::ManifestRefresh::Mismatch => println!(
-            "  {}",
-            ui::yellow(&format!(
-                "{} does not match the md5 in CHECKSUMS.md5: not kept (file-search and the disk-space estimate go without it for '{}')",
-                repo::MANIFEST_BZ2,
-                r.name
-            ))
-        ),
+        repo::ManifestRefresh::Mismatch => {
+            println!(
+                "  {}",
+                ui::yellow(&format!("{} does not match the md5 in CHECKSUMS.md5: not kept", repo::MANIFEST_BZ2))
+            );
+            println!(
+                "    {}",
+                ui::dim(&format!("file-search and the disk-space estimate go without it for '{}'", r.name))
+            );
+        }
     }
     true
 }

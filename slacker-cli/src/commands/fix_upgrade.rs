@@ -256,11 +256,9 @@ fn yes_no(answer: &str) -> Option<bool> {
 fn fix_duplicates(cli: &Cli, cfg: &Config, dups: &[(String, Vec<String>)]) -> Result<(), String> {
     println!(
         "{}",
-        ui::yellow(&format!(
-            "More than one record for the same package in {} (slackpkg upgrade/upgrade-all renames a leftover -upgraded- record back to its old name; installpkg on an installed package adds a second one). Please use one package manager on this system.",
-            cfg.pkg_db_dir.display()
-        ))
+        ui::yellow(&format!("More than one record for the same package in {}:", cfg.pkg_db_dir.display()))
     );
+    crate::explain_duplicates(false);
     let ask = !cli.yes && !cli.dry_run;
     for (name, recs) in dups {
         println!("\n{}", ui::white(&format!("{name}: which record is the installed one, to keep?")));
@@ -277,10 +275,8 @@ fn fix_duplicates(cli: &Cli, cfg: &Config, dups: &[(String, Vec<String>)]) -> Re
             } else {
                 "skipped"
             };
-            println!(
-                "{}",
-                ui::yellow(&format!("{name}: not fixed here ({why}). Keep one record and remove each other one, as root, with:"))
-            );
+            println!("{}", ui::yellow(&format!("{name}: not fixed here ({why}).")));
+            println!("  {}", ui::dim("Keep one record and remove each other one, as root, with:"));
             println!("  removepkg --skip-douninst RECORD");
             continue;
         };
@@ -299,11 +295,15 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
     let tmps = system::installpkg_tmp_dirs(&system::system_root(&cfg.adm_dir));
     let dups = crate::duplicates_to_fix(cfg);
     if leftovers.is_empty() && incomplete.is_empty() && tmps.is_empty() && dups.is_empty() {
-        println!(
-            "Nothing to fix: no `-upgraded-` record, no record without a file list and no package with two records in {}, no directory installpkg left in {}.",
-            cfg.pkg_db_dir.display(),
-            system::system_root(&cfg.adm_dir).display()
-        );
+        println!("{}", ui::white("Nothing to fix:"));
+        for line in [
+            format!("no -upgraded- record in {}", cfg.pkg_db_dir.display()),
+            "no record without a file list".to_string(),
+            "no package with more than one record".to_string(),
+            format!("no directory left by installpkg in {}", system::system_root(&cfg.adm_dir).display()),
+        ] {
+            println!("  {} {}", ui::dim("\u{00B7}"), ui::dim(&line));
+        }
         return Ok(Outcome::NothingFound);
     }
     // While a pkgtool runs, its `-upgraded-` record, or a record with no file
@@ -425,10 +425,8 @@ pub(crate) fn cmd_fix_upgrade(cli: &Cli, cfg: &Config) -> Result<Outcome, String
 
     // Only the record goes: nothing to choose.
     if fixes.iter().any(|f| f.record_only) {
-        println!(
-            "\n{}",
-            ui::blue("Only the leftover record has to go (the installed record lists all its files; nothing is deleted from disk):")
-        );
+        println!("\n{}", ui::blue("Only the leftover record has to go:"));
+        println!("  {}", ui::dim("the installed record lists all its files; nothing is deleted from disk"));
         for f in fixes.iter().filter(|f| f.record_only) {
             for r in &f.records {
                 println!("  removepkg --skip-douninst {r}");

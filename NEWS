@@ -35,6 +35,7 @@
       during it and which do not (blacklist, pins, priorities,
       NEWCONFIG_OVERWRITE/REMOVE), and that the blacklist stays empty
       afterwards with the rules in blacklist.bak
+- Update: wiki and man pages
 ---
 
 Version Beta 0.14.2

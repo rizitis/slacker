@@ -337,13 +337,8 @@ pub(crate) fn cmd_del_repo(cli: &Cli, cfg: &Config, name: &str) -> Result<Outcom
         println!("  {}", ui::red(r.trim()));
     }
     if was_official {
-        println!(
-            "{}",
-            ui::yellow(
-                "note: this is the official repo — ChangeLog tracking and the default \
-                 install-new source will change."
-            )
-        );
+        println!("{}", ui::yellow("note: this is the official repo"));
+        println!("  {}", ui::dim("ChangeLog tracking and the default install-new source will change."));
     }
     // Warn about pins that point at the repo being removed: they become inert
     // (the pinned package just stays put until the repo returns or is re-pinned).

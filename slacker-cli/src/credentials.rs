@@ -203,18 +203,20 @@ pub fn build_registry(cfg: &Config) -> Vec<(String, String)> {
                     reg.push((r.url.clone(), c.basic_header()));
                 } else if r.insecure {
                     eprintln!(
-                        "  {} repo '{}' sends credentials over plaintext http (insecure flag) — exposed on the network, at your own responsibility",
+                        "  {} repo '{}' sends credentials over plaintext http (insecure flag)",
                         ui::yellow("!"),
                         r.name
                     );
+                    eprintln!("      {}", ui::dim("exposed on the network, at your own responsibility"));
                     reg.push((r.url.clone(), c.basic_header()));
                 } else {
                     eprintln!(
-                        "  {} repo '{}' has credentials but uses plaintext http — NOT sending them (they would leak on the network).\n      \
-                         switch this repo to https://, or add the `insecure` flag to send them anyway at your own risk",
+                        "  {} repo '{}' has credentials but uses plaintext http — NOT sending them",
                         ui::yellow("!"),
                         r.name
                     );
+                    eprintln!("      {}", ui::dim("(they would leak on the network); switch this repo to https://, or add the"));
+                    eprintln!("      {}", ui::dim("`insecure` flag to send them anyway at your own risk"));
                 }
             }
         }
@@ -225,10 +227,11 @@ pub fn build_registry(cfg: &Config) -> Vec<(String, String)> {
             reg.push((prefix, cred.basic_header()));
         } else {
             eprintln!(
-                "  {} credentials catalog entry [{}] is plaintext http — ignored (credentials are sent over https only)",
+                "  {} credentials catalog entry [{}] is plaintext http — ignored",
                 ui::yellow("!"),
                 prefix
             );
+            eprintln!("      {}", ui::dim("credentials are sent over https only"));
         }
     }
     reg

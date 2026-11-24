@@ -449,11 +449,9 @@ pub(crate) fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Out
     if db.resolve(&format!("{repo}:{name}")).is_none() {
         println!(
             "{}",
-            ui::purple(&format!(
-                "note: '{repo}' does not currently provide '{name}' — pin recorded anyway; \
-                 it takes effect once the repo offers it"
-            ))
+            ui::purple(&format!("note: '{repo}' does not currently provide '{name}'"))
         );
+        println!("  {}", ui::dim("pin recorded anyway; it takes effect once the repo offers it"));
         if let Some(s) = closest(name, db.available_names()) {
             println!("  {}", ui::dim(&format!("did you mean '{repo}:{s}'?")));
         }
@@ -464,11 +462,9 @@ pub(crate) fn cmd_pin(cli: &Cli, cfg: &Config, spec: Option<&str>) -> Result<Out
     if frozen_here {
         println!(
             "{}",
-            ui::purple(&format!(
-                "warning: '{name}' is also frozen (blacklisted) — the freeze wins, so the pin \
-                 will have no effect until you `unfrozen` it"
-            ))
+            ui::purple(&format!("warning: '{name}' is also frozen (blacklisted)"))
         );
+        println!("  {}", ui::dim("the freeze wins, so the pin will have no effect until you `unfrozen` it"));
     }
 
     let line = format!("@{repo} 100% {name}");
