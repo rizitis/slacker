@@ -1,4 +1,8 @@
 - Update: slacker-cli
+    - Add more checks for broken mirrors or repos:
+      a repo whose new PACKAGES.TXT is dated before the cached one is not taken
+      by default (mirror behind, or switched to an older one); update asks, and with
+      --yes keeps yours, so a scheduled update never takes an older list
     - Cosmetic fixes, kernel reminder:
       geninitrd normally rebuilds the initrd, runs update-grub and reinstalls LILO
       (see /etc/default/geninitrd and /etc/geninitrd.d/).

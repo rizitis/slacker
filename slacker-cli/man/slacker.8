@@ -106,6 +106,26 @@ that serves none is not an error. The official repository's MANIFEST is in its
 .RI ( slackware/ )
 directory.
 .IP
+A repository whose new
+.I PACKAGES.TXT
+is dated before the one already in the cache (its first line,
+.IR "PACKAGES.TXT;  <date>" )
+is not taken by default: the mirror is behind, or you switched to an older one,
+and every signature and checksum of an old snapshot is still valid, so only the
+date tells. Without
+.B \-\-yes
+.B update
+asks whether to use the older list anyway (Enter keeps yours); with
+.B \-\-yes
+it keeps yours and says so, so a scheduled update never takes an older list.
+Either way nothing of that repository changes unless you answer y. A list with
+no such date, or a repository with nothing in the cache yet, is taken as
+before.
+.B upgrade-dist
+takes the target's lists without this check, and
+.B vet-repo
+keeps the cached list and vets that.
+.IP
 The form
 .B update gpg
 downloads and imports each repository's GPG key into a private keyring, and

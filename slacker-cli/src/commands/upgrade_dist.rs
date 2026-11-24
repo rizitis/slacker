@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::pkgdb::PkgDb;
 use crate::{
     collect, in_graphical_session, install_counter, package_dest, parallel_fetch, report_batch_failures,
-    refuse_through_symlink, slackware_dir, summarize_outcomes, update_one_repo, upgrade_last, DlItem, InstallAction, Outcome,
+    refuse_through_symlink, slackware_dir, summarize_outcomes, update_one_repo, upgrade_last, DlItem, InstallAction, OlderList, Outcome,
     PlanItem, UpdateOutcomes,
 };
 use crate::{banner, changelog, config, dist, download, pkg, system, template, ui};
@@ -653,7 +653,7 @@ pub(crate) fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Res
     let mut not_fresh: Vec<String> = Vec::new();
     for r in &cfg.repos {
         let track = changelog_repo.as_deref() == Some(r.name.as_str());
-        let fresh = update_one_repo(&cfg, r, track, &mut up);
+        let fresh = update_one_repo(&cfg, r, track, OlderList::Take, &mut up);
         if !fresh && (r.official || (r.subtree && r.url.contains("/patches"))) {
             not_fresh.push(r.name.clone());
         }

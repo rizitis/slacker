@@ -2884,6 +2884,18 @@ struct UpdateOutcomes {
     hard_frozen: Vec<String>,
     /// PACKAGES.TXT did not match its CHECKSUMS.md5; cache left unchanged.
     inconsistent: Vec<String>,
+    /// The mirror's PACKAGES.TXT is dated before the cached one and was not
+    /// taken; cache left unchanged.
+    older: Vec<String>,
+}
+
+/// What `update_one_repo` does with a list dated before the cached one.
+#[derive(Clone, Copy)]
+enum OlderList {
+    /// Ask; with `--yes` (true) keep the cached list without asking.
+    Ask(bool),
+    /// Take it (upgrade-dist, which re-points the repos on purpose).
+    Take,
 }
 
 /// Refresh one repo's metadata. Returns true when the repo ended up with a
@@ -2893,6 +2905,7 @@ fn update_one_repo(
     cfg: &Config,
     r: &config::Repo,
     track_changelog: bool,
+    older: OlderList,
     out: &mut UpdateOutcomes,
 ) -> bool {
     println!("{}", ui::blue(&format!("Updating '{}' (priority {}):", r.name, r.priority)));
@@ -2902,7 +2915,38 @@ fn update_one_repo(
     // NOT freeze it; an untrusted one (newly added / never vetted) is vetted now.
     let trusted = repo::is_trusted(&cfg.state_dir, &r.name);
 
-    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, track_changelog, r.checks_packages_txt(&cfg.verify)) {
+    let mut accept_older = |new: &str, old: &str| match older {
+        OlderList::Take => true,
+        OlderList::Ask(true) => false,
+        OlderList::Ask(false) => {
+            println!();
+            println!(
+                "{}",
+                ui::yellow(&format!(
+                    "  The mirror's PACKAGES.TXT is dated {new}, older than the one you have ({old})."
+                ))
+            );
+            println!(
+                "{}",
+                ui::yellow("  The mirror is behind, or you switched to an older one: its packages may be older than yours.")
+            );
+            confirm("  Use the older list anyway?", false)
+        }
+    };
+    if let Err(e) = repo::update_repo(
+        r,
+        &cfg.cache_dir,
+        track_changelog,
+        r.checks_packages_txt(&cfg.verify),
+        &mut accept_older,
+    ) {
+        if e.starts_with(repo::OLDER_PREFIX) {
+            // Nothing was written: the cache keeps the newer list. Not a reason
+            // to freeze the repo.
+            println!("{}", ui::yellow(&format!("  NOT UPDATED: {e}")));
+            out.older.push(r.name.clone());
+            return false;
+        }
         if e.starts_with(repo::MISMATCH_PREFIX) {
             // The mirror answered, but with files from different moments.
             // Nothing was written, so the cache is as it was and the next
@@ -3109,9 +3153,18 @@ fn vet_repo(cfg: &Config, r: &config::Repo) -> Vec<String> {
     }
 
     // 2. Fetch metadata only (downloads are size-capped; no packages fetched).
-    if let Err(e) = repo::update_repo(r, &cfg.cache_dir, r.official, r.checks_packages_txt(&cfg.verify)) {
-        issues.push(format!("could not fetch metadata: {e}"));
-        return issues; // nothing else is checkable without metadata
+    // A list older than the cached one is not taken here (no prompt in a vet),
+    // and it is no reason to freeze the repo: the checks below run on the
+    // cached list.
+    match repo::update_repo(r, &cfg.cache_dir, r.official, r.checks_packages_txt(&cfg.verify), &mut |_, _| false) {
+        Err(e) if e.starts_with(repo::OLDER_PREFIX) => {
+            println!("{}", ui::yellow(&format!("  note: {e}")));
+        }
+        Err(e) => {
+            issues.push(format!("could not fetch metadata: {e}"));
+            return issues; // nothing else is checkable without metadata
+        }
+        Ok(()) => {}
     }
 
     // 3. Scan the raw PACKAGES.TXT for path-traversal filenames. A repo that

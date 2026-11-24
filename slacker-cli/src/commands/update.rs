@@ -3,7 +3,7 @@
 use crate::cli::Cli;
 use crate::config::Config;
 use crate::{
-    hilite_keys, parse_selection, update_one_repo, warn_unverified_repos, Outcome, UpdateOutcomes,
+    hilite_keys, parse_selection, update_one_repo, warn_unverified_repos, OlderList, Outcome, UpdateOutcomes,
 };
 use crate::{changelog, config, download, gpg, repo, stockdb, ui};
 use std::io::Write;
@@ -257,7 +257,7 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
     println!();
     for r in &chosen {
         let track = changelog_repo.as_deref() == Some(r.name.as_str());
-        update_one_repo(cfg, r, track, &mut out);
+        update_one_repo(cfg, r, track, OlderList::Ask(cli.yes), &mut out);
     }
     let updated: Vec<&str> = chosen.iter().map(|r| r.name.as_str()).collect();
     fill_missing_manifests(cfg, &repos, &updated);
@@ -294,6 +294,24 @@ pub(crate) fn cmd_update(cli: &Cli, cfg: &Config, mode: Option<&str>) -> Result<
             ui::blue(
                 "The mirror is mid-sync or serves a stale cached copy. Their previous metadata was \
                  kept unchanged. Run `slacker update` again later, or choose another mirror."
+            )
+        );
+    }
+    if !out.older.is_empty() {
+        println!(
+            "\n{}",
+            ui::yellow(&format!(
+                "{} repo(s) were NOT updated: the mirror's list is older than yours: {}.",
+                out.older.len(),
+                out.older.join(", ")
+            ))
+        );
+        println!(
+            "{}",
+            ui::blue(
+                "Your newer metadata was kept. The mirror is behind, or you switched to an older one: \
+                 run `slacker update` later or use another mirror (`slacker status` shows the official \
+                 mirror's freshness). To take the older list on purpose, answer y when `slacker update` asks (without --yes)."
             )
         );
     }

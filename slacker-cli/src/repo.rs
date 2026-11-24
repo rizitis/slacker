@@ -89,6 +89,7 @@ pub fn update_repo(
     cache_root: &Path,
     fetch_changelog: bool,
     check_consistency: bool,
+    accept_older: &mut dyn FnMut(&str, &str) -> bool,
 ) -> Result<(), String> {
     use std::io::Write;
     let dir = repo.cache_subdir(cache_root);
@@ -149,6 +150,17 @@ pub fn update_repo(
     }
 
     let pkgs_path = dir.join(PACKAGES_TXT);
+
+    // A list dated before the one already in the cache: the mirror is behind,
+    // or the user switched to an older one. Every check above passes for an
+    // old snapshot (its CHECKSUMS.md5 and signature are genuine, only old), so
+    // only the date tells. The caller decides; refused, nothing is written.
+    if let Some((new_date, old_date)) = list_went_back(&packages, &pkgs_path) {
+        if !accept_older(&new_date, &old_date) {
+            return Err(older_message(&new_date, &old_date));
+        }
+    }
+
     if pkgs_path.exists() {
         let _ = std::fs::copy(&pkgs_path, dir.join(PACKAGES_PREV));
     }
@@ -222,6 +234,30 @@ pub fn cached_consistency(repo: &Repo, cache_root: &Path) -> Option<Consistency>
 
 /// How [`mismatch_message`] starts, so a caller can tell this failure from an
 /// unreachable mirror.
+pub const OLDER_PREFIX: &str = "the mirror's PACKAGES.TXT is older than the one you have";
+
+pub fn older_message(new_date: &str, old_date: &str) -> String {
+    format!("{OLDER_PREFIX} ({new_date}, yours {old_date}); yours was kept")
+}
+
+/// The header date of a PACKAGES.TXT (`PACKAGES.TXT;  Fri Nov 20 23:39:33 UTC
+/// 2026`), as written and as epoch seconds. None when the first line is not
+/// such a header.
+fn header_date(text: &str) -> Option<(String, i64)> {
+    let line = text.lines().find(|l| !l.trim().is_empty())?;
+    let when = crate::parse_packages_date(line)?;
+    Some((line.split_once(';')?.1.trim().to_string(), when))
+}
+
+/// `(new, cached)` header dates when the fetched list is dated strictly before
+/// the cached one. A missing cache or an unreadable date on either side gives
+/// None: nothing to compare, the list is taken as before.
+fn list_went_back(new: &[u8], cached: &Path) -> Option<(String, String)> {
+    let (new_s, new_t) = header_date(&String::from_utf8_lossy(new))?;
+    let (old_s, old_t) = header_date(&read_text_lossy(cached).ok()?)?;
+    (new_t < old_t).then_some((new_s, old_s))
+}
+
 pub const MISMATCH_PREFIX: &str = "PACKAGES.TXT does not match the md5 in CHECKSUMS.md5";
 
 pub fn mismatch_message(listed: &str, actual: &str) -> String {
@@ -1127,6 +1163,41 @@ pub fn parse_dep(text: &str) -> Vec<String> {
         .filter(|l| !l.is_empty())
         .map(String::from)
         .collect()
+}
+
+#[cfg(test)]
+mod older_list_tests {
+    use super::*;
+
+    fn cached(name: &str, text: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("slacker_older_{}_{name}", std::process::id()));
+        std::fs::write(&p, text).unwrap();
+        p
+    }
+
+    #[test]
+    fn only_a_strictly_older_dated_list_is_reported() {
+        let old = cached("old", "PACKAGES.TXT;  Tue Nov 24 00:58:54 UTC 2026\n\nPACKAGE NAME:  a-1-x86_64-1.txz\n");
+        // Older: reported with both dates as written.
+        let back = list_went_back(b"PACKAGES.TXT;  Mon Nov 17 10:00:00 UTC 2026\n", &old);
+        assert_eq!(
+            back,
+            Some(("Mon Nov 17 10:00:00 UTC 2026".into(), "Tue Nov 24 00:58:54 UTC 2026".into()))
+        );
+        // Same date and newer: taken as before.
+        assert_eq!(list_went_back(b"PACKAGES.TXT;  Tue Nov 24 00:58:54 UTC 2026\n", &old), None);
+        assert_eq!(list_went_back(b"PACKAGES.TXT;  Wed Nov 25 08:00:00 UTC 2026\n", &old), None);
+        // No readable date on the new side, or no cache at all: nothing to compare.
+        assert_eq!(list_went_back(b"PACKAGE NAME:  a-1-x86_64-1.txz\n", &old), None);
+        assert_eq!(
+            list_went_back(b"PACKAGES.TXT;  Mon Nov 17 10:00:00 UTC 2026\n", Path::new("/nonexistent/PACKAGES.TXT")),
+            None
+        );
+        let undated = cached("undated", "PACKAGE NAME:  a-1-x86_64-1.txz\n");
+        assert_eq!(list_went_back(b"PACKAGES.TXT;  Mon Nov 17 10:00:00 UTC 2026\n", &undated), None);
+        let _ = std::fs::remove_file(old);
+        let _ = std::fs::remove_file(undated);
+    }
 }
 
 #[cfg(test)]
