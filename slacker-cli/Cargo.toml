@@ -15,7 +15,7 @@ name = "slacker"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
 md-5 = "0.10"
 regex = "1"

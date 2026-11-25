@@ -1,6 +1,6 @@
 # slacker: code structure, rules and refactor history
 
-Last updated: 22 Nov 2026. Covers `slacker-cli` 0.14.2, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
+Last updated: 25 Nov 2026. Covers `slacker-cli` 0.14.3, the refactored code (steps 1–14) and the changes made on it since (see 8.5). Maintainer: Ioannis Anagnostakis (r-tz, `rizitis`).
 
 This document is for anyone, human or AI, opening the code for the first time. It says **what lives where, why it lives there, and what must not change**. If anything here disagrees with the code, the code wins and this document gets fixed.
 
@@ -36,7 +36,7 @@ slacker/
 ### Building
 
 - `cargo build --release` inside `slacker-cli/`. The release profile uses `lto = true`, `strip = true`, `opt-level = 2`.
-- Dependencies: `clap` (derive), `ureq` 2 (rustls, gzip), `md-5`, `regex`, `rusqlite` (bundled).
+- Dependencies: `clap` (derive, wrap_help), `ureq` 2 (rustls, gzip), `md-5`, `regex`, `rusqlite` (bundled). `wrap_help` (25 Nov 2026) makes `--help` break lines between words at the terminal width; it brings `terminal_size`, `rustix`, `errno` and `linux-raw-sys`, pure Rust, no new library linked (`readelf -d` still shows only libc, libm, libgcc_s).
 - **MSRV:** `rust-version = "1.89"`, set by `rusqlite` 0.42 (taken in 0.14.1 for the SQLite fix in RUSTSEC-2026-0459). The `icu_*` crates (via ureq -> url -> idna) need 1.88 and `clap` 1.85, both below it.
 - Updating dependencies: targeted `cargo update -p <crate>` when `cargo audit` reports something; a full `cargo update` at the start of a development cycle, not on release day. Always follow with `cargo build --release --locked && cargo test --locked && cargo audit`.
 
@@ -152,11 +152,12 @@ Mostly pure logic and system integration. They know nothing about commands.
 
 ## 6. Where new code goes
 
-- **New command:** a variant in `Cmd` (`cli.rs`), a `pub(crate) fn cmd_x` in the right `commands/<area>.rs` (or a new file declared in `commands.rs`), a line in the `run()` dispatch, and in `command_name` (the compiler requires it). If the command modifies the system or the cache, also in `requires_privilege`.
+- **New command:** a variant in `Cmd` (`cli.rs`), with a doc comment on every argument (it is its line under `Arguments:` in `--help`; 25 Nov 2026, issue #26), a `pub(crate) fn cmd_x` in the right `commands/<area>.rs` (or a new file declared in `commands.rs`), a line in the `run()` dispatch, and in `command_name` (the compiler requires it). If the command modifies the system or the cache, also in `requires_privilege`.
 - **Helper used by one command group only:** in that group's file.
 - **Helper used by several groups:** in the core in `main.rs`. `commands/` modules reach it with `use crate::name` (private items of the crate root are visible to its descendant modules).
 - **Pure logic with no command I/O:** in a helper module (`src/*.rs`), with its unit tests there.
 - **File names:** must not collide with the helper modules. `history.rs`, `revert.rs`, `newconfig.rs`, `mirrors.rs`, `dist.rs`, `template.rs` already exist, which is why the commands live in `logs.rs`, `revert_pkg.rs`, `new_config.rs`, `find_mirror.rs`, `upgrade_dist.rs`, `templates.rs`.
+- **Where options go, in --help** (issue #26, 25 Nov 2026): the global options are accepted anywhere on the line (`global = true`), a command's own options only after the command; this is by design and stays. `slacker --help` says it in its `after_help`, and every command's own `--help` ends with `cli::OPTIONS_PLACE`, added in `main()` with `mut_subcommands` when the command line is read, so no command needs its own copy.
 - **Visibility:** `pub(crate)` only, and only where needed (the `cmd_*`, and helpers a test in another module needs).
 - **Messages and errors** (24 Nov 2026, r-tz's request). A message that says something and then explains it is not one long line: a short first line in its colour (white, yellow, red …), then the explanation on indented lines in `ui::dim`, broken near 80 columns, words unchanged. An error (`Err(String)` that reaches `main()`) keeps what happened on its first line and puts the rest after a `\n`; `print_error` prints the first line after `slacker: error:` and every further line indented and dim. Put a `\n` only in an error that goes straight to `main()`: one printed inside other output (the per-repo lines of `update`, the failure list of a plan, a `status` row, anything reached from upgrade-dist) stays one line, and so does the part of an error that code matches with `starts_with` (`OLDER_PREFIX`, `MISMATCH_PREFIX`, `DEEP_CHAIN_ERR`). upgrade-dist's own messages are left as they are (r-tz's decision).
 

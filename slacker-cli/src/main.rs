@@ -26,7 +26,6 @@ mod system;
 mod template;
 mod ui;
 
-use clap::Parser;
 use cli::{Cli, Cmd};
 use commands::blacklist::{cmd_frozen, cmd_nodep, cmd_pin, cmd_undep, cmd_unfrozen, cmd_unpin};
 use commands::clean::{cmd_clean_cache, cmd_clean_system};
@@ -89,7 +88,15 @@ fn restore_default_sigpipe() {}
 
 fn main() -> ExitCode {
     restore_default_sigpipe();
-    let cli = match Cli::try_parse() {
+    // Every command's own --help ends with where the options go.
+    let parsed = {
+        use clap::{CommandFactory, FromArgMatches};
+        Cli::command()
+            .mut_subcommands(|c| c.after_help(cli::OPTIONS_PLACE))
+            .try_get_matches()
+            .and_then(|m| Cli::from_arg_matches(&m))
+    };
+    let cli = match parsed {
         Ok(c) => c,
         Err(e) => return clap_error_exit(e),
     };

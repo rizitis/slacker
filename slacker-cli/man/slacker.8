@@ -1,4 +1,4 @@
-.TH SLACKER 8 "November 2026" "slacker 0.14.2" "Slackware Package Management"
+.TH SLACKER 8 "November 2026" "slacker 0.14.3" "Slackware Package Management"
 .SH NAME
 slacker \- a real Slackware package manager written in Rust
 .SH SYNOPSIS
@@ -48,6 +48,15 @@ and
 .B \-\-help
 lists them under
 .IR "Global options" .
+A command's own options, such as
+.B search \-\-exact
+or
+.BR "history \-\-last" ,
+go after the command, before or after its arguments
+.RB ( "slacker \-\-exact search sip"
+is refused: slacker reads
+.B \-\-exact
+before it knows the command).
 A command that asks nothing, changes nothing or reads no dependencies does
 nothing with
 .BR \-\-yes ", " \-\-dry\-run " or " \-\-no\-deps .

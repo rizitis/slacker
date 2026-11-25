@@ -12,12 +12,18 @@ const HELP_STYLES: clap::builder::Styles = clap::builder::Styles::styled()
     .literal(clap::builder::styling::AnsiColor::Cyan.on_default())
     .placeholder(clap::builder::styling::AnsiColor::White.on_default());
 
+/// Under every command's own --help: where the options go.
+pub(crate) const OPTIONS_PLACE: &str =
+    "Global options go anywhere on the line; this command's own options go after its name.";
+
 #[derive(Parser)]
 #[command(
     name = "slacker",
     version,
     about = "A real Slackware package manager written in Rust",
-    after_help = "Run `slacker <command> --help` for the full description and examples.",
+    after_help = "Global options go anywhere on the line, before or after the command;\n\
+                  a command's own options go after the command.\n\
+                  Run `slacker <command> --help` for the full description and examples.",
     styles = HELP_STYLES
 )]
 pub(crate) struct Cli {
@@ -44,7 +50,10 @@ pub(crate) struct Cli {
 #[derive(Subcommand)]
 pub(crate) enum Cmd {
     /// Refresh metadata from every repo. `update gpg` imports repo GPG keys.
-    Update { mode: Option<String> },
+    Update {
+        /// `gpg`: import the repos' GPG keys instead.
+        mode: Option<String>,
+    },
     /// Find a package by exact name; `--partial` lists every name containing it.
     ///
     /// Case-insensitive. The exact name by default; with `--partial`, or `SEARCH=partial` in
@@ -57,13 +66,20 @@ pub(crate) enum Cmd {
         /// Match the exact name only, whatever SEARCH says in slacker.conf.
         #[arg(long)]
         exact: bool,
+        /// The package name to look for.
         #[arg(value_name = "NAME")]
         pattern: String,
     },
     /// Find which package ships a file (uses MANIFEST).
-    FileSearch { filename: String },
+    FileSearch {
+        /// A file name, or the end of a path (e.g. `bin/ls`).
+        filename: String,
+    },
     /// Show details and per-repo candidates for a package.
-    Info { name: String },
+    Info {
+        /// The package name.
+        name: String,
+    },
     /// List configured repositories and their priorities.
     ///
     /// Shows each repo's priority, verify policy, and how many installed
@@ -80,16 +96,28 @@ pub(crate) enum Cmd {
     /// root), and (if online) reachability and updates.
     Status,
     /// Install new packages (refuses already-installed ones).
-    Install { patterns: Vec<String> },
+    Install {
+        /// Package names or patterns: a name, part of a name, a series, `repo:name`, `@repo` or `@_tag` (see PATTERNS in slacker(8)).
+        patterns: Vec<String>,
+    },
     /// Upgrade installed packages to the newest available revision.
-    Upgrade { patterns: Vec<String> },
+    Upgrade {
+        /// Package names or patterns: a name, part of a name, a series, `repo:name`, `@repo` or `@_tag` (see PATTERNS in slacker(8)).
+        patterns: Vec<String>,
+    },
     /// Reinstall installed packages with the version the repo offers now.
     ///
     /// The repo's version and build may differ from the installed one; the
     /// plan then shows it as old -> new, and asks before anything changes.
-    Reinstall { patterns: Vec<String> },
+    Reinstall {
+        /// Package names or patterns: a name, part of a name, a series, `repo:name`, `@repo` or `@_tag` (see PATTERNS in slacker(8)).
+        patterns: Vec<String>,
+    },
     /// Remove installed packages.
-    Remove { patterns: Vec<String> },
+    Remove {
+        /// Package names or patterns: a name, part of a name, a series, `repo:name`, `@repo` or `@_tag` (see PATTERNS in slacker(8)). A series is taken only as `series/`.
+        patterns: Vec<String>,
+    },
     /// Revert an official package to a previous -current version (rollback).
     ///
     /// Lists the package's earlier versions recorded in the system's
@@ -97,7 +125,10 @@ pub(crate) enum Cmd {
     /// the cumulative -current archive (GPG-verified against the pinned Slackware
     /// key) and downgrades to it with `upgradepkg --reinstall`. Official packages
     /// only (the archive does not carry third-party repos), and only on -current.
-    RevertPkg { name: String },
+    RevertPkg {
+        /// The official package to revert.
+        name: String,
+    },
     /// Finish upgrades and installs the pkgtools did not finish (power loss, crash).
     ///
     /// Finds the `<pkg>-upgraded-<time>` records upgradepkg leaves in the
@@ -124,6 +155,7 @@ pub(crate) enum Cmd {
     ///
     /// Saved to the cache by default, or to a directory given with -o/--output.
     Download {
+        /// Package names or patterns: a name, part of a name, a series, `repo:name`, `@repo` or `@_tag` (see PATTERNS in slacker(8)).
         patterns: Vec<String>,
         /// Directory to save into (default: the slacker package cache).
         #[arg(short, long)]
@@ -164,7 +196,10 @@ pub(crate) enum Cmd {
     /// packages are skipped); a newer build/version of an installed package is an
     /// upgrade (use `upgrade-all`), not new. Default: official repo(s) only; name
     /// repos to use those instead.
-    InstallNew { repos: Vec<String> },
+    InstallNew {
+        /// Repos to take the new packages from (default: the official repos).
+        repos: Vec<String>,
+    },
     /// Remove installed packages no longer in the official baseline.
     ///
     /// The baseline is the official repo plus any `immutable` repo.
@@ -176,7 +211,10 @@ pub(crate) enum Cmd {
     ///
     /// Repo metadata and GPG keys are never touched. Optionally limit to named
     /// repos.
-    CleanCache { repos: Vec<String> },
+    CleanCache {
+        /// Repos whose cached packages to delete (default: all).
+        repos: Vec<String>,
+    },
     /// Handle leftover *.new configuration files.
     NewConfig,
     /// Check every configured repo for pending updates (exit 100 if any).
@@ -185,7 +223,10 @@ pub(crate) enum Cmd {
     ///
     /// With no argument, the official (tracked) repo; name a repo to show that one
     /// instead. A cached copy is shown only when the repo cannot be reached.
-    ShowChangelog { repo: Option<String> },
+    ShowChangelog {
+        /// The repo whose ChangeLog to print (default: the official repo).
+        repo: Option<String>,
+    },
     /// Show a chronological log of package changes, newest first.
     ///
     /// Installed, upgraded and removed, and when. Derived from the pkgtools
@@ -216,38 +257,66 @@ pub(crate) enum Cmd {
     /// on -current and stable. Does not change your configuration.
     FindMirror,
     /// Snapshot installed packages into a template.
-    GenerateTemplate { name: String },
+    GenerateTemplate {
+        /// The template name.
+        name: String,
+    },
     /// Install all packages listed in a template.
-    InstallTemplate { name: String },
+    InstallTemplate {
+        /// The template name.
+        name: String,
+    },
     /// Remove all packages listed in a template.
-    RemoveTemplate { name: String },
+    RemoveTemplate {
+        /// The template name.
+        name: String,
+    },
     /// Delete a template file (does not touch installed packages).
-    DeleteTemplate { name: String },
+    DeleteTemplate {
+        /// The template name.
+        name: String,
+    },
     /// Add blacklist rules ("freeze"); no arg lists them.
     ///
     /// Each argument is one rule: a glob (`*`, `?`) or a regex, a `series/`, or
     /// `@repo PATTERN` (quote rules with spaces). Run with no argument to list
     /// the current frozen rules.
-    Frozen { names: Vec<String> },
+    Frozen {
+        /// Rules to add: a glob or regex, a `series/`, or `@repo PATTERN`.
+        #[arg(value_name = "RULE")]
+        names: Vec<String>,
+    },
     /// Remove blacklist rules ("unfreeze"); no arg lists them.
     ///
     /// Each argument must match an existing rule EXACTLY, as a literal string:
     /// special characters like `.*`, `*`, `-` or `/` are compared verbatim,
     /// never as a pattern. Run with no argument to list the current rules. Quote
     /// rules with spaces.
-    Unfrozen { names: Vec<String> },
+    Unfrozen {
+        /// Rules to remove, written exactly as `frozen` lists them.
+        #[arg(value_name = "RULE")]
+        names: Vec<String>,
+    },
     /// Pin a package to ONE repo, ignoring priority.
     ///
     /// `pin repo:package` (e.g. `pin alienbob:vlc`). From then on every command
     /// (incl. upgrade-all) sources that package only from that repo. Stored in
     /// the `blacklist` file as `@repo 100% package`. A freeze on the same
     /// package always wins. Run with no argument to list the current pins.
-    Pin { spec: Option<String> },
+    Pin {
+        /// The repo and the exact package name, e.g. `alienbob:vlc`.
+        #[arg(value_name = "REPO:PACKAGE")]
+        spec: Option<String>,
+    },
     /// Remove a pin; no arg lists current pins.
     ///
     /// `unpin package` (e.g. `unpin vlc`). The package returns to normal
     /// priority-based resolution. Run with no argument to list the current pins.
-    Unpin { names: Vec<String> },
+    Unpin {
+        /// Package names whose pin to remove.
+        #[arg(value_name = "PACKAGE")]
+        names: Vec<String>,
+    },
     /// Never pull a dependency in for one package (or for any).
     ///
     /// `nodep package:dependency...` (e.g. `nodep python-sqlalchemy:python-psycopg2`)
@@ -258,12 +327,20 @@ pub(crate) enum Cmd {
     /// `blacklist` file as one `!package:dependency` line each. The plan notes
     /// every dependency left out this way, and `info` shows it. Run with no
     /// argument to list the current exclusions.
-    Nodep { specs: Vec<String> },
+    Nodep {
+        /// The package and the dependency not to pull in; `*:DEPENDENCY` for any package.
+        #[arg(value_name = "PACKAGE:DEPENDENCY")]
+        specs: Vec<String>,
+    },
     /// Remove dependency exclusions; no arg lists them.
     ///
     /// `undep package:dependency...` (e.g. `undep python-sqlalchemy:python-psycopg2`),
     /// as listed by `nodep`. Run with no argument to list the current exclusions.
-    Undep { names: Vec<String> },
+    Undep {
+        /// Exclusions to remove, written as `nodep` lists them.
+        #[arg(value_name = "PACKAGE:DEPENDENCY")]
+        names: Vec<String>,
+    },
     /// Add a binary repository to the `repos` file.
     ///
     /// `add-repo PRIORITY NAME URL [official] [immutable] [subtree] [verify=...]`.
@@ -273,39 +350,69 @@ pub(crate) enum Cmd {
     /// `subtree` marks a Slackware distribution subtree (extra/, patches/, ...)
     /// whose packages download from the parent (root) URL.
     AddRepo {
+        /// A whole number, not used by another repo; higher wins.
         priority: String,
+        /// A short name for the repo.
         name: String,
+        /// The repo's http:// or https:// address.
         url: String,
         /// Optional flags: `official`, `immutable`, `subtree`, and/or
         /// `verify=gpg,md5,...`.
         flags: Vec<String>,
     },
     /// Remove a binary repository (by name) from the `repos` file.
-    DelRepo { name: String },
+    DelRepo {
+        /// The repo name.
+        name: String,
+    },
     /// Change a repo's priority in the `repos` file.
     ///
     /// `pri-repo PRIORITY NAME`. Refuses if NAME is not an active repo
     /// (suggesting the closest match), or if PRIORITY is already used by another
     /// repo (priorities must be distinct).
-    PriRepo { priority: String, name: String },
+    PriRepo {
+        /// The new priority, not used by another repo.
+        priority: String,
+        /// The repo name.
+        name: String,
+    },
     /// Add a build-tag priority line to the `repos` file.
     ///
     /// `add-tag PRIORITY NAME TAG` (e.g. `add-tag 100 SBo _SBo`; no quotes).
-    AddTag { priority: String, name: String, tag: String },
+    AddTag {
+        /// A whole number; higher wins.
+        priority: String,
+        /// A name for this source (e.g. `SBo`).
+        name: String,
+        /// The build tag, e.g. `_SBo`.
+        tag: String,
+    },
     /// Remove a build-tag priority line (by its TAG) from the `repos` file.
-    DelTag { tag: String },
+    DelTag {
+        /// The build tag of the line to remove.
+        tag: String,
+    },
     /// Re-run the safety vetting on a repo on demand.
     ///
     /// Fetches metadata only. Quarantines it if it fails, or clears a prior
     /// quarantine if it now passes.
-    VetRepo { name: String },
+    VetRepo {
+        /// The repo name.
+        name: String,
+    },
     /// Trust a quarantined repo, lifting its freeze.
     ///
     /// Lets it be used again. This overrides slacker's safety verdict — at your
     /// own responsibility.
-    TrustRepo { name: String },
+    TrustRepo {
+        /// The repo name.
+        name: String,
+    },
     /// Manually quarantine a repo so it provides no packages.
     ///
     /// Freezes the repo until you `trust-repo` it again.
-    DistrustRepo { name: String },
+    DistrustRepo {
+        /// The repo name.
+        name: String,
+    },
 }
