@@ -8,6 +8,9 @@ Version Beta 0.14.3
     - Repositories: each repo shows its packages, sizes and list date, a
       "to upgrade" pill and tile, and the official repo is marked in blue.
 - Update: slacker-cli
+    - After install, upgrade, upgrade-all and the other commands that apply
+      packages, a quiet check says how many running programs still use replaced
+      files and points at `slacker check-restart`.
     - list-repos: a third table, Repository contents, shows for each repo the
       packages it offers, how many upgrade-all would take from it, the download
       and installed size, and the date of its PACKAGES.TXT (from the cache).

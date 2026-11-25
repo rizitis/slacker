@@ -1556,6 +1556,25 @@ fn run_new_config(cli: &Cli) {
 /// see `after_configs`). Silent when there are none. `before` is the set of
 /// .new files that existed prior to the operation (see `pending_configs`).
 pub(crate) fn report_pending_configs(cli: &Cli, cfg: &Config, before: &PendingConfigs) {
+    report_configs(cli, cfg, before);
+    report_stale_programs(cfg);
+}
+
+/// After packages are applied: running programs that still use files an
+/// upgrade replaced, as one line pointing at `slacker check-restart`. The same
+/// scan as check-restart (about 1.5 s on a desktop), run quietly; nothing is
+/// printed when there are none. These commands run as root, so every process
+/// is seen. The count includes programs left by earlier upgrades.
+fn report_stale_programs(cfg: &Config) {
+    let n = crate::stale::scan(&cfg.pkg_db_dir, &cfg.adm_dir.join("removed_packages")).procs.len();
+    if n == 0 {
+        return;
+    }
+    println!("\n{}", ui::white(&format!("{n} running program(s) still use files an upgrade replaced.")));
+    println!("  {}", ui::dim("Run `slacker check-restart` to see them, then restart them or reboot."));
+}
+
+fn report_configs(cli: &Cli, cfg: &Config, before: &PendingConfigs) {
     use std::io::IsTerminal;
     let current = newconfig::find_new_configs(&newconfig::default_roots());
     if current.is_empty() {

@@ -501,6 +501,19 @@ the commands that change the system. Exit status
 when something is found,
 .B 0
 otherwise.
+.IP
+After
+.BR install ", " upgrade ", " reinstall ", " upgrade-all ", " install-new ,
+.B install-template
+and
+.B revert-pkg
+have applied packages, the same check runs quietly: when it finds programs it
+prints one line with how many there are and points at
+.BR check-restart ;
+otherwise it prints nothing. It adds the time of the check (about a second and
+a half on a desktop) and does not run with
+.BR \-\-dry\-run .
+The count includes programs left by earlier upgrades.
 .SS Bulk operations
 .TP
 .B upgrade-all
