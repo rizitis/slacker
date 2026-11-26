@@ -2340,11 +2340,17 @@ fn execute_plan(cfg: &Config, plan: &[PlanItem], allow_release_mismatch: bool) -
         });
     }
 
-    // Single item: original verbose, serial behaviour (abort-on-error is moot
-    // with nothing else to continue to).
+    // Single item: downloaded the same way as many (the live progress line,
+    // issue #27), then installed serially; a failed download stops here, as
+    // there is nothing else to continue to.
     if items.len() == 1 {
         let it = &items[0];
-        fetch_and_verify(cfg, it.repo, it.pkg, &it.dest, false)?;
+        println!("Downloading 1 package...");
+        match parallel_fetch(cfg, &items, 1).pop().map(|o| o.result) {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => return Err(e),
+            None => return Err(format!("{}: the download did not finish", it.pkg.id.name)),
+        }
         match plan[0].action {
             InstallAction::Install => system::install(&it.dest, cfg.terse)?,
             InstallAction::Upgrade => system::upgrade_only(&it.dest, cfg.terse)?,

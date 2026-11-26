@@ -8,6 +8,8 @@ Version Beta 0.14.3
     - Repositories: each repo shows its packages, sizes and list date, a
       "to upgrade" pill and tile, and the official repo is marked in blue.
 - Update: slacker-cli
+    - Downloading a single package (install, upgrade, download, ...) shows the
+      same progress as downloading several (#27).
     - --help says where options go: global ones anywhere on the line, a command's
       own ones after the command (#26). Every argument has a description.
     - After install, upgrade, upgrade-all and the other commands that apply

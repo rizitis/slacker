@@ -6,7 +6,7 @@ use crate::config::{Config, NewConfigAfter};
 use crate::pkgdb::PkgDb;
 use crate::{
     at_prefix_hint, bl_installed, closest, collect, confirm, confirm_conflicts, detect_conflicts,
-    execute_plan, expand_with_deps, fetch_and_verify, guard_shell_expansion, hilite_keys,
+    execute_plan, expand_with_deps, guard_shell_expansion, hilite_keys,
     hint_freeze_pin, in_graphical_session, installed_source_label, is_foundational,
     note_optional_suggests, parallel_fetch, parse_selection, print_plan, print_table,
     priority_display, reject_mixed_selectors, report_batch_failures, report_conflicts,
@@ -1086,10 +1086,15 @@ pub(crate) fn cmd_download(
         items.push(DlItem { repo: r, pkg: p, dest });
     }
 
-    // Single package: keep the original verbose, serial output.
+    // Single package: the same download as many (the live progress line,
+    // issue #27); a failure stops the command, as there is nothing else.
     if items.len() == 1 {
         let it = &items[0];
-        fetch_and_verify(cfg, it.repo, it.pkg, &it.dest, false)?;
+        match parallel_fetch(cfg, &items, 1).pop().map(|o| o.result) {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => return Err(e),
+            None => return Err(format!("{}: the download did not finish", it.pkg.id.name)),
+        }
         println!(
             "{} {}",
             ui::green("downloaded:"),
